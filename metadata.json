@@ -1,0 +1,6 @@
+{
+  "name": "RollPrint IMS - Roll-Based Inventory Management System",
+  "description": "Enterprise-grade inventory management system for roll-based printing materials with physical roll tracking, barcode management, and auditable transactions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
