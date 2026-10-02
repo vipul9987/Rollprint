@@ -13,14 +13,13 @@ import {
   CheckCircle2,
   AlertCircle,
   Printer,
+  Download,
   X,
-  Filter,
   RefreshCw,
   QrCode,
   TrendingUp,
   TrendingDown,
   Box,
-  Check,
   Eye,
   EyeOff
 } from 'lucide-react';
@@ -385,7 +384,6 @@ export default function App() {
 
     if (currentActive) {
       if (hasTransactions) {
-        // Material has transaction history: deactivate it safely
         if (
           window.confirm(
             `"${name}" has recorded transactions in history. To preserve audit integrity, it will be marked as INACTIVE (hidden from active stock but preserved in history). Continue?`
@@ -397,7 +395,6 @@ export default function App() {
           showNotification(`Material "${name}" marked as Inactive.`);
         }
       } else {
-        // No transactions: allow permanent deletion
         if (window.confirm(`Delete "${name}" permanently? (This item has no recorded transactions).`)) {
           const updated = materials.filter((m) => m.id !== id);
           setMaterials(updated);
@@ -406,7 +403,6 @@ export default function App() {
         }
       }
     } else {
-      // Reactivate
       const updated = materials.map((m) => (m.id === id ? { ...m, active: true } : m));
       setMaterials(updated);
       saveStoredMaterials(updated);
@@ -423,7 +419,6 @@ export default function App() {
       return;
     }
 
-    // Direct exact match on barcode or itemCode
     const found = materialsWithStock.find(
       (m) =>
         m.barcode.toUpperCase() === trimmed ||
@@ -440,7 +435,7 @@ export default function App() {
     }
   };
 
-  // Scanner Input Keydown Handler (standard USB barcode scanner sends Enter)
+  // Scanner Input Keydown Handler
   const handleScannerKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -464,6 +459,82 @@ export default function App() {
     setTimeout(() => {
       stockOutQtyRef.current?.focus();
     }, 100);
+  };
+
+  // Export Inventory CSV
+  const exportInventoryCSV = () => {
+    const headers = [
+      'Material Name',
+      'Category',
+      'Size',
+      'Item Code (SKU)',
+      'Opening Stock (M)',
+      'Total Stock IN (M)',
+      'Total Stock OUT (M)',
+      'Current Balance (M)',
+      'Unit',
+      'Status'
+    ];
+    const rows = displayedMaterials.map((m) => [
+      `"${m.name.replace(/"/g, '""')}"`,
+      `"${m.category.replace(/"/g, '""')}"`,
+      `"${m.size.replace(/"/g, '""')}"`,
+      `"${m.itemCode}"`,
+      m.openingStock,
+      m.totalIn,
+      m.totalOut,
+      m.currentStock,
+      `"${m.unit}"`,
+      `"${m.status}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `inventory_summary_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification('Inventory summary exported to CSV.');
+  };
+
+  // Export Transactions CSV
+  const exportTransactionsCSV = () => {
+    const headers = [
+      'Date',
+      'Time',
+      'Material Name',
+      'Size',
+      'Item Code (SKU)',
+      'Type',
+      'Quantity (M)',
+      'Stock Before (M)',
+      'Stock After (M)',
+      'Reference / Note'
+    ];
+    const rows = filteredTransactions.map((t) => [
+      `"${t.date}"`,
+      `"${t.createdAt ? new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}"`,
+      `"${t.materialName.replace(/"/g, '""')}"`,
+      `"${t.size.replace(/"/g, '""')}"`,
+      `"${t.itemCode}"`,
+      `"${t.type}"`,
+      t.quantity,
+      t.stockBefore,
+      t.stockAfter,
+      `"${(t.reference || '').replace(/"/g, '""')}"`
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `transactions_history_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showNotification('Transaction history exported to CSV.');
   };
 
   // Filtered Materials for Dashboard & Material Master
@@ -527,7 +598,7 @@ export default function App() {
       {/* Toast Notification */}
       {notification && (
         <div
-          className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-xl text-xs sm:text-sm font-semibold flex items-center space-x-2 transition-all duration-300 ${
+          className={`no-print fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-xl text-xs sm:text-sm font-semibold flex items-center space-x-2 transition-all duration-300 ${
             notification.type === 'error'
               ? 'bg-red-600 text-white shadow-red-500/20'
               : 'bg-emerald-600 text-white shadow-emerald-500/20'
@@ -543,7 +614,7 @@ export default function App() {
       )}
 
       {/* Main Top Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+      <header className="no-print bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center space-x-3">
             <div className="h-9 w-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-sm">
@@ -720,7 +791,7 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* Filters */}
+                {/* Filters & Export */}
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="relative">
                     <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -729,7 +800,7 @@ export default function App() {
                       placeholder="Search material, size, or SKU..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-slate-800 w-48 sm:w-56"
+                      className="pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-slate-800 w-44 sm:w-52"
                     />
                   </div>
 
@@ -751,11 +822,20 @@ export default function App() {
                     onChange={(e) => setStatusFilter(e.target.value)}
                     className="py-1.5 px-2.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:outline-hidden"
                   >
-                    <option value="ALL">All Stock Status</option>
+                    <option value="ALL">All Status</option>
                     <option value="IN_STOCK">In Stock</option>
                     <option value="LOW_STOCK">Low Stock</option>
                     <option value="OUT_OF_STOCK">Out of Stock</option>
                   </select>
+
+                  <button
+                    onClick={exportInventoryCSV}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors border border-slate-300"
+                    title="Export Inventory as CSV"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>CSV</span>
+                  </button>
                 </div>
               </div>
 
@@ -1343,6 +1423,15 @@ export default function App() {
                   <option value="IN">Only Stock IN</option>
                   <option value="OUT">Only Stock OUT</option>
                 </select>
+
+                <button
+                  onClick={exportTransactionsCSV}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors border border-slate-300 shadow-xs"
+                  title="Export Transactions as CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                </button>
               </div>
             </div>
 
@@ -1446,7 +1535,7 @@ export default function App() {
         {/* ========================================================= */}
         {activeTab === 'barcodes' && (
           <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-bold text-slate-900">
                   CODE128 Barcodes &amp; Scanner
@@ -1466,7 +1555,7 @@ export default function App() {
             </div>
 
             {/* Quick Barcode Scanner Box */}
-            <div className="bg-white p-5 rounded-xl border border-indigo-200 shadow-sm space-y-3">
+            <div className="no-print bg-white p-5 rounded-xl border border-indigo-200 shadow-sm space-y-3">
               <div className="flex items-center space-x-2 text-indigo-900 font-bold text-sm">
                 <QrCode className="w-5 h-5 text-indigo-600" />
                 <span>USB / Bluetooth Barcode Scanner</span>
@@ -1557,7 +1646,7 @@ export default function App() {
             </div>
 
             {/* Printable CODE128 Barcodes Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 print-grid">
               {materialsWithStock
                 .filter((m) => m.active)
                 .map((mat) => (
@@ -1598,7 +1687,7 @@ export default function App() {
                           performBarcodeLookup(mat.barcode);
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
-                        className="text-indigo-600 font-semibold hover:underline"
+                        className="no-print text-indigo-600 font-semibold hover:underline"
                       >
                         Test Scan
                       </button>
@@ -1612,7 +1701,7 @@ export default function App() {
 
       {/* Add / Edit Material Modal */}
       {isMaterialModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="no-print fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-bold text-slate-900">
@@ -1740,8 +1829,8 @@ export default function App() {
       )}
 
       {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 py-3 px-6 text-xs text-slate-400 text-center flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>RollPrint IMS — Simple Printing Material &amp; Roll Inventory</span>
+      <footer className="no-print bg-white border-t border-slate-200 py-3 px-6 text-xs text-slate-400 text-center flex flex-col sm:flex-row items-center justify-between gap-2">
+        <span>RollPrint IMS — Printing Material &amp; Roll Inventory</span>
         <button
           onClick={handleResetData}
           className="text-slate-400 hover:text-slate-600 text-[11px] underline flex items-center space-x-1"
