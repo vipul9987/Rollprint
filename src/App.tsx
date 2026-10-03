@@ -33,10 +33,17 @@ import {
   calculateMatrixDashboardMetrics,
   generateMatrixBarcode,
   getItemWebUrl,
+  getItemSummaryGroup,
+  FLEX_SUMMARY_WIDTHS,
+  VINYL_SUMMARY_WIDTHS,
+  PVC_SHEET_SIZES,
+  PVC_THICKNESSES,
+  CLIENT_FLEX_MATERIALS_ORDER,
+  CLIENT_VINYL_MATERIALS_ORDER,
   INITIAL_MATRIX_ITEMS,
   INITIAL_MATRIX_TRANSACTIONS
 } from './data/inventoryStore';
-import { MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock } from './types/inventory';
+import { MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock, InventorySummaryGroup } from './types/inventory';
 import { QRCodeLabel } from './components/QRCodeLabel';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
@@ -206,33 +213,38 @@ export default function App() {
     return Array.from(set);
   }, [items, stockInMaterial]);
 
-  // Available Roll Lengths for selected Material + Size
-  const stockInAvailableLengths = useMemo(() => {
-    if (!stockInMaterial || !stockInVariantSize) return [50, 70];
-    const set = new Set<number>();
-    items
-      .filter(
-        (i) =>
-          i.active &&
-          i.materialName === stockInMaterial &&
-          i.variantSize === stockInVariantSize
-      )
-      .forEach((i) => set.add(i.rollLengthMtr || 70));
-    return Array.from(set).sort((a, b) => a - b);
-  }, [items, stockInMaterial, stockInVariantSize]);
-
   // Find exact inventory item matching Stock IN inputs
   const matchedStockInItem: MatrixItemWithStock | undefined = useMemo(() => {
     if (!stockInMaterial || !stockInVariantSize) return undefined;
-    const len = parseInt(stockInRollLength, 10) || 70;
-    return itemsWithStock.find(
+    const len = parseFloat(stockInRollLength) || 70;
+    const exact = itemsWithStock.find(
       (i) =>
         i.active &&
         i.materialName === stockInMaterial &&
         i.variantSize === stockInVariantSize &&
-        (i.rollLengthMtr === len || stockInAvailableLengths.length === 1)
+        i.rollLengthMtr === len
     );
-  }, [itemsWithStock, stockInMaterial, stockInVariantSize, stockInRollLength, stockInAvailableLengths]);
+    if (exact) return exact;
+
+    const baseItem = itemsWithStock.find(
+      (i) =>
+        i.active &&
+        i.materialName === stockInMaterial &&
+        i.variantSize === stockInVariantSize
+    );
+    if (baseItem) {
+      const widthNum = parseFloat(baseItem.variantSize) || 1.0;
+      const customAreaPerRoll = Number((widthNum * len).toFixed(2));
+      return {
+        ...baseItem,
+        rollLengthMtr: len,
+        areaPerRoll: customAreaPerRoll,
+        totalAreaMtr2: Number((baseItem.currentStock * customAreaPerRoll).toFixed(2)),
+        barcode: generateMatrixBarcode(baseItem.materialName, baseItem.variantSize, len)
+      };
+    }
+    return undefined;
+  }, [itemsWithStock, stockInMaterial, stockInVariantSize, stockInRollLength]);
 
   const validateStockInBarcode = (code: string) => {
     const trimmed = code.trim();
@@ -290,33 +302,38 @@ export default function App() {
     return Array.from(set);
   }, [items, stockOutMaterial]);
 
-  // Available Roll Lengths for selected Material + Size
-  const stockOutAvailableLengths = useMemo(() => {
-    if (!stockOutMaterial || !stockOutVariantSize) return [50, 70];
-    const set = new Set<number>();
-    items
-      .filter(
-        (i) =>
-          i.active &&
-          i.materialName === stockOutMaterial &&
-          i.variantSize === stockOutVariantSize
-      )
-      .forEach((i) => set.add(i.rollLengthMtr || 70));
-    return Array.from(set).sort((a, b) => a - b);
-  }, [items, stockOutMaterial, stockOutVariantSize]);
-
   // Find exact inventory item matching Stock OUT inputs
   const matchedStockOutItem: MatrixItemWithStock | undefined = useMemo(() => {
     if (!stockOutMaterial || !stockOutVariantSize) return undefined;
-    const len = parseInt(stockOutRollLength, 10) || 70;
-    return itemsWithStock.find(
+    const len = parseFloat(stockOutRollLength) || 70;
+    const exact = itemsWithStock.find(
       (i) =>
         i.active &&
         i.materialName === stockOutMaterial &&
         i.variantSize === stockOutVariantSize &&
-        (i.rollLengthMtr === len || stockOutAvailableLengths.length === 1)
+        i.rollLengthMtr === len
     );
-  }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutRollLength, stockOutAvailableLengths]);
+    if (exact) return exact;
+
+    const baseItem = itemsWithStock.find(
+      (i) =>
+        i.active &&
+        i.materialName === stockOutMaterial &&
+        i.variantSize === stockOutVariantSize
+    );
+    if (baseItem) {
+      const widthNum = parseFloat(baseItem.variantSize) || 1.0;
+      const customAreaPerRoll = Number((widthNum * len).toFixed(2));
+      return {
+        ...baseItem,
+        rollLengthMtr: len,
+        areaPerRoll: customAreaPerRoll,
+        totalAreaMtr2: Number((baseItem.currentStock * customAreaPerRoll).toFixed(2)),
+        barcode: generateMatrixBarcode(baseItem.materialName, baseItem.variantSize, len)
+      };
+    }
+    return undefined;
+  }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutRollLength]);
 
   const validateStockOutBarcode = (code: string) => {
     const trimmed = code.trim();
@@ -722,45 +739,135 @@ export default function App() {
   }, [transactions, txnTypeFilter, searchQuery]);
 
   // -------------------------------------------------------------
-  // CLIENT HANDWRITTEN BLUEPRINT MATRIX COMPUTATION
-  // Rows: Material Names
-  // Columns: Size / Width values
-  // Cells: Current FULL ROLLS in hand
-  // Calculated Columns: Total Rolls, Total Area (m²)
+  // CLIENT MULTI-TABLE SUMMARY COMPUTATION
+  // Table 1: Flex / Backlit Roll Stock (1.02, 1.32, 1.63, 1.93, 2.20, 2.54, 3.20)
+  // Table 2: Vinyl / Lamination Roll Stock (0.94, 0.98, 1.02, 1.06, 1.27, 1.37, 1.52)
+  // Table 3: PVC / Rigid Sheet Stock (Sizes: 8×4, 6×3, 5×10 | Thickness: 2mm, 3mm, 4mm, 5mm)
   // -------------------------------------------------------------
-  const matrixData = useMemo(() => {
+  const summaryTablesData = useMemo(() => {
     const activeItems = itemsWithStock.filter((i) => i.active);
 
-    // Standard width columns in ascending order
-    const rollSizes = Array.from(new Set(activeItems.map((i) => i.variantSize))).sort((a, b) => {
-      const numA = parseFloat(a);
-      const numB = parseFloat(b);
-      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    // 1. Flex / Backlit Roll Materials
+    const flexItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'FLEX_ROLL');
+    const rawFlexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName)));
+    const flexMaterials = rawFlexMaterials.sort((a, b) => {
+      const idxA = CLIENT_FLEX_MATERIALS_ORDER.indexOf(a);
+      const idxB = CLIENT_FLEX_MATERIALS_ORDER.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
       return a.localeCompare(b);
     });
 
-    const rollMaterials = Array.from(new Set(activeItems.map((i) => i.materialName))).sort();
-
-    const rollMatrixRows = rollMaterials.map((matName) => {
-      const matItems = activeItems.filter((i) => i.materialName === matName);
-      const rowRollTotal = matItems.reduce((sum, i) => sum + i.currentStock, 0);
-      const rowAreaTotal = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
-      const cells: { [size: string]: MatrixItemWithStock | undefined } = {};
+    const flexRows = flexMaterials.map((matName) => {
+      const matItems = flexItems.filter((i) => i.materialName === matName);
+      const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
       matItems.forEach((i) => {
         cells[i.variantSize] = i;
       });
+      const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
+      const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
       return {
         materialName: matName,
         category: matItems[0]?.category || 'Flex PVC',
         cells,
-        totalRolls: rowRollTotal,
-        totalAreaMtr2: rowAreaTotal
+        totalRolls: rowTotalRolls,
+        totalAreaMtr2: rowTotalArea
       };
     });
 
+    // Flex column totals
+    const flexColTotals: { [width: string]: number } = {};
+    FLEX_SUMMARY_WIDTHS.forEach((w) => {
+      flexColTotals[w] = flexRows.reduce((sum, row) => sum + (row.cells[w]?.currentStock || 0), 0);
+    });
+    const flexGrandTotalRolls = flexRows.reduce((sum, r) => sum + r.totalRolls, 0);
+    const flexGrandTotalArea = Number(flexRows.reduce((sum, r) => sum + r.totalAreaMtr2, 0).toFixed(2));
+
+    // 2. Vinyl / Lamination Roll Materials
+    const vinylItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'VINYL_ROLL');
+    const rawVinylMaterials = Array.from(new Set(vinylItems.map((i) => i.materialName)));
+    // Ensure all standard vinyl materials are present even if 0 stock
+    CLIENT_VINYL_MATERIALS_ORDER.forEach((m) => {
+      if (!rawVinylMaterials.includes(m)) rawVinylMaterials.push(m);
+    });
+    const vinylMaterials = rawVinylMaterials.sort((a, b) => {
+      const idxA = CLIENT_VINYL_MATERIALS_ORDER.indexOf(a);
+      const idxB = CLIENT_VINYL_MATERIALS_ORDER.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    const vinylRows = vinylMaterials.map((matName) => {
+      const matItems = vinylItems.filter((i) => i.materialName === matName);
+      const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
+      matItems.forEach((i) => {
+        cells[i.variantSize] = i;
+      });
+      const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
+      const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
+      return {
+        materialName: matName,
+        category: matItems[0]?.category || 'Self Adhesive Vinyl',
+        cells,
+        totalRolls: rowTotalRolls,
+        totalAreaMtr2: rowTotalArea
+      };
+    });
+
+    // Vinyl column totals
+    const vinylColTotals: { [width: string]: number } = {};
+    VINYL_SUMMARY_WIDTHS.forEach((w) => {
+      vinylColTotals[w] = vinylRows.reduce((sum, row) => sum + (row.cells[w]?.currentStock || 0), 0);
+    });
+    const vinylGrandTotalRolls = vinylRows.reduce((sum, r) => sum + r.totalRolls, 0);
+    const vinylGrandTotalArea = Number(vinylRows.reduce((sum, r) => sum + r.totalAreaMtr2, 0).toFixed(2));
+
+    // 3. PVC / Rigid Sheet Materials
+    const pvcItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'RIGID_PVC');
+    const pvcRows = PVC_SHEET_SIZES.map((sheetSize) => {
+      const sizeItems = pvcItems.filter((i) => i.variantSize === sheetSize);
+      const cells: { [thickness: string]: MatrixItemWithStock | undefined } = {};
+      sizeItems.forEach((i) => {
+        if (i.secondaryVariant) {
+          cells[i.secondaryVariant] = i;
+        }
+      });
+      const rowTotalSheets = sizeItems.reduce((sum, i) => sum + i.currentStock, 0);
+      const rowTotalArea = Number(sizeItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
+      return {
+        sheetSize,
+        materialName: sizeItems[0]?.materialName || 'PVC Foam Sheet',
+        cells,
+        totalSheets: rowTotalSheets,
+        totalAreaMtr2: rowTotalArea
+      };
+    });
+
+    // PVC column totals
+    const pvcColTotals: { [thickness: string]: number } = {};
+    PVC_THICKNESSES.forEach((th) => {
+      pvcColTotals[th] = pvcRows.reduce((sum, row) => sum + (row.cells[th]?.currentStock || 0), 0);
+    });
+    const pvcGrandTotalSheets = pvcRows.reduce((sum, r) => sum + r.totalSheets, 0);
+    const pvcGrandTotalArea = Number(pvcRows.reduce((sum, r) => sum + r.totalAreaMtr2, 0).toFixed(2));
+
     return {
-      rollSizes,
-      rollMatrixRows
+      flexRows,
+      flexColTotals,
+      flexGrandTotalRolls,
+      flexGrandTotalArea,
+      vinylRows,
+      vinylColTotals,
+      vinylGrandTotalRolls,
+      vinylGrandTotalArea,
+      pvcRows,
+      pvcColTotals,
+      pvcGrandTotalSheets,
+      pvcGrandTotalArea,
+      hasPvc: pvcItems.length > 0
     };
   }, [itemsWithStock]);
 
@@ -1063,20 +1170,20 @@ export default function App() {
               </div>
             </div>
 
-            {/* Matrix Card */}
-            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            {/* Multi-Table Summary Container */}
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                 <div>
                   <div className="flex items-center space-x-2">
                     <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
-                      Client Stock Summary Matrix
+                      CURRENT STOCK SUMMARY
                     </h2>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                       Click any cell to update stock
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Rows: Material Names | Columns: Size / Width values | Cell: Current full rolls in hand. Total Rolls and Area (m²) calculated automatically.
+                    Categorized into distinct summary tables matching the client's original Excel sheets. Cells show live in-hand roll/sheet count.
                   </p>
                 </div>
 
@@ -1091,7 +1198,7 @@ export default function App() {
                       }`}
                     >
                       <Grid className="w-3.5 h-3.5" />
-                      <span>Matrix View</span>
+                      <span>Summary Matrices</span>
                     </button>
                     <button
                       onClick={() => setDashboardViewMode('table')}
@@ -1116,95 +1223,384 @@ export default function App() {
                 </div>
               </div>
 
-              {/* VIEW 1: EXCEL MATRIX VIEW */}
+              {/* VIEW 1: SEPARATE CLIENT SUMMARY MATRICES */}
               {dashboardViewMode === 'matrix' && (
-                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs pt-1">
-                  <div className="overflow-x-auto">
-                    <table className="w-full border-collapse text-xs">
-                      <thead>
-                        <tr className="bg-slate-900 text-white font-bold text-center">
-                          <th className="py-3 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
-                            Material Name
-                          </th>
-                          {matrixData.rollSizes.map((size) => (
-                            <th
-                              key={size}
-                              className="py-3 px-3 min-w-[70px] border-r border-slate-800 font-mono text-indigo-200"
-                            >
-                              {size} M
-                            </th>
-                          ))}
-                          <th className="py-3 px-4 bg-slate-950 font-black text-white min-w-[90px] border-r border-slate-800">
-                            Total Rolls
-                          </th>
-                          <th className="py-3 px-4 bg-indigo-950 font-black text-indigo-200 min-w-[100px]">
-                            Total Area (m²)
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200">
-                        {matrixData.rollMatrixRows.map((row) => (
-                          <tr key={row.materialName} className="hover:bg-indigo-50/40 transition-colors">
-                            {/* Row Header (Material Name + Category) */}
-                            <td className="py-3 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
-                              <div className="leading-tight">
-                                <span className="text-sm font-extrabold">{row.materialName}</span>
-                                <span className="block text-[10px] text-slate-400 font-normal">
-                                  {row.category}
-                                </span>
-                              </div>
-                            </td>
+                <div className="space-y-8">
+                  {/* TABLE 1: FLEX / BACKLIT / SIMILAR ROLL MATERIALS */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                        <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                          1. Flex / Backlit Roll Stock
+                        </h3>
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        Width Columns: 1.02 &bull; 1.32 &bull; 1.63 &bull; 1.93 &bull; 2.20 &bull; 2.54 &bull; 3.20 M
+                      </span>
+                    </div>
 
-                            {/* Size Columns */}
-                            {matrixData.rollSizes.map((size) => {
-                              const item = row.cells[size];
-                              if (!item) {
-                                return (
-                                  <td
-                                    key={size}
-                                    className="py-3 px-3 text-center text-slate-300 border-r border-slate-100 font-mono bg-slate-50/50"
-                                  >
-                                    —
-                                  </td>
-                                );
-                              }
-
-                              const qty = item.currentStock;
-                              const isOutOfStock = qty <= 0;
-                              const isLowStock = qty > 0 && qty <= item.minStock;
-
-                              return (
-                                <td
-                                  key={size}
-                                  onClick={() => setModalItem(item)}
-                                  className={`py-3 px-3 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
-                                    isOutOfStock
-                                      ? 'bg-red-50 text-red-600 hover:bg-red-100'
-                                      : isLowStock
-                                      ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                      : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
-                                  }`}
-                                  title={`Click to update ${item.materialName} (${item.variantSize}M × ${item.rollLengthMtr}M) - Current: ${qty} Rolls (${item.totalAreaMtr2} m²)`}
+                    <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-900 text-white font-bold text-center">
+                              <th className="py-2.5 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
+                                Material
+                              </th>
+                              {FLEX_SUMMARY_WIDTHS.map((width) => (
+                                <th
+                                  key={width}
+                                  className="py-2.5 px-3 min-w-[65px] border-r border-slate-800 font-mono text-indigo-200"
                                 >
-                                  <span className="text-sm">{qty}</span>
+                                  {width}
+                                </th>
+                              ))}
+                              <th className="py-2.5 px-4 bg-slate-950 font-black text-white min-w-[85px] border-r border-slate-800">
+                                Total
+                              </th>
+                              <th className="py-2.5 px-4 bg-indigo-950 font-black text-indigo-200 min-w-[95px]">
+                                Total (m²)
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {summaryTablesData.flexRows.map((row) => (
+                              <tr key={row.materialName} className="hover:bg-indigo-50/40 transition-colors">
+                                <td className="py-2.5 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
+                                  <div className="leading-tight">
+                                    <span className="text-xs font-bold text-slate-900">{row.materialName}</span>
+                                    <span className="block text-[10px] text-slate-400 font-normal">
+                                      {row.category}
+                                    </span>
+                                  </div>
                                 </td>
-                              );
-                            })}
 
-                            {/* Calculated Total Rolls Column */}
-                            <td className="py-3 px-4 text-center font-mono font-black text-slate-900 bg-slate-50 border-r border-slate-200">
-                              {row.totalRolls}
-                            </td>
+                                {FLEX_SUMMARY_WIDTHS.map((width) => {
+                                  const item = row.cells[width];
+                                  if (!item) {
+                                    return (
+                                      <td
+                                        key={width}
+                                        className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none"
+                                      >
+                                        -
+                                      </td>
+                                    );
+                                  }
 
-                            {/* Calculated Total Area (m²) Column */}
-                            <td className="py-3 px-4 text-center font-mono font-black text-indigo-700 bg-indigo-50/50">
-                              {row.totalAreaMtr2.toLocaleString()}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                                  const qty = item.currentStock;
+                                  const isOutOfStock = qty <= 0;
+                                  const isLowStock = qty > 0 && qty <= item.minStock;
+
+                                  return (
+                                    <td
+                                      key={width}
+                                      onClick={() => setModalItem(item)}
+                                      className={`py-2.5 px-3 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
+                                        isOutOfStock
+                                          ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                          : isLowStock
+                                          ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                          : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
+                                      }`}
+                                      title={`Click to update ${item.materialName} (${item.variantSize}M) - Current: ${qty} Rolls`}
+                                    >
+                                      <span className="text-xs">{qty}</span>
+                                    </td>
+                                  );
+                                })}
+
+                                <td className="py-2.5 px-4 text-center font-mono font-black text-slate-900 bg-slate-50 border-r border-slate-200">
+                                  {row.totalRolls}
+                                </td>
+                                <td className="py-2.5 px-4 text-center font-mono font-black text-indigo-700 bg-indigo-50/40">
+                                  {row.totalAreaMtr2.toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="border-t-2 border-slate-300 bg-slate-100 font-bold">
+                            <tr>
+                              <td className="py-2.5 px-4 font-black text-slate-900 sticky left-0 bg-slate-100 border-r border-slate-300 z-10 uppercase tracking-wider text-[11px]">
+                                Total Rolls
+                              </td>
+                              {FLEX_SUMMARY_WIDTHS.map((width) => (
+                                <td
+                                  key={width}
+                                  className="py-2.5 px-3 text-center font-mono font-black text-indigo-950 border-r border-slate-300 bg-indigo-50/50"
+                                >
+                                  {summaryTablesData.flexColTotals[width] ?? 0}
+                                </td>
+                              ))}
+                              <td className="py-2.5 px-4 text-center font-mono font-black text-white bg-slate-950 border-r border-slate-800">
+                                {summaryTablesData.flexGrandTotalRolls}
+                              </td>
+                              <td className="py-2.5 px-4 text-center font-mono font-black text-indigo-900 bg-indigo-100">
+                                {summaryTablesData.flexGrandTotalArea.toLocaleString()}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
                   </div>
+
+                  {/* TABLE 2: VINYL / LAMINATION MATERIALS */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                        <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                          2. Vinyl / Lamination Roll Stock
+                        </h3>
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        Width Columns: 0.94 &bull; 0.98 &bull; 1.02 &bull; 1.06 &bull; 1.27 &bull; 1.52 &bull; 1.37 M
+                      </span>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-900 text-white font-bold text-center">
+                              <th className="py-2.5 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
+                                Material
+                              </th>
+                              {VINYL_SUMMARY_WIDTHS.map((width) => (
+                                <th
+                                  key={width}
+                                  className="py-2.5 px-3 min-w-[65px] border-r border-slate-800 font-mono text-emerald-200"
+                                >
+                                  {width}
+                                </th>
+                              ))}
+                              <th className="py-2.5 px-4 bg-slate-950 font-black text-white min-w-[85px] border-r border-slate-800">
+                                Total
+                              </th>
+                              <th className="py-2.5 px-4 bg-emerald-950 font-black text-emerald-200 min-w-[95px]">
+                                Total (m²)
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {summaryTablesData.vinylRows.map((row) => (
+                              <tr key={row.materialName} className="hover:bg-emerald-50/40 transition-colors">
+                                <td className="py-2.5 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
+                                  <div className="leading-tight">
+                                    <span className="text-xs font-bold text-slate-900">{row.materialName}</span>
+                                    <span className="block text-[10px] text-slate-400 font-normal">
+                                      {row.category}
+                                    </span>
+                                  </div>
+                                </td>
+
+                                {VINYL_SUMMARY_WIDTHS.map((width) => {
+                                  const item = row.cells[width];
+                                  if (!item) {
+                                    return (
+                                      <td
+                                        key={width}
+                                        className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none"
+                                      >
+                                        -
+                                      </td>
+                                    );
+                                  }
+
+                                  const qty = item.currentStock;
+                                  // Clean formatting for Premium One Way with 0 stock
+                                  if (row.materialName === 'Premium One Way' && qty === 0) {
+                                    return (
+                                      <td
+                                        key={width}
+                                        onClick={() => setModalItem(item)}
+                                        className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 cursor-pointer hover:bg-slate-100 select-none"
+                                        title={`Click to update ${item.materialName} (${item.variantSize}M) - Current: 0 Rolls`}
+                                      >
+                                        -
+                                      </td>
+                                    );
+                                  }
+
+                                  const isOutOfStock = qty <= 0;
+                                  const isLowStock = qty > 0 && qty <= item.minStock;
+
+                                  return (
+                                    <td
+                                      key={width}
+                                      onClick={() => setModalItem(item)}
+                                      className={`py-2.5 px-3 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
+                                        isOutOfStock
+                                          ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                          : isLowStock
+                                          ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                          : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
+                                      }`}
+                                      title={`Click to update ${item.materialName} (${item.variantSize}M) - Current: ${qty} Rolls`}
+                                    >
+                                      <span className="text-xs">{qty}</span>
+                                    </td>
+                                  );
+                                })}
+
+                                <td className="py-2.5 px-4 text-center font-mono font-black text-slate-900 bg-slate-50 border-r border-slate-200">
+                                  {row.totalRolls}
+                                </td>
+                                <td className="py-2.5 px-4 text-center font-mono font-black text-emerald-700 bg-emerald-50/40">
+                                  {row.totalAreaMtr2.toLocaleString()}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="border-t-2 border-slate-300 bg-slate-100 font-bold">
+                            <tr>
+                              <td className="py-2.5 px-4 font-black text-slate-900 sticky left-0 bg-slate-100 border-r border-slate-300 z-10 uppercase tracking-wider text-[11px]">
+                                Total Rolls
+                              </td>
+                              {VINYL_SUMMARY_WIDTHS.map((width) => (
+                                <td
+                                  key={width}
+                                  className="py-2.5 px-3 text-center font-mono font-black text-emerald-950 border-r border-slate-300 bg-emerald-50/50"
+                                >
+                                  {summaryTablesData.vinylColTotals[width] ?? 0}
+                                </td>
+                              ))}
+                              <td className="py-2.5 px-4 text-center font-mono font-black text-white bg-slate-950 border-r border-slate-800">
+                                {summaryTablesData.vinylGrandTotalRolls}
+                              </td>
+                              <td className="py-2.5 px-4 text-center font-mono font-black text-emerald-900 bg-emerald-100">
+                                {summaryTablesData.vinylGrandTotalArea.toLocaleString()}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* TABLE 3: PVC / RIGID SHEET STOCK */}
+                  {summaryTablesData.hasPvc && (
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <span className="w-2 h-2 rounded-full bg-amber-600"></span>
+                          <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                            3. PVC / Rigid Sheet Stock
+                          </h3>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-mono">
+                          Sheet Sizes: 8×4 &bull; 6×3 &bull; 5×10 | Thicknesses: 2mm &bull; 3mm &bull; 4mm &bull; 5mm
+                        </span>
+                      </div>
+
+                      <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                        <div className="overflow-x-auto">
+                          <table className="w-full border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-900 text-white font-bold text-center">
+                                <th className="py-2.5 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
+                                  Sheet Size
+                                </th>
+                                {PVC_THICKNESSES.map((thick) => (
+                                  <th
+                                    key={thick}
+                                    className="py-2.5 px-4 min-w-[75px] border-r border-slate-800 font-mono text-amber-200"
+                                  >
+                                    {thick}
+                                  </th>
+                                ))}
+                                <th className="py-2.5 px-4 bg-slate-950 font-black text-white min-w-[85px] border-r border-slate-800">
+                                  Total Sheets
+                                </th>
+                                <th className="py-2.5 px-4 bg-amber-950 font-black text-amber-200 min-w-[95px]">
+                                  Total (m²)
+                                </th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200">
+                              {summaryTablesData.pvcRows.map((row) => (
+                                <tr key={row.sheetSize} className="hover:bg-amber-50/40 transition-colors">
+                                  <td className="py-2.5 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
+                                    <div className="leading-tight">
+                                      <span className="text-xs font-bold text-slate-900">{row.sheetSize}</span>
+                                      <span className="block text-[10px] text-slate-400 font-normal">
+                                        {row.materialName}
+                                      </span>
+                                    </div>
+                                  </td>
+
+                                  {PVC_THICKNESSES.map((thick) => {
+                                    const item = row.cells[thick];
+                                    if (!item) {
+                                      return (
+                                        <td
+                                          key={thick}
+                                          className="py-2.5 px-4 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none"
+                                        >
+                                          -
+                                        </td>
+                                      );
+                                    }
+
+                                    const qty = item.currentStock;
+                                    const isOutOfStock = qty <= 0;
+                                    const isLowStock = qty > 0 && qty <= item.minStock;
+
+                                    return (
+                                      <td
+                                        key={thick}
+                                        onClick={() => setModalItem(item)}
+                                        className={`py-2.5 px-4 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
+                                          isOutOfStock
+                                            ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                            : isLowStock
+                                            ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                            : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
+                                        }`}
+                                        title={`Click to update ${item.materialName} (${item.variantSize} - ${thick}) - Current: ${qty} Sheets`}
+                                      >
+                                        <span className="text-xs">{qty}</span>
+                                      </td>
+                                    );
+                                  })}
+
+                                  <td className="py-2.5 px-4 text-center font-mono font-black text-slate-900 bg-slate-50 border-r border-slate-200">
+                                    {row.totalSheets}
+                                  </td>
+                                  <td className="py-2.5 px-4 text-center font-mono font-black text-amber-700 bg-amber-50/40">
+                                    {row.totalAreaMtr2.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                            <tfoot className="border-t-2 border-slate-300 bg-slate-100 font-bold">
+                              <tr>
+                                <td className="py-2.5 px-4 font-black text-slate-900 sticky left-0 bg-slate-100 border-r border-slate-300 z-10 uppercase tracking-wider text-[11px]">
+                                  Total Sheets
+                                </td>
+                                {PVC_THICKNESSES.map((thick) => (
+                                  <td
+                                    key={thick}
+                                    className="py-2.5 px-4 text-center font-mono font-black text-amber-950 border-r border-slate-300 bg-amber-50/50"
+                                  >
+                                    {summaryTablesData.pvcColTotals[thick] ?? 0}
+                                  </td>
+                                ))}
+                                <td className="py-2.5 px-4 text-center font-mono font-black text-white bg-slate-950 border-r border-slate-800">
+                                  {summaryTablesData.pvcGrandTotalSheets}
+                                </td>
+                                <td className="py-2.5 px-4 text-center font-mono font-black text-amber-900 bg-amber-100">
+                                  {summaryTablesData.pvcGrandTotalArea.toLocaleString()}
+                                </td>
+                              </tr>
+                            </tfoot>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1500,7 +1896,14 @@ export default function App() {
                       value={stockInVariantSize}
                       disabled={!stockInMaterial}
                       onChange={(e) => {
-                        setStockInVariantSize(e.target.value);
+                        const val = e.target.value;
+                        setStockInVariantSize(val);
+                        const foundItem = items.find(
+                          (i) => i.active && i.materialName === stockInMaterial && i.variantSize === val
+                        );
+                        if (foundItem) {
+                          setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
+                        }
                         setStockInBarcodeCode('');
                         setStockInVerificationStatus('IDLE');
                         setStockInError('');
@@ -1523,24 +1926,26 @@ export default function App() {
                     <label className="block text-slate-700 font-bold mb-1">
                       4. Roll Length / Meter <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      value={stockInRollLength}
-                      disabled={!stockInVariantSize}
-                      onChange={(e) => {
-                        setStockInRollLength(e.target.value);
-                        setStockInBarcodeCode('');
-                        setStockInVerificationStatus('IDLE');
-                        setStockInError('');
-                      }}
-                      required
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      {stockInAvailableLengths.map((len) => (
-                        <option key={len} value={len}>
-                          {len} M
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="1"
+                        step="any"
+                        required
+                        placeholder="e.g. 70"
+                        value={stockInRollLength}
+                        onChange={(e) => {
+                          setStockInRollLength(e.target.value);
+                          setStockInBarcodeCode('');
+                          setStockInVerificationStatus('IDLE');
+                          setStockInError('');
+                        }}
+                        className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                      />
+                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
+                        M
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -1852,7 +2257,14 @@ export default function App() {
                       value={stockOutVariantSize}
                       disabled={!stockOutMaterial}
                       onChange={(e) => {
-                        setStockOutVariantSize(e.target.value);
+                        const val = e.target.value;
+                        setStockOutVariantSize(val);
+                        const foundItem = items.find(
+                          (i) => i.active && i.materialName === stockOutMaterial && i.variantSize === val
+                        );
+                        if (foundItem) {
+                          setStockOutRollLength((foundItem.rollLengthMtr || 70).toString());
+                        }
                         setStockOutBarcodeCode('');
                         setStockOutVerificationStatus('IDLE');
                         setStockOutError('');
@@ -1875,24 +2287,26 @@ export default function App() {
                     <label className="block text-slate-700 font-bold mb-1">
                       4. Roll Length / Meter <span className="text-red-500">*</span>
                     </label>
-                    <select
-                      value={stockOutRollLength}
-                      disabled={!stockOutVariantSize}
-                      onChange={(e) => {
-                        setStockOutRollLength(e.target.value);
-                        setStockOutBarcodeCode('');
-                        setStockOutVerificationStatus('IDLE');
-                        setStockOutError('');
-                      }}
-                      required
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      {stockOutAvailableLengths.map((len) => (
-                        <option key={len} value={len}>
-                          {len} M
-                        </option>
-                      ))}
-                    </select>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="1"
+                        step="any"
+                        required
+                        placeholder="e.g. 70"
+                        value={stockOutRollLength}
+                        onChange={(e) => {
+                          setStockOutRollLength(e.target.value);
+                          setStockOutBarcodeCode('');
+                          setStockOutVerificationStatus('IDLE');
+                          setStockOutError('');
+                        }}
+                        className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                      />
+                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
+                        M
+                      </span>
+                    </div>
                   </div>
                 </div>
 

@@ -2,15 +2,74 @@ import {
   MatrixInventoryItem,
   MatrixStockTransaction,
   MatrixItemWithStock,
-  MatrixDashboardMetrics
+  MatrixDashboardMetrics,
+  InventorySummaryGroup
 } from '../types/inventory';
 
-const STORAGE_KEY_ITEMS = 'rollprint_blueprint_items_v6';
-const STORAGE_KEY_TRANSACTIONS = 'rollprint_blueprint_txns_v6';
+const STORAGE_KEY_ITEMS = 'rollprint_client_excel_matrix_v8';
+const STORAGE_KEY_TRANSACTIONS = 'rollprint_client_excel_txns_v8';
 
 /**
- * Generates unique stable barcode for Material + Size/Width + Roll Length
- * Example: Active + 1.02 + 70M -> ACTIVE-1.02-70M
+ * Standard Width Columns for Client Summary Tables
+ */
+export const FLEX_SUMMARY_WIDTHS = ['1.02', '1.32', '1.63', '1.93', '2.20', '2.54', '3.20'];
+export const VINYL_SUMMARY_WIDTHS = ['0.94', '0.98', '1.02', '1.06', '1.27', '1.52', '1.37'];
+export const PVC_SHEET_SIZES = ['8×4', '6×3', '5×10'];
+export const PVC_THICKNESSES = ['2mm', '3mm', '4mm', '5mm'];
+
+/**
+ * Client Excel Row Display Orders
+ */
+export const CLIENT_FLEX_MATERIALS_ORDER = [
+  'Backlit Sunlex',
+  'Backlit Megha',
+  'Backlit Hetax',
+  'Premium M 9',
+  'Premium M 10 BB',
+  'Premium S 10 BB',
+  'BB S/M',
+  'Lite',
+  'Economy',
+  'S Print 22',
+  'Bright FL 26',
+  'Hi Gloss HL-23',
+  'Active'
+];
+
+export const CLIENT_VINYL_MATERIALS_ORDER = [
+  'Vinyl Gloss 80 Mic',
+  'Vinyl Gloss 100 Mic',
+  'Vinyl Matt 100 Mic',
+  'Premium One Way',
+  'Lamination Matt',
+  'Lamination Gloss'
+];
+
+/**
+ * Determines summary group based on explicit field or category/unit
+ */
+export function getItemSummaryGroup(item: {
+  summaryGroup?: InventorySummaryGroup;
+  category?: string;
+  unit?: string;
+  materialName?: string;
+}): InventorySummaryGroup {
+  if (item.summaryGroup) return item.summaryGroup;
+  const unit = item.unit?.toLowerCase() || '';
+  const cat = item.category?.toLowerCase() || '';
+  const mat = item.materialName?.toLowerCase() || '';
+
+  if (unit === 'sheets' || cat.includes('rigid') || cat.includes('pvc') || mat.includes('pvc')) {
+    return 'RIGID_PVC';
+  }
+  if (cat.includes('vinyl') || cat.includes('lamination') || mat.includes('vinyl') || mat.includes('lamination') || mat.includes('one way')) {
+    return 'VINYL_ROLL';
+  }
+  return 'FLEX_ROLL';
+}
+
+/**
+ * Generates unique stable barcode
  */
 export function generateMatrixBarcode(
   materialName: string,
@@ -28,110 +87,150 @@ export function generateMatrixBarcode(
     .replace(/[×]/g, 'X')
     .replace(/[^A-Z0-9.]+/g, '-')
     .replace(/^-|-$/g, '');
-  const cleanLength = `${rollLengthMtr}M`;
+  const cleanLength = rollLengthMtr > 0 ? `-${rollLengthMtr}M` : '';
   const cleanSec = secondaryVariant
     ? `-${secondaryVariant.toUpperCase().replace(/[×]/g, 'X').replace(/[^A-Z0-9]+/g, '-')}`
     : '';
 
-  return `${cleanMat}-${cleanSize}-${cleanLength}${cleanSec}`;
+  return `${cleanMat}-${cleanSize}${cleanLength}${cleanSec}`;
 }
 
 export const INITIAL_MATRIX_ITEMS: MatrixInventoryItem[] = [
-  // 1. Active (Flex PVC) — from client handwritten blueprint
-  { id: 'act-102-70', materialName: 'Active', category: 'Flex PVC', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-1.02-70M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'act-132-70', materialName: 'Active', category: 'Flex PVC', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-1.32-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'act-163-70', materialName: 'Active', category: 'Flex PVC', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-1.63-70M', openingStock: 6, minStock: 3, active: true, createdAt: '2026-09-01' },
-  { id: 'act-193-70', materialName: 'Active', category: 'Flex PVC', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-1.93-70M', openingStock: 4, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'act-254-70', materialName: 'Active', category: 'Flex PVC', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-2.54-70M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'act-320-70', materialName: 'Active', category: 'Flex PVC', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-3.20-70M', openingStock: 1, minStock: 2, active: true, createdAt: '2026-09-01' },
+  // =========================================================
+  // GROUP 1: FLEX / BACKLIT / SIMILAR ROLL MATERIALS
+  // Widths: 1.02, 1.32, 1.63, 1.93, 2.20, 2.54, 3.20
+  // =========================================================
+  // 1. Backlit Sunlex (1: 1.02, 1: 1.32, 5: 1.63, 8: 1.93, 5: 2.54, 0: 3.20 -> Total: 20)
+  { id: 'bs-102', materialName: 'Backlit Sunlex', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.02-50M', openingStock: 1, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bs-132', materialName: 'Backlit Sunlex', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.32-50M', openingStock: 1, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bs-163', materialName: 'Backlit Sunlex', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.63-50M', openingStock: 5, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'bs-193', materialName: 'Backlit Sunlex', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.93-50M', openingStock: 8, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'bs-254', materialName: 'Backlit Sunlex', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-2.54-50M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bs-320', materialName: 'Backlit Sunlex', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '3.20', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-3.20-50M', openingStock: 0, minStock: 2, active: true, createdAt: '2026-09-01' },
 
-  // 2. Backlit Sunlex (Backlit, 50M rolls)
-  { id: 'bs-102-50', materialName: 'Backlit Sunlex', category: 'Backlit', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.02-50M', openingStock: 1, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'bs-132-50', materialName: 'Backlit Sunlex', category: 'Backlit', variantSize: '1.32', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.32-50M', openingStock: 4, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'bs-163-50', materialName: 'Backlit Sunlex', category: 'Backlit', variantSize: '1.63', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.63-50M', openingStock: 5, minStock: 3, active: true, createdAt: '2026-09-01' },
-  { id: 'bs-193-50', materialName: 'Backlit Sunlex', category: 'Backlit', variantSize: '1.93', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-1.93-50M', openingStock: 8, minStock: 3, active: true, createdAt: '2026-09-01' },
-  { id: 'bs-254-50', materialName: 'Backlit Sunlex', category: 'Backlit', variantSize: '2.54', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-2.54-50M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'bs-320-50', materialName: 'Backlit Sunlex', category: 'Backlit', variantSize: '3.20', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-SUNLEX-3.20-50M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
+  // 2. Backlit Megha (5: 1.93, 7: 2.54 -> Total: 12)
+  { id: 'bm-193', materialName: 'Backlit Megha', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-MEGHA-1.93-50M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bm-254', materialName: 'Backlit Megha', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-MEGHA-2.54-50M', openingStock: 7, minStock: 2, active: true, createdAt: '2026-09-01' },
 
-  // 3. Premium M 9 (Flex PVC, 70M rolls)
-  { id: 'pm9-102-70', materialName: 'Premium M 9', category: 'Flex PVC', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-1.02-70M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'pm9-132-70', materialName: 'Premium M 9', category: 'Flex PVC', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-1.32-70M', openingStock: 16, minStock: 5, active: true, createdAt: '2026-09-01' },
-  { id: 'pm9-163-70', materialName: 'Premium M 9', category: 'Flex PVC', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-1.63-70M', openingStock: 9, minStock: 4, active: true, createdAt: '2026-09-01' },
-  { id: 'pm9-193-70', materialName: 'Premium M 9', category: 'Flex PVC', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-1.93-70M', openingStock: 18, minStock: 5, active: true, createdAt: '2026-09-01' },
-  { id: 'pm9-254-70', materialName: 'Premium M 9', category: 'Flex PVC', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-2.54-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
-  { id: 'pm9-320-70', materialName: 'Premium M 9', category: 'Flex PVC', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-3.20-70M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
+  // 3. Backlit Hetax (2: 1.02, 2: 1.32, 5: 2.54 -> Total: 9)
+  { id: 'bh-102', materialName: 'Backlit Hetax', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-HETAX-1.02-50M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bh-132', materialName: 'Backlit Hetax', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-HETAX-1.32-50M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bh-254', materialName: 'Backlit Hetax', category: 'Backlit', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 50, unit: 'Rolls', barcode: 'BACKLIT-HETAX-2.54-50M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
 
-  // 4. Bright FL 26 (Flex PVC, 70M rolls)
-  { id: 'bfl26-102-70', materialName: 'Bright FL 26', category: 'Flex PVC', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.02-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-02' },
-  { id: 'bfl26-132-70', materialName: 'Bright FL 26', category: 'Flex PVC', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.32-70M', openingStock: 7, minStock: 3, active: true, createdAt: '2026-09-02' },
-  { id: 'bfl26-163-70', materialName: 'Bright FL 26', category: 'Flex PVC', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.63-70M', openingStock: 10, minStock: 4, active: true, createdAt: '2026-09-02' },
-  { id: 'bfl26-193-70', materialName: 'Bright FL 26', category: 'Flex PVC', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.93-70M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-02' },
-  { id: 'bfl26-254-70', materialName: 'Bright FL 26', category: 'Flex PVC', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-2.54-70M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-02' },
-  { id: 'bfl26-320-70', materialName: 'Bright FL 26', category: 'Flex PVC', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-3.20-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-02' },
+  // 4. Premium M 9 (16: 1.32, 9: 1.63, 18: 1.93, 13: 3.20 -> Total: 56)
+  { id: 'pm9-132', materialName: 'Premium M 9', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-1.32-70M', openingStock: 16, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'pm9-163', materialName: 'Premium M 9', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-1.63-70M', openingStock: 9, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'pm9-193', materialName: 'Premium M 9', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-1.93-70M', openingStock: 18, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'pm9-320', materialName: 'Premium M 9', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-9-3.20-70M', openingStock: 13, minStock: 3, active: true, createdAt: '2026-09-01' },
 
-  // 5. Vinyl Gloss 80 Mic (Self Adhesive Vinyl, 50M rolls)
-  { id: 'vg80-094-50', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', variantSize: '0.94', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-0.94-50M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-03' },
-  { id: 'vg80-106-50', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', variantSize: '1.06', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-1.06-50M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-03' },
-  { id: 'vg80-127-50', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', variantSize: '1.27', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-1.27-50M', openingStock: 44, minStock: 5, active: true, createdAt: '2026-09-03' },
-  { id: 'vg80-137-50', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', variantSize: '1.37', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-1.37-50M', openingStock: 4, minStock: 2, active: true, createdAt: '2026-09-03' },
-  { id: 'vg80-152-50', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', variantSize: '1.52', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-1.52-50M', openingStock: 6, minStock: 2, active: true, createdAt: '2026-09-03' }
+  // 5. Premium M 10 BB (1: 1.32, 9: 1.63, 4: 1.93, 3: 2.54 -> Total: 17)
+  { id: 'pm10bb-132', materialName: 'Premium M 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-10-BB-1.32-70M', openingStock: 1, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pm10bb-163', materialName: 'Premium M 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-10-BB-1.63-70M', openingStock: 9, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'pm10bb-193', materialName: 'Premium M 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-10-BB-1.93-70M', openingStock: 4, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pm10bb-254', materialName: 'Premium M 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-M-10-BB-2.54-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 6. Premium S 10 BB (3: 1.02, 14: 1.32, 2: 1.63, 6: 1.93, 15: 2.54, 3: 3.20 -> Total: 43)
+  { id: 'ps10bb-102', materialName: 'Premium S 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-S-10-BB-1.02-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'ps10bb-132', materialName: 'Premium S 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-S-10-BB-1.32-70M', openingStock: 14, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'ps10bb-163', materialName: 'Premium S 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-S-10-BB-1.63-70M', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'ps10bb-193', materialName: 'Premium S 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-S-10-BB-1.93-70M', openingStock: 6, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'ps10bb-254', materialName: 'Premium S 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-S-10-BB-2.54-70M', openingStock: 15, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'ps10bb-320', materialName: 'Premium S 10 BB', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'PREMIUM-S-10-BB-3.20-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 7. BB S/M (11: 1.02, 6: 1.32, 10: 1.63, 6: 1.93, 13: 2.54, 10: 3.20 -> Total: 56)
+  { id: 'bbsm-102', materialName: 'BB S/M', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BB-S-M-1.02-70M', openingStock: 11, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'bbsm-132', materialName: 'BB S/M', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BB-S-M-1.32-70M', openingStock: 6, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'bbsm-163', materialName: 'BB S/M', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BB-S-M-1.63-70M', openingStock: 10, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'bbsm-193', materialName: 'BB S/M', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BB-S-M-1.93-70M', openingStock: 6, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bbsm-254', materialName: 'BB S/M', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BB-S-M-2.54-70M', openingStock: 13, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'bbsm-320', materialName: 'BB S/M', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BB-S-M-3.20-70M', openingStock: 10, minStock: 3, active: true, createdAt: '2026-09-01' },
+
+  // 8. Lite (16: 1.63 -> Total: 16)
+  { id: 'lite-163', materialName: 'Lite', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'LITE-1.63-70M', openingStock: 16, minStock: 4, active: true, createdAt: '2026-09-01' },
+
+  // 9. Economy (6: 1.63 -> Total: 6)
+  { id: 'econ-163', materialName: 'Economy', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ECONOMY-1.63-70M', openingStock: 6, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 10. S Print 22 (22: 1.02, 16: 1.32, 23: 1.63, 9: 1.93, 12: 2.54, 28: 3.20 -> Total: 110)
+  { id: 'sp22-102', materialName: 'S Print 22', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'S-PRINT-22-1.02-70M', openingStock: 22, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'sp22-132', materialName: 'S Print 22', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'S-PRINT-22-1.32-70M', openingStock: 16, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'sp22-163', materialName: 'S Print 22', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'S-PRINT-22-1.63-70M', openingStock: 23, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'sp22-193', materialName: 'S Print 22', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'S-PRINT-22-1.93-70M', openingStock: 9, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'sp22-254', materialName: 'S Print 22', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'S-PRINT-22-2.54-70M', openingStock: 12, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'sp22-320', materialName: 'S Print 22', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'S-PRINT-22-3.20-70M', openingStock: 28, minStock: 5, active: true, createdAt: '2026-09-01' },
+
+  // 11. Bright FL 26 (12: 1.02, 3: 1.32, 21: 1.63, 24: 1.93, 21: 2.54, 3: 3.20 -> Total: 84)
+  { id: 'bfl26-102', materialName: 'Bright FL 26', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.02-70M', openingStock: 12, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'bfl26-132', materialName: 'Bright FL 26', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.32-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'bfl26-163', materialName: 'Bright FL 26', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.63-70M', openingStock: 21, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'bfl26-193', materialName: 'Bright FL 26', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-1.93-70M', openingStock: 24, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'bfl26-254', materialName: 'Bright FL 26', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '2.54', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-2.54-70M', openingStock: 21, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'bfl26-320', materialName: 'Bright FL 26', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'BRIGHT-FL-26-3.20-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 12. Hi Gloss HL-23 (23: 1.32, 14: 1.63, 33: 1.93, 5: 3.20 -> Total: 75)
+  { id: 'hg23-132', materialName: 'Hi Gloss HL-23', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'HI-GLOSS-HL-23-1.32-70M', openingStock: 23, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'hg23-163', materialName: 'Hi Gloss HL-23', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'HI-GLOSS-HL-23-1.63-70M', openingStock: 14, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'hg23-193', materialName: 'Hi Gloss HL-23', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.93', rollLengthMtr: 70, unit: 'Rolls', barcode: 'HI-GLOSS-HL-23-1.93-70M', openingStock: 33, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'hg23-320', materialName: 'Hi Gloss HL-23', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '3.20', rollLengthMtr: 70, unit: 'Rolls', barcode: 'HI-GLOSS-HL-23-3.20-70M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 13. Active (Blueprint Example)
+  { id: 'act-102', materialName: 'Active', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.02', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-1.02-70M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'act-132', materialName: 'Active', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.32', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-1.32-70M', openingStock: 3, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'act-163', materialName: 'Active', category: 'Flex PVC', summaryGroup: 'FLEX_ROLL', variantSize: '1.63', rollLengthMtr: 70, unit: 'Rolls', barcode: 'ACTIVE-1.63-70M', openingStock: 6, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // =========================================================
+  // GROUP 2: VINYL / LAMINATION MATERIALS
+  // Widths: 0.94, 0.98, 1.02, 1.06, 1.27, 1.37, 1.52
+  // =========================================================
+  // 1. Vinyl Gloss 80 Mic (30: 1.02, 44: 1.27, 9: 1.52 -> Total: 83)
+  { id: 'vg80-102', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-1.02-50M', openingStock: 30, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'vg80-127', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.27', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-1.27-50M', openingStock: 44, minStock: 5, active: true, createdAt: '2026-09-01' },
+  { id: 'vg80-152', materialName: 'Vinyl Gloss 80 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.52', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-80-MIC-1.52-50M', openingStock: 9, minStock: 3, active: true, createdAt: '2026-09-01' },
+
+  // 2. Vinyl Gloss 100 Mic (15: 1.02, 17: 1.27, 15: 1.52 -> Total: 47)
+  { id: 'vg100-102', materialName: 'Vinyl Gloss 100 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-100-MIC-1.02-50M', openingStock: 15, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'vg100-127', materialName: 'Vinyl Gloss 100 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.27', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-100-MIC-1.27-50M', openingStock: 17, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'vg100-152', materialName: 'Vinyl Gloss 100 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.52', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-GLOSS-100-MIC-1.52-50M', openingStock: 15, minStock: 3, active: true, createdAt: '2026-09-01' },
+
+  // 3. Vinyl Matt 100 Mic (6: 1.02, 7: 1.27, 8: 1.52 -> Total: 21)
+  { id: 'vm100-102', materialName: 'Vinyl Matt 100 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-MATT-100-MIC-1.02-50M', openingStock: 6, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'vm100-127', materialName: 'Vinyl Matt 100 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.27', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-MATT-100-MIC-1.27-50M', openingStock: 7, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'vm100-152', materialName: 'Vinyl Matt 100 Mic', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.52', rollLengthMtr: 50, unit: 'Rolls', barcode: 'VINYL-MATT-100-MIC-1.52-50M', openingStock: 8, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 4. Premium One Way (Total: 0)
+  { id: 'pow-127', materialName: 'Premium One Way', category: 'Self Adhesive Vinyl', summaryGroup: 'VINYL_ROLL', variantSize: '1.27', rollLengthMtr: 50, unit: 'Rolls', barcode: 'PREMIUM-ONE-WAY-1.27-50M', openingStock: 0, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 5. Lamination Matt (24: 1.02, 10: 1.27, 6: 1.52 -> Total: 40)
+  { id: 'lm-102', materialName: 'Lamination Matt', category: 'Lamination Film', summaryGroup: 'VINYL_ROLL', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'LAMINATION-MATT-1.02-50M', openingStock: 24, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'lm-127', materialName: 'Lamination Matt', category: 'Lamination Film', summaryGroup: 'VINYL_ROLL', variantSize: '1.27', rollLengthMtr: 50, unit: 'Rolls', barcode: 'LAMINATION-MATT-1.27-50M', openingStock: 10, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'lm-152', materialName: 'Lamination Matt', category: 'Lamination Film', summaryGroup: 'VINYL_ROLL', variantSize: '1.52', rollLengthMtr: 50, unit: 'Rolls', barcode: 'LAMINATION-MATT-1.52-50M', openingStock: 6, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // 6. Lamination Gloss (7: 1.02, 5: 1.27, 4: 1.52 -> Total: 16)
+  { id: 'lg-102', materialName: 'Lamination Gloss', category: 'Lamination Film', summaryGroup: 'VINYL_ROLL', variantSize: '1.02', rollLengthMtr: 50, unit: 'Rolls', barcode: 'LAMINATION-GLOSS-1.02-50M', openingStock: 7, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'lg-127', materialName: 'Lamination Gloss', category: 'Lamination Film', summaryGroup: 'VINYL_ROLL', variantSize: '1.27', rollLengthMtr: 50, unit: 'Rolls', barcode: 'LAMINATION-GLOSS-1.27-50M', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'lg-152', materialName: 'Lamination Gloss', category: 'Lamination Film', summaryGroup: 'VINYL_ROLL', variantSize: '1.52', rollLengthMtr: 50, unit: 'Rolls', barcode: 'LAMINATION-GLOSS-1.52-50M', openingStock: 4, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  // =========================================================
+  // GROUP 3: PVC / RIGID MATERIAL SUMMARY
+  // Rows: 8×4, 6×3, 5×10 | Columns: 2mm, 3mm, 4mm, 5mm
+  // =========================================================
+  { id: 'pvc-8x4-2mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '8×4', secondaryVariant: '2mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-8X4-2MM', openingStock: 12, minStock: 3, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-8x4-3mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '8×4', secondaryVariant: '3mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-8X4-3MM', openingStock: 18, minStock: 4, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-8x4-4mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '8×4', secondaryVariant: '4mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-8X4-4MM', openingStock: 8, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-8x4-5mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '8×4', secondaryVariant: '5mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-8X4-5MM', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  { id: 'pvc-6x3-2mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '6×3', secondaryVariant: '2mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-6X3-2MM', openingStock: 6, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-6x3-3mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '6×3', secondaryVariant: '3mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-6X3-3MM', openingStock: 10, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-6x3-4mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '6×3', secondaryVariant: '4mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-6X3-4MM', openingStock: 4, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-6x3-5mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '6×3', secondaryVariant: '5mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-6X3-5MM', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
+
+  { id: 'pvc-5x10-2mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '5×10', secondaryVariant: '2mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-5X10-2MM', openingStock: 4, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-5x10-3mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '5×10', secondaryVariant: '3mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-5X10-3MM', openingStock: 5, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-5x10-4mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '5×10', secondaryVariant: '4mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-5X10-4MM', openingStock: 2, minStock: 2, active: true, createdAt: '2026-09-01' },
+  { id: 'pvc-5x10-5mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', variantSize: '5×10', secondaryVariant: '5mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-5X10-5MM', openingStock: 1, minStock: 2, active: true, createdAt: '2026-09-01' }
 ];
 
-export const INITIAL_MATRIX_TRANSACTIONS: MatrixStockTransaction[] = [
-  // Active 1.02 (70M): Opening 5, IN 3, OUT 2 -> Current 6 Rolls
-  {
-    id: 'tx-init-1',
-    itemId: 'act-102-70',
-    materialName: 'Active',
-    category: 'Flex PVC',
-    variantSize: '1.02',
-    rollLengthMtr: 70,
-    barcode: 'ACTIVE-1.02-70M',
-    type: 'IN',
-    quantity: 3,
-    areaMtr2: 214.2, // 3 * 1.02 * 70
-    stockBefore: 5,
-    stockAfter: 8,
-    unit: 'Rolls',
-    date: '2026-09-28',
-    createdAt: '2026-09-28T09:30:00Z'
-  },
-  {
-    id: 'tx-init-2',
-    itemId: 'act-102-70',
-    materialName: 'Active',
-    category: 'Flex PVC',
-    variantSize: '1.02',
-    rollLengthMtr: 70,
-    barcode: 'ACTIVE-1.02-70M',
-    type: 'OUT',
-    quantity: 2,
-    areaMtr2: 142.8, // 2 * 1.02 * 70
-    stockBefore: 8,
-    stockAfter: 6,
-    unit: 'Rolls',
-    date: '2026-10-01',
-    createdAt: '2026-10-01T14:15:00Z'
-  },
-  // Backlit Sunlex 1.32 (50M): Opening 4, IN 5 -> Current 9 Rolls
-  {
-    id: 'tx-init-3',
-    itemId: 'bs-132-50',
-    materialName: 'Backlit Sunlex',
-    category: 'Backlit',
-    variantSize: '1.32',
-    rollLengthMtr: 50,
-    barcode: 'BACKLIT-SUNLEX-1.32-50M',
-    type: 'IN',
-    quantity: 5,
-    areaMtr2: 330.0, // 5 * 1.32 * 50
-    stockBefore: 4,
-    stockAfter: 9,
-    unit: 'Rolls',
-    date: '2026-10-02',
-    createdAt: '2026-10-02T10:00:00Z'
-  }
-];
+export const INITIAL_MATRIX_TRANSACTIONS: MatrixStockTransaction[] = [];
 
 export function getStoredMatrixItems(): MatrixInventoryItem[] {
   try {
@@ -143,7 +242,8 @@ export function getStoredMatrixItems(): MatrixInventoryItem[] {
     const parsed = JSON.parse(raw);
     return parsed.map((item: any) => ({
       ...item,
-      rollLengthMtr: item.rollLengthMtr || 70,
+      summaryGroup: item.summaryGroup || getItemSummaryGroup(item),
+      rollLengthMtr: item.rollLengthMtr !== undefined ? item.rollLengthMtr : 70,
       active: item.active !== undefined ? item.active : true
     }));
   } catch {
@@ -201,9 +301,20 @@ export function calculateMatrixWithStock(
 
     const currentStock = item.openingStock + totalIn - totalOut;
 
-    const widthNum = parseFloat(item.variantSize) || 1.0;
-    const lengthNum = item.rollLengthMtr || 70;
-    const areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
+    // Calculate area
+    let areaPerRoll = 0;
+    if (item.unit === 'Sheets') {
+      // e.g. 8x4 feet converted to m²: 8 * 4 * 0.092903 = 2.97 m²
+      if (item.variantSize === '8×4') areaPerRoll = 2.97;
+      else if (item.variantSize === '6×3') areaPerRoll = 1.67;
+      else if (item.variantSize === '5×10') areaPerRoll = 4.65;
+      else areaPerRoll = 2.97;
+    } else {
+      const widthNum = parseFloat(item.variantSize) || 1.0;
+      const lengthNum = item.rollLengthMtr || 70;
+      areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
+    }
+
     const totalAreaMtr2 = Number((currentStock * areaPerRoll).toFixed(2));
 
     let status: MatrixItemWithStock['status'] = 'IN_STOCK';
@@ -215,6 +326,7 @@ export function calculateMatrixWithStock(
 
     return {
       ...item,
+      summaryGroup: item.summaryGroup || getItemSummaryGroup(item),
       totalIn,
       totalOut,
       currentStock,
@@ -279,9 +391,6 @@ export function calculateMatrixDashboardMetrics(
   };
 }
 
-/**
- * Returns the direct HTTPS web URL for an item's mobile stock page.
- */
 export function getItemWebUrl(itemId: string): string {
   if (typeof window === 'undefined') return `/item/${itemId}`;
   const origin = window.location.origin;
