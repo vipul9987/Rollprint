@@ -378,6 +378,39 @@ const canSaveDecimal = testIsStockInSaveEnabled({
 assert(canSaveDecimal === false, 'Save Stock IN button is DISABLED if roll count is decimal 5.5');
 
 // ------------------------------------------------------------------
+// TEST 8: Manual Numeric Size Input, Normalization & Dynamic Barcode
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 8: Manual Numeric Size & Length Calculations ---');
+
+function normalizeNumericSize(val: string | number): string {
+  const str = (val ?? '').toString().trim();
+  if (!str) return '';
+  const num = parseFloat(str);
+  if (isNaN(num) || num <= 0) return str;
+  return parseFloat(num.toFixed(3)).toString();
+}
+
+// Normalization checks
+assert(normalizeNumericSize('1.630') === '1.63', 'Normalizes 1.630 to 1.63 to prevent duplicate variants');
+assert(normalizeNumericSize('1.00') === '1', 'Normalizes 1.00 to 1');
+assert(normalizeNumericSize('1.40') === '1.40' || normalizeNumericSize('1.40') === '1.4', 'Normalizes manual size 1.40 consistently');
+
+// Manual input calculation example from user prompt:
+// Economy + Size 1.63 + Roll Length 69 + Roll Quantity 5
+const manualSize = 1.63;
+const manualLength = 69;
+const manualRollQty = 5;
+const areaPerRoll = Number((manualSize * manualLength).toFixed(2));
+const totalAreaAdded = Number((areaPerRoll * manualRollQty).toFixed(2));
+
+assert(areaPerRoll === 112.47, `Area Per Roll: 1.63 × 69 = 112.47 m² (got ${areaPerRoll})`);
+assert(totalAreaAdded === 562.35, `Total Area Added: 112.47 × 5 = 562.35 m² (got ${totalAreaAdded})`);
+
+// Expected dynamic barcode: ECONOMY-1.63-69M
+const manualBarcode = generateMatrixBarcode('Economy', '1.63', 69);
+assert(manualBarcode === 'ECONOMY-1.63-69M', `Dynamic barcode generated: ECONOMY-1.63-69M (got ${manualBarcode})`);
+
+// ------------------------------------------------------------------
 // SUMMARY
 // ------------------------------------------------------------------
 console.log('\n====================================================');

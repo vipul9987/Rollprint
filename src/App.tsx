@@ -172,30 +172,52 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
+  // HELPER: NORMALIZE NUMERIC SIZE / WIDTH & ROLL LENGTH
+  // Rule: e.g. 1.630 -> "1.63", 1.0 -> "1", 70.0 -> 70
+  // Prevents duplicate variants caused by number formatting differences.
+  // -------------------------------------------------------------
+  const normalizeNumericSize = (val: string | number): string => {
+    const str = (val ?? '').toString().trim();
+    if (!str) return '';
+    const num = parseFloat(str);
+    if (isNaN(num) || num <= 0) return str;
+    // Format up to 3 decimals without trailing zeroes
+    return parseFloat(num.toFixed(3)).toString();
+  };
+
+  const normalizeNumericLength = (val: string | number): number => {
+    const str = (val ?? '').toString().trim();
+    const num = parseFloat(str);
+    if (isNaN(num) || num <= 0) return 70;
+    return parseFloat(num.toFixed(2));
+  };
+
+  // -------------------------------------------------------------
   // HELPER: BARCODE VERIFICATION MATCH
   // -------------------------------------------------------------
   const checkBarcodeMatch = (scannedCode: string, targetItem: MatrixItemWithStock | undefined): boolean => {
     if (!scannedCode.trim() || !targetItem) return false;
     const cleanCode = scannedCode.trim().toUpperCase();
     const cleanBarcode = targetItem.barcode.toUpperCase();
-    const cleanId = targetItem.id.toUpperCase();
+    const cleanId = (targetItem.id || '').toUpperCase();
 
-    // 1. Direct match with permanent barcode (e.g. ACTIVE-1.02-70M or BRIGHT-FL-26-1.63-50M)
+    // 1. Direct match with expected barcode (e.g. ECONOMY-1.63-69M or ACTIVE-1.02-70M)
     if (cleanCode === cleanBarcode) return true;
 
-    // 2. Direct match with item ID (e.g. act-102 or bfl26-163)
-    if (cleanCode === cleanId) return true;
+    // 2. Direct match with item ID (if exists)
+    if (cleanId && cleanCode === cleanId) return true;
 
     // 3. Match from scanned QR URL (e.g. https://domain.com/item/act-102)
-    if (cleanCode.includes(`/ITEM/${cleanId}`)) return true;
+    if (cleanId && cleanCode.includes(`/ITEM/${cleanId}`)) return true;
 
     // 4. Normalized match (without hyphens or whitespace)
     const normCode = cleanCode.replace(/[^A-Z0-9]/g, '');
     const normBarcode = cleanBarcode.replace(/[^A-Z0-9]/g, '');
     if (normCode && normBarcode && normCode === normBarcode) return true;
 
-    // 5. Match with Material + Size barcode without length suffix (e.g. BACKLIT-SUNLEX-1.32 or BRIGHT-FL-26-1.63)
-    const baseCode = `${targetItem.materialName}-${targetItem.variantSize}`.toUpperCase();
+    // 5. Match with Material + Size barcode without length suffix (e.g. ECONOMY-1.63 or ACTIVE-1.02)
+    const normSize = normalizeNumericSize(targetItem.variantSize);
+    const baseCode = `${targetItem.materialName}-${normSize}`.toUpperCase();
     if (cleanCode === baseCode) return true;
     const normBase = baseCode.replace(/[^A-Z0-9]/g, '');
     if (normCode && normBase && normCode === normBase) return true;
@@ -205,15 +227,15 @@ export default function App() {
 
   // -------------------------------------------------------------
   // STOCK IN FORM STATE (Exact Blueprint Order)
-  // 1. Material Name
+  // 1. Material Name (Dropdown)
   // 2. Category (auto-populated)
-  // 3. Size / Width
-  // 4. Roll Length / Meter
-  // 5. Roll Quantity
+  // 3. Size / Width (MANUAL numeric input)
+  // 4. Roll Length / Meter (MANUAL numeric input)
+  // 5. Roll Quantity (Manual positive whole-number input)
   // 6. Date
   // 7. Calculation / Stock Preview
   // 8. Barcode Scan / Verification
-  // 9. Save
+  // 9. Save Stock IN
   // -------------------------------------------------------------
   const [stockInMaterial, setStockInMaterial] = useState<string>('');
   const [stockInVariantSize, setStockInVariantSize] = useState<string>('');
@@ -235,48 +257,93 @@ export default function App() {
     return found?.category || 'Flex PVC';
   }, [items, stockInMaterial]);
 
-  // Available Sizes for selected Stock IN material
-  const stockInAvailableSizes = useMemo(() => {
-    if (!stockInMaterial) return [];
+  // Previously used / available sizes for autocomplete suggestions (does not restrict manual input)
+  const stockInSuggestedSizes = useMemo(() => {
+    if (!stockInMaterial) {
+      return Array.from(new Set(items.filter((i) => i.active).map((i) => normalizeNumericSize(i.variantSize))));
+    }
     const set = new Set<string>();
     items
       .filter((i) => i.active && i.materialName === stockInMaterial)
-      .forEach((i) => set.add(i.variantSize));
+      .forEach((i) => {
+        const norm = normalizeNumericSize(i.variantSize);
+        if (norm) set.add(norm);
+      });
     return Array.from(set);
   }, [items, stockInMaterial]);
 
-  // Find exact inventory item matching Stock IN inputs
+  // Find or construct inventory item matching Stock IN inputs
+  // If the exact combination exists, loads its current stock.
+  // If it does not exist yet during Stock IN, treats it as a new inventory variant with current stock 0.
   const matchedStockInItem: MatrixItemWithStock | undefined = useMemo(() => {
-    if (!stockInMaterial || !stockInVariantSize) return undefined;
-    const len = parseFloat(stockInRollLength) || 70;
+    if (!stockInMaterial.trim()) return undefined;
+    const rawSize = stockInVariantSize.trim();
+    if (!rawSize) return undefined;
+    const normSize = normalizeNumericSize(rawSize);
+    const parsedWidth = parseFloat(normSize);
+    if (isNaN(parsedWidth) || parsedWidth <= 0) return undefined;
+
+    const normLength = normalizeNumericLength(stockInRollLength);
+    if (normLength <= 0) return undefined;
+
+    // 1. Exact match by normalized size and length
     const exact = itemsWithStock.find(
       (i) =>
         i.active &&
-        i.materialName === stockInMaterial &&
-        i.variantSize === stockInVariantSize &&
-        i.rollLengthMtr === len
+        i.materialName.toLowerCase() === stockInMaterial.toLowerCase() &&
+        normalizeNumericSize(i.variantSize) === normSize &&
+        normalizeNumericLength(i.rollLengthMtr) === normLength
     );
     if (exact) return exact;
 
-    const baseItem = itemsWithStock.find(
+    // 2. Base item of same material & normalized size with different roll length
+    const baseSameSize = itemsWithStock.find(
       (i) =>
         i.active &&
-        i.materialName === stockInMaterial &&
-        i.variantSize === stockInVariantSize
+        i.materialName.toLowerCase() === stockInMaterial.toLowerCase() &&
+        normalizeNumericSize(i.variantSize) === normSize
     );
-    if (baseItem) {
-      const widthNum = parseFloat(baseItem.variantSize) || 1.0;
-      const customAreaPerRoll = Number((widthNum * len).toFixed(2));
+    if (baseSameSize) {
+      const areaPerRoll = Number((parsedWidth * normLength).toFixed(2));
       return {
-        ...baseItem,
-        rollLengthMtr: len,
-        areaPerRoll: customAreaPerRoll,
-        totalAreaMtr2: Number((baseItem.currentStock * customAreaPerRoll).toFixed(2)),
-        barcode: generateMatrixBarcode(baseItem.materialName, baseItem.variantSize, len)
+        ...baseSameSize,
+        variantSize: normSize,
+        rollLengthMtr: normLength,
+        areaPerRoll,
+        totalAreaMtr2: Number((baseSameSize.currentStock * areaPerRoll).toFixed(2)),
+        barcode: generateMatrixBarcode(baseSameSize.materialName, normSize, normLength)
       };
     }
-    return undefined;
-  }, [itemsWithStock, stockInMaterial, stockInVariantSize, stockInRollLength]);
+
+    // 3. New variant for this material (Current Stock = 0)
+    const baseMat = items.find((i) => i.materialName.toLowerCase() === stockInMaterial.toLowerCase());
+    const category = baseMat?.category || stockInAutoCategory || 'Flex PVC';
+    const summaryGroup = baseMat?.summaryGroup || getItemSummaryGroup({ category, materialName: stockInMaterial });
+    const areaPerRoll = Number((parsedWidth * normLength).toFixed(2));
+    const generatedBarcode = generateMatrixBarcode(stockInMaterial, normSize, normLength);
+
+    const newItem: MatrixItemWithStock = {
+      id: `dyn-${stockInMaterial.toLowerCase().replace(/[^a-z0-9]/g, '')}-${normSize.replace('.', '_')}-${normLength}`,
+      materialName: stockInMaterial,
+      category,
+      summaryGroup,
+      variantSize: normSize,
+      rollLengthMtr: normLength,
+      unit: 'Rolls',
+      barcode: generatedBarcode,
+      openingStock: 0,
+      minStock: 2,
+      active: true,
+      createdAt: new Date().toISOString().split('T')[0],
+      totalIn: 0,
+      totalOut: 0,
+      currentStock: 0,
+      areaPerRoll,
+      totalAreaMtr2: 0,
+      status: 'OUT_OF_STOCK'
+    };
+    return newItem;
+  }, [items, itemsWithStock, stockInMaterial, stockInVariantSize, stockInRollLength, stockInAutoCategory]);
 
   // Central roll count validation for Stock IN
   const stockInRollValidation = useMemo(() => {
@@ -350,45 +417,53 @@ export default function App() {
     return found?.category || 'Flex PVC';
   }, [items, stockOutMaterial]);
 
-  // Available Sizes for selected Stock OUT material
-  const stockOutAvailableSizes = useMemo(() => {
-    if (!stockOutMaterial) return [];
+  // Previously used / available sizes for autocomplete suggestions on Stock OUT
+  const stockOutSuggestedSizes = useMemo(() => {
+    if (!stockOutMaterial) {
+      return Array.from(new Set(items.filter((i) => i.active).map((i) => normalizeNumericSize(i.variantSize))));
+    }
     const set = new Set<string>();
     items
       .filter((i) => i.active && i.materialName === stockOutMaterial)
-      .forEach((i) => set.add(i.variantSize));
+      .forEach((i) => {
+        const norm = normalizeNumericSize(i.variantSize);
+        if (norm) set.add(norm);
+      });
     return Array.from(set);
   }, [items, stockOutMaterial]);
 
   // Find exact inventory item matching Stock OUT inputs
+  // For Stock OUT: the Material + Size + Roll Length combination MUST already exist in inventory!
   const matchedStockOutItem: MatrixItemWithStock | undefined = useMemo(() => {
-    if (!stockOutMaterial || !stockOutVariantSize) return undefined;
-    const len = parseFloat(stockOutRollLength) || 70;
+    if (!stockOutMaterial.trim()) return undefined;
+    const rawSize = stockOutVariantSize.trim();
+    if (!rawSize) return undefined;
+    const normSize = normalizeNumericSize(rawSize);
+    const parsedWidth = parseFloat(normSize);
+    if (isNaN(parsedWidth) || parsedWidth <= 0) return undefined;
+
+    const normLength = normalizeNumericLength(stockOutRollLength);
+    if (normLength <= 0) return undefined;
+
+    // 1. Exact match by normalized size and length
     const exact = itemsWithStock.find(
       (i) =>
         i.active &&
-        i.materialName === stockOutMaterial &&
-        i.variantSize === stockOutVariantSize &&
-        i.rollLengthMtr === len
+        i.materialName.toLowerCase() === stockOutMaterial.toLowerCase() &&
+        normalizeNumericSize(i.variantSize) === normSize &&
+        normalizeNumericLength(i.rollLengthMtr) === normLength
     );
     if (exact) return exact;
 
+    // 2. Base item of same material & normalized size (if length differs, check if that item exists)
     const baseItem = itemsWithStock.find(
       (i) =>
         i.active &&
-        i.materialName === stockOutMaterial &&
-        i.variantSize === stockOutVariantSize
+        i.materialName.toLowerCase() === stockOutMaterial.toLowerCase() &&
+        normalizeNumericSize(i.variantSize) === normSize
     );
-    if (baseItem) {
-      const widthNum = parseFloat(baseItem.variantSize) || 1.0;
-      const customAreaPerRoll = Number((widthNum * len).toFixed(2));
-      return {
-        ...baseItem,
-        rollLengthMtr: len,
-        areaPerRoll: customAreaPerRoll,
-        totalAreaMtr2: Number((baseItem.currentStock * customAreaPerRoll).toFixed(2)),
-        barcode: generateMatrixBarcode(baseItem.materialName, baseItem.variantSize, len)
-      };
+    if (baseItem && baseItem.rollLengthMtr === normLength) {
+      return baseItem;
     }
     return undefined;
   }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutRollLength]);
@@ -448,8 +523,48 @@ export default function App() {
   // -------------------------------------------------------------
   // SHARED STOCK MUTATION HANDLER (Used by forms, mobile view, modal)
   // -------------------------------------------------------------
-  const executeStockTransaction = (itemId: string, type: 'IN' | 'OUT', quantity: number, dateStr?: string) => {
-    const targetItem = itemsWithStock.find((i) => i.id === itemId);
+  const executeStockTransaction = (
+    itemId: string,
+    type: 'IN' | 'OUT',
+    quantity: number,
+    dateStr?: string,
+    fallbackItem?: MatrixItemWithStock
+  ) => {
+    let targetItem = itemsWithStock.find((i) => i.id === itemId);
+
+    // If item is a newly created variant during Stock IN
+    if (!targetItem && fallbackItem && type === 'IN') {
+      const normalizedSize = normalizeNumericSize(fallbackItem.variantSize);
+      const normalizedLength = normalizeNumericLength(fallbackItem.rollLengthMtr);
+      const newInventoryItem: MatrixInventoryItem = {
+        id: fallbackItem.id,
+        materialName: fallbackItem.materialName,
+        category: fallbackItem.category,
+        summaryGroup: fallbackItem.summaryGroup,
+        variantSize: normalizedSize,
+        rollLengthMtr: normalizedLength,
+        unit: fallbackItem.unit || 'Rolls',
+        barcode: fallbackItem.barcode,
+        openingStock: 0,
+        minStock: 2,
+        active: true,
+        createdAt: new Date().toISOString().split('T')[0]
+      };
+      const updatedItems = [...items, newInventoryItem];
+      setItems(updatedItems);
+      saveStoredMatrixItems(updatedItems);
+
+      targetItem = {
+        ...newInventoryItem,
+        totalIn: 0,
+        totalOut: 0,
+        currentStock: 0,
+        areaPerRoll: fallbackItem.areaPerRoll,
+        totalAreaMtr2: 0,
+        status: 'OUT_OF_STOCK'
+      };
+    }
+
     if (!targetItem) {
       showNotification('Item not found in inventory.', 'error');
       return false;
@@ -531,7 +646,8 @@ export default function App() {
       matchedStockInItem.id,
       'IN',
       rollsToAdd,
-      stockInDate
+      stockInDate,
+      matchedStockInItem
     );
 
     if (success) {
@@ -1971,53 +2087,91 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 3 & 4: Size / Width & Roll Length / Meter */}
+                {/* 3 & 4: Size / Width & Roll Length / Meter (MANUAL NUMERIC INPUTS AS PER BLUEPRINT) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      3. Size / Width <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={stockInVariantSize}
-                      disabled={!stockInMaterial}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setStockInVariantSize(val);
-                        const foundItem = items.find(
-                          (i) => i.active && i.materialName === stockInMaterial && i.variantSize === val
-                        );
-                        if (foundItem) {
-                          setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
-                        }
-                        setStockInBarcodeCode('');
-                        setStockInVerificationStatus('IDLE');
-                        setStockInError('');
-                      }}
-                      required
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      <option value="">
-                        {stockInMaterial ? '-- Select Width --' : '-- Choose Material First --'}
-                      </option>
-                      {stockInAvailableSizes.map((size) => (
-                        <option key={size} value={size}>
-                          {size} M
-                        </option>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-700 font-bold">
+                        3. Size / Width <span className="text-red-500">*</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-mono">Manual Numeric Input</span>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        list="stock-in-size-suggestions"
+                        required
+                        placeholder="e.g. 1.63 or 1.40"
+                        value={stockInVariantSize}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setStockInVariantSize(val);
+                          // Try auto-filling default roll length if this size is already in material master
+                          const norm = normalizeNumericSize(val);
+                          const foundItem = items.find(
+                            (i) => i.active && i.materialName === stockInMaterial && normalizeNumericSize(i.variantSize) === norm
+                          );
+                          if (foundItem) {
+                            setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
+                          }
+                          setStockInBarcodeCode('');
+                          setStockInVerificationStatus('IDLE');
+                          setStockInError('');
+                        }}
+                        className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                      />
+                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
+                        M
+                      </span>
+                    </div>
+                    <datalist id="stock-in-size-suggestions">
+                      {stockInSuggestedSizes.map((size) => (
+                        <option key={size} value={size} />
                       ))}
-                    </select>
+                    </datalist>
+                    {stockInSuggestedSizes.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <span className="text-[10px] text-slate-400">Suggestions:</span>
+                        {stockInSuggestedSizes.slice(0, 7).map((s) => (
+                          <button
+                            type="button"
+                            key={s}
+                            onClick={() => {
+                              setStockInVariantSize(s);
+                              const foundItem = items.find(
+                                (i) => i.active && i.materialName === stockInMaterial && normalizeNumericSize(i.variantSize) === s
+                              );
+                              if (foundItem) {
+                                setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
+                              }
+                              setStockInBarcodeCode('');
+                              setStockInVerificationStatus('IDLE');
+                            }}
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-600 transition-colors"
+                          >
+                            {s}M
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      4. Roll Length / Meter <span className="text-red-500">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-700 font-bold">
+                        4. Roll Length / Meter <span className="text-red-500">*</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-mono">Manual Numeric Input</span>
+                    </div>
                     <div className="relative">
                       <input
                         type="number"
                         min="1"
                         step="any"
                         required
-                        placeholder="e.g. 70"
+                        placeholder="e.g. 50, 69, 70"
                         value={stockInRollLength}
                         onChange={(e) => {
                           setStockInRollLength(e.target.value);
@@ -2030,6 +2184,25 @@ export default function App() {
                       <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
                         M
                       </span>
+                    </div>
+                    <div className="mt-1 flex items-center space-x-1">
+                      <span className="text-[10px] text-slate-400">Quick:</span>
+                      {['50', '69', '70'].map((len) => (
+                        <button
+                          type="button"
+                          key={len}
+                          onClick={() => {
+                            setStockInRollLength(len);
+                            setStockInBarcodeCode('');
+                            setStockInVerificationStatus('IDLE');
+                          }}
+                          className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                            stockInRollLength === len ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-100 hover:bg-emerald-100 text-slate-600'
+                          }`}
+                        >
+                          {len}M
+                        </button>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -2347,53 +2520,91 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 3 & 4: Size / Width & Roll Length / Meter */}
+                {/* 3 & 4: Size / Width & Roll Length / Meter (MANUAL NUMERIC INPUTS AS PER BLUEPRINT) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      3. Size / Width <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={stockOutVariantSize}
-                      disabled={!stockOutMaterial}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setStockOutVariantSize(val);
-                        const foundItem = items.find(
-                          (i) => i.active && i.materialName === stockOutMaterial && i.variantSize === val
-                        );
-                        if (foundItem) {
-                          setStockOutRollLength((foundItem.rollLengthMtr || 70).toString());
-                        }
-                        setStockOutBarcodeCode('');
-                        setStockOutVerificationStatus('IDLE');
-                        setStockOutError('');
-                      }}
-                      required
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
-                    >
-                      <option value="">
-                        {stockOutMaterial ? '-- Select Width --' : '-- Choose Material First --'}
-                      </option>
-                      {stockOutAvailableSizes.map((size) => (
-                        <option key={size} value={size}>
-                          {size} M
-                        </option>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-700 font-bold">
+                        3. Size / Width <span className="text-red-500">*</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-mono">Manual Numeric Input</span>
+                    </div>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        list="stock-out-size-suggestions"
+                        required
+                        placeholder="e.g. 1.63 or 1.40"
+                        value={stockOutVariantSize}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setStockOutVariantSize(val);
+                          // Try auto-filling existing roll length if available in stock
+                          const norm = normalizeNumericSize(val);
+                          const foundItem = items.find(
+                            (i) => i.active && i.materialName === stockOutMaterial && normalizeNumericSize(i.variantSize) === norm
+                          );
+                          if (foundItem) {
+                            setStockOutRollLength((foundItem.rollLengthMtr || 70).toString());
+                          }
+                          setStockOutBarcodeCode('');
+                          setStockOutVerificationStatus('IDLE');
+                          setStockOutError('');
+                        }}
+                        className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                      />
+                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
+                        M
+                      </span>
+                    </div>
+                    <datalist id="stock-out-size-suggestions">
+                      {stockOutSuggestedSizes.map((size) => (
+                        <option key={size} value={size} />
                       ))}
-                    </select>
+                    </datalist>
+                    {stockOutSuggestedSizes.length > 0 && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        <span className="text-[10px] text-slate-400">In Stock:</span>
+                        {stockOutSuggestedSizes.slice(0, 7).map((s) => (
+                          <button
+                            type="button"
+                            key={s}
+                            onClick={() => {
+                              setStockOutVariantSize(s);
+                              const foundItem = items.find(
+                                (i) => i.active && i.materialName === stockOutMaterial && normalizeNumericSize(i.variantSize) === s
+                              );
+                              if (foundItem) {
+                                setStockOutRollLength((foundItem.rollLengthMtr || 70).toString());
+                              }
+                              setStockOutBarcodeCode('');
+                              setStockOutVerificationStatus('IDLE');
+                            }}
+                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 hover:bg-amber-100 hover:text-amber-800 text-slate-600 transition-colors"
+                          >
+                            {s}M
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      4. Roll Length / Meter <span className="text-red-500">*</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-slate-700 font-bold">
+                        4. Roll Length / Meter <span className="text-red-500">*</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400 font-mono">Manual Numeric Input</span>
+                    </div>
                     <div className="relative">
                       <input
                         type="number"
                         min="1"
                         step="any"
                         required
-                        placeholder="e.g. 70"
+                        placeholder="e.g. 50, 69, 70"
                         value={stockOutRollLength}
                         onChange={(e) => {
                           setStockOutRollLength(e.target.value);
@@ -2406,6 +2617,25 @@ export default function App() {
                       <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
                         M
                       </span>
+                    </div>
+                    <div className="mt-1 flex items-center space-x-1">
+                      <span className="text-[10px] text-slate-400">Quick:</span>
+                      {['50', '69', '70'].map((len) => (
+                        <button
+                          type="button"
+                          key={len}
+                          onClick={() => {
+                            setStockOutRollLength(len);
+                            setStockOutBarcodeCode('');
+                            setStockOutVerificationStatus('IDLE');
+                          }}
+                          className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                            stockOutRollLength === len ? 'bg-amber-600 text-white font-bold' : 'bg-slate-100 hover:bg-amber-100 text-slate-600'
+                          }`}
+                        >
+                          {len}M
+                        </button>
+                      ))}
                     </div>
                   </div>
                 </div>
