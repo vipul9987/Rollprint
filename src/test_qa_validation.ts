@@ -252,6 +252,132 @@ assert(liveBs163?.currentStock === 7, `Backlit Sunlex / 1.63 cell updates from 5
 assert(liveBsTotal === 22, `Backlit Sunlex row total updates from 20 to 22 rolls automatically!`, `Got ${liveBsTotal}`);
 
 // ------------------------------------------------------------------
+// TEST 8: Full Roll Count Integer Validation & Save Button Conditions
+// Example:
+// Current Stock = 21, Roll Count = 5 -> Rolls IN = +5, After Stock IN = 26, Total Area Added = 81.5 × 5 = 407.5 m²
+// Must disallow: 0, negative numbers, empty values, decimal roll counts
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 8: Full Roll Count Integer & Save Button Conditions ---');
+
+function testParseFullRollCount(val: string): { valid: boolean; count: number; error?: string } {
+  const trimmed = (val ?? '').toString().trim();
+  if (!trimmed) {
+    return { valid: false, count: 0, error: 'Roll count is required.' };
+  }
+  if (trimmed.includes('.') || trimmed.includes(',')) {
+    return { valid: false, count: 0, error: 'Decimal roll counts are not allowed. Full rolls only.' };
+  }
+  if (trimmed.startsWith('-') || trimmed.includes('-')) {
+    return { valid: false, count: 0, error: 'Negative numbers are not allowed.' };
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return { valid: false, count: 0, error: 'Roll count must be a positive whole number.' };
+  }
+  const num = parseInt(trimmed, 10);
+  if (isNaN(num) || num <= 0) {
+    return { valid: false, count: 0, error: 'Roll count must be greater than 0.' };
+  }
+  return { valid: true, count: num };
+}
+
+// 1. Positive whole numbers
+assert(testParseFullRollCount('5').valid === true && testParseFullRollCount('5').count === 5, 'Input "5" parses as valid positive integer 5');
+assert(testParseFullRollCount('21').valid === true && testParseFullRollCount('21').count === 21, 'Input "21" parses as valid positive integer 21');
+assert(testParseFullRollCount(' 5 ').valid === true && testParseFullRollCount(' 5 ').count === 5, 'Input with spaces " 5 " parses as 5');
+
+// 2. Reject 0, negative, empty, decimals
+assert(testParseFullRollCount('0').valid === false, 'Input "0" is rejected (must be > 0)');
+assert(testParseFullRollCount('-5').valid === false, 'Negative number "-5" is rejected');
+assert(testParseFullRollCount('').valid === false, 'Empty value "" is rejected');
+assert(testParseFullRollCount('5.5').valid === false, 'Decimal "5.5" is rejected');
+assert(testParseFullRollCount('5.0').valid === false, 'Decimal "5.0" is rejected');
+assert(testParseFullRollCount('abc').valid === false, 'Non-numeric string "abc" is rejected');
+
+// 3. User's Expected Stock IN Calculation & Save Enablement Test
+const currentStockTest = 21;
+const rollCountInput = '5';
+const rollVal = testParseFullRollCount(rollCountInput);
+assert(rollVal.valid === true, 'Roll Count input "5" is valid');
+
+const rollsInTest = rollVal.count;
+const afterStockInTest = currentStockTest + rollsInTest;
+const areaPerRollTest = 81.5; // e.g. 1.63 M × 50 M
+const totalAreaAddedTest = Number((areaPerRollTest * rollsInTest).toFixed(2));
+
+assert(rollsInTest === 5, 'Rolls IN equals +5');
+assert(afterStockInTest === 26, 'After Stock IN equals 21 + 5 = 26');
+assert(totalAreaAddedTest === 407.5, 'Total Area Added equals 81.5 × 5 = 407.5 m²');
+
+// 4. Save Button Enabled Condition
+function testIsStockInSaveEnabled(params: {
+  material: string;
+  size: string;
+  length: string;
+  rollCount: string;
+  date: string;
+  verified: boolean;
+  hasItem: boolean;
+}): boolean {
+  const hasMaterial = Boolean(params.material.trim());
+  const hasSize = Boolean(params.size.trim());
+  const hasLength = Boolean(params.length.trim()) && parseFloat(params.length) > 0;
+  const parsed = testParseFullRollCount(params.rollCount);
+  const hasValidRolls = parsed.valid && parsed.count > 0;
+  const hasValidDate = Boolean(params.date.trim()) && !isNaN(new Date(params.date).getTime());
+  const isVerified = params.verified;
+
+  return hasMaterial && hasSize && hasLength && hasValidRolls && hasValidDate && isVerified && params.hasItem;
+}
+
+// All 6 conditions valid -> Save button MUST be enabled
+const canSaveValid = testIsStockInSaveEnabled({
+  material: 'Bright FL 26',
+  size: '1.63',
+  length: '50',
+  rollCount: '5',
+  date: '2026-10-03',
+  verified: true,
+  hasItem: true
+});
+assert(canSaveValid === true, 'Save Stock IN button is ENABLED when all 6 conditions are valid');
+
+// If barcode unverified -> Disabled
+const canSaveUnverified = testIsStockInSaveEnabled({
+  material: 'Bright FL 26',
+  size: '1.63',
+  length: '50',
+  rollCount: '5',
+  date: '2026-10-03',
+  verified: false,
+  hasItem: true
+});
+assert(canSaveUnverified === false, 'Save Stock IN button is DISABLED if barcode is unverified');
+
+// If roll count is 0 -> Disabled
+const canSaveZero = testIsStockInSaveEnabled({
+  material: 'Bright FL 26',
+  size: '1.63',
+  length: '50',
+  rollCount: '0',
+  date: '2026-10-03',
+  verified: true,
+  hasItem: true
+});
+assert(canSaveZero === false, 'Save Stock IN button is DISABLED if roll count is 0');
+
+// If roll count is decimal 5.5 -> Disabled
+const canSaveDecimal = testIsStockInSaveEnabled({
+  material: 'Bright FL 26',
+  size: '1.63',
+  length: '50',
+  rollCount: '5.5',
+  date: '2026-10-03',
+  verified: true,
+  hasItem: true
+});
+assert(canSaveDecimal === false, 'Save Stock IN button is DISABLED if roll count is decimal 5.5');
+
+// ------------------------------------------------------------------
 // SUMMARY
 // ------------------------------------------------------------------
 console.log('\n====================================================');

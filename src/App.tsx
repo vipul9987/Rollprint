@@ -146,6 +146,32 @@ export default function App() {
   const [cameraScannerTarget, setCameraScannerTarget] = useState<'stock-in' | 'stock-out'>('stock-in');
 
   // -------------------------------------------------------------
+  // HELPER: PARSE & STRICTLY VALIDATE FULL ROLL COUNT
+  // Rule: Must be a positive whole integer (> 0).
+  // Disallow: 0, negative numbers, empty values, decimal roll counts.
+  // -------------------------------------------------------------
+  const parseFullRollCount = (val: string): { valid: boolean; count: number; error?: string } => {
+    const trimmed = (val ?? '').toString().trim();
+    if (!trimmed) {
+      return { valid: false, count: 0, error: 'Roll count is required.' };
+    }
+    if (trimmed.includes('.') || trimmed.includes(',')) {
+      return { valid: false, count: 0, error: 'Decimal roll counts are not allowed. Full rolls only.' };
+    }
+    if (trimmed.startsWith('-') || trimmed.includes('-')) {
+      return { valid: false, count: 0, error: 'Negative numbers are not allowed.' };
+    }
+    if (!/^\d+$/.test(trimmed)) {
+      return { valid: false, count: 0, error: 'Roll count must be a positive whole number.' };
+    }
+    const num = parseInt(trimmed, 10);
+    if (isNaN(num) || num <= 0) {
+      return { valid: false, count: 0, error: 'Roll count must be greater than 0.' };
+    }
+    return { valid: true, count: num };
+  };
+
+  // -------------------------------------------------------------
   // HELPER: BARCODE VERIFICATION MATCH
   // -------------------------------------------------------------
   const checkBarcodeMatch = (scannedCode: string, targetItem: MatrixItemWithStock | undefined): boolean => {
@@ -154,19 +180,25 @@ export default function App() {
     const cleanBarcode = targetItem.barcode.toUpperCase();
     const cleanId = targetItem.id.toUpperCase();
 
-    // 1. Direct match with permanent barcode (e.g. ACTIVE-1.02-70M)
+    // 1. Direct match with permanent barcode (e.g. ACTIVE-1.02-70M or BRIGHT-FL-26-1.63-50M)
     if (cleanCode === cleanBarcode) return true;
 
-    // 2. Direct match with item ID (e.g. act-102-70)
+    // 2. Direct match with item ID (e.g. act-102 or bfl26-163)
     if (cleanCode === cleanId) return true;
 
-    // 3. Match from scanned QR URL (e.g. https://domain.com/item/act-102-70)
+    // 3. Match from scanned QR URL (e.g. https://domain.com/item/act-102)
     if (cleanCode.includes(`/ITEM/${cleanId}`)) return true;
 
     // 4. Normalized match (without hyphens or whitespace)
     const normCode = cleanCode.replace(/[^A-Z0-9]/g, '');
     const normBarcode = cleanBarcode.replace(/[^A-Z0-9]/g, '');
     if (normCode && normBarcode && normCode === normBarcode) return true;
+
+    // 5. Match with Material + Size barcode without length suffix (e.g. BACKLIT-SUNLEX-1.32 or BRIGHT-FL-26-1.63)
+    const baseCode = `${targetItem.materialName}-${targetItem.variantSize}`.toUpperCase();
+    if (cleanCode === baseCode) return true;
+    const normBase = baseCode.replace(/[^A-Z0-9]/g, '');
+    if (normCode && normBase && normCode === normBase) return true;
 
     return false;
   };
@@ -245,6 +277,32 @@ export default function App() {
     }
     return undefined;
   }, [itemsWithStock, stockInMaterial, stockInVariantSize, stockInRollLength]);
+
+  // Central roll count validation for Stock IN
+  const stockInRollValidation = useMemo(() => {
+    return parseFullRollCount(stockInRolls);
+  }, [stockInRolls]);
+
+  // All 6 conditions for enabling Save Stock IN button
+  const isStockInSaveEnabled = useMemo(() => {
+    const hasMaterial = Boolean(stockInMaterial.trim());
+    const hasSize = Boolean(stockInVariantSize.trim());
+    const hasLength = Boolean(stockInRollLength.trim()) && parseFloat(stockInRollLength) > 0;
+    const hasValidRolls = stockInRollValidation.valid && stockInRollValidation.count > 0;
+    const hasValidDate = Boolean(stockInDate.trim()) && !isNaN(new Date(stockInDate).getTime());
+    const isVerified = stockInVerificationStatus === 'VERIFIED';
+    const hasItem = Boolean(matchedStockInItem);
+
+    return hasMaterial && hasSize && hasLength && hasValidRolls && hasValidDate && isVerified && hasItem;
+  }, [
+    stockInMaterial,
+    stockInVariantSize,
+    stockInRollLength,
+    stockInRollValidation,
+    stockInDate,
+    stockInVerificationStatus,
+    matchedStockInItem
+  ]);
 
   const validateStockInBarcode = (code: string) => {
     const trimmed = code.trim();
@@ -334,6 +392,33 @@ export default function App() {
     }
     return undefined;
   }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutRollLength]);
+
+  // Central roll count validation for Stock OUT
+  const stockOutRollValidation = useMemo(() => {
+    return parseFullRollCount(stockOutRolls);
+  }, [stockOutRolls]);
+
+  // All conditions for enabling Save Stock OUT button
+  const isStockOutSaveEnabled = useMemo(() => {
+    const hasMaterial = Boolean(stockOutMaterial.trim());
+    const hasSize = Boolean(stockOutVariantSize.trim());
+    const hasLength = Boolean(stockOutRollLength.trim()) && parseFloat(stockOutRollLength) > 0;
+    const hasValidRolls = stockOutRollValidation.valid && stockOutRollValidation.count > 0;
+    const hasValidDate = Boolean(stockOutDate.trim()) && !isNaN(new Date(stockOutDate).getTime());
+    const isVerified = stockOutVerificationStatus === 'VERIFIED';
+    const hasItem = Boolean(matchedStockOutItem);
+    const withinStock = Boolean(matchedStockOutItem && hasValidRolls && stockOutRollValidation.count <= matchedStockOutItem.currentStock);
+
+    return hasMaterial && hasSize && hasLength && hasValidRolls && hasValidDate && isVerified && hasItem && withinStock;
+  }, [
+    stockOutMaterial,
+    stockOutVariantSize,
+    stockOutRollLength,
+    stockOutRollValidation,
+    stockOutDate,
+    stockOutVerificationStatus,
+    matchedStockOutItem
+  ]);
 
   const validateStockOutBarcode = (code: string) => {
     const trimmed = code.trim();
@@ -436,12 +521,12 @@ export default function App() {
       return;
     }
 
-    const rollsToAdd = parseInt(stockInRolls, 10);
-    if (isNaN(rollsToAdd) || rollsToAdd <= 0) {
-      setStockInError('Please enter a valid number of rolls to add (minimum 1).');
+    if (!stockInRollValidation.valid || stockInRollValidation.count <= 0) {
+      setStockInError(stockInRollValidation.error || 'Please enter a valid positive number of rolls (minimum 1).');
       return;
     }
 
+    const rollsToAdd = stockInRollValidation.count;
     const success = executeStockTransaction(
       matchedStockInItem.id,
       'IN',
@@ -472,12 +557,12 @@ export default function App() {
       return;
     }
 
-    const rollsToRemove = parseInt(stockOutRolls, 10);
-    if (isNaN(rollsToRemove) || rollsToRemove <= 0) {
-      setStockOutError('Please enter a valid number of rolls to remove (minimum 1).');
+    if (!stockOutRollValidation.valid || stockOutRollValidation.count <= 0) {
+      setStockOutError(stockOutRollValidation.error || 'Please enter a valid positive number of rolls (minimum 1).');
       return;
     }
 
+    const rollsToRemove = stockOutRollValidation.count;
     if (rollsToRemove > matchedStockOutItem.currentStock) {
       setStockOutError(
         `Cannot remove ${rollsToRemove} rolls. Only ${matchedStockOutItem.currentStock} rolls available in stock.`
@@ -1949,23 +2034,27 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 5 & 6: Roll Quantity & Date */}
+                {/* 5 & 6: Roll Count & Date */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-slate-700 font-bold mb-1">
-                      5. Roll Quantity <span className="text-red-500">*</span>
+                      5. Roll Count <span className="text-red-500">*</span>
                     </label>
                     <input
                       ref={stockInRollsInputRef}
-                      type="number"
-                      min="1"
-                      step="1"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       required
                       placeholder="e.g. 5"
                       value={stockInRolls}
                       onChange={(e) => {
-                        setStockInRolls(e.target.value);
-                        setStockInError('');
+                        const val = e.target.value;
+                        // Strictly digits only: disallow negative signs, dots, commas, decimals
+                        if (val === '' || /^\d+$/.test(val)) {
+                          setStockInRolls(val);
+                          setStockInError('');
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
@@ -1973,8 +2062,16 @@ export default function App() {
                           stockInVerificationInputRef.current?.focus();
                         }
                       }}
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                      className={`w-full p-3 bg-slate-50 border rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-emerald-500 focus:outline-hidden ${
+                        stockInRolls && !stockInRollValidation.valid ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                      }`}
                     />
+                    {stockInRolls && !stockInRollValidation.valid && (
+                      <p className="mt-1 text-[11px] text-red-600 font-semibold flex items-center space-x-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{stockInRollValidation.error}</span>
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -1992,7 +2089,7 @@ export default function App() {
                 {matchedStockInItem && (
                   (() => {
                     const current = matchedStockInItem.currentStock;
-                    const rollsIn = parseInt(stockInRolls, 10) || 0;
+                    const rollsIn = stockInRollValidation.valid ? stockInRollValidation.count : 0;
                     const afterStock = current + rollsIn;
                     const widthNum = parseFloat(matchedStockInItem.variantSize) || 1.0;
                     const lengthNum = matchedStockInItem.rollLengthMtr || 70;
@@ -2024,7 +2121,7 @@ export default function App() {
                               Rolls IN
                             </span>
                             <span className="text-base font-bold text-emerald-700">
-                              +{rollsIn} Rolls
+                              {stockInRollValidation.valid ? `+${rollsIn} Rolls` : '—'}
                             </span>
                           </div>
 
@@ -2033,7 +2130,7 @@ export default function App() {
                               After Stock IN
                             </span>
                             <span className="text-base font-black text-white">
-                              {afterStock} Rolls
+                              {stockInRollValidation.valid ? `${afterStock} Rolls` : `${current} Rolls`}
                             </span>
                           </div>
                         </div>
@@ -2046,7 +2143,11 @@ export default function App() {
                           </div>
                           <div className="flex items-center justify-between text-emerald-800 border-t border-emerald-100 pt-1 font-bold">
                             <span>Total Area Added:</span>
-                            <span>{areaPerRoll} × {rollsIn} = {totalAreaAdded} m²</span>
+                            <span>
+                              {stockInRollValidation.valid
+                                ? `${areaPerRoll} × ${rollsIn} = ${totalAreaAdded} m²`
+                                : '—'}
+                            </span>
                           </div>
                         </div>
                       </div>
@@ -2150,27 +2251,26 @@ export default function App() {
                   )}
                 </div>
 
-                {/* 9. SAVE STOCK IN (Enabled only when verified) */}
+                {/* 9. SAVE STOCK IN (Enabled only when verified & valid count > 0) */}
                 <div className="pt-2">
                   <button
                     type="submit"
-                    disabled={
-                      !matchedStockInItem ||
-                      stockInVerificationStatus !== 'VERIFIED' ||
-                      !stockInRolls ||
-                      parseInt(stockInRolls, 10) <= 0
-                    }
+                    disabled={!isStockInSaveEnabled}
                     className={`w-full py-3.5 px-4 font-bold rounded-xl shadow-sm transition-all text-sm flex items-center justify-center space-x-2 ${
-                      stockInVerificationStatus === 'VERIFIED' && matchedStockInItem && parseInt(stockInRolls, 10) > 0
-                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-98'
+                      isStockInSaveEnabled
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-98 shadow-md'
                         : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-75'
                     }`}
                   >
                     <ArrowDownToLine className="w-4 h-4" />
                     <span>
-                      {stockInVerificationStatus === 'VERIFIED'
-                        ? '9. Save Stock IN'
-                        : 'Scan Barcode to Enable Save'}
+                      {isStockInSaveEnabled
+                        ? `9. Save Stock IN (+${stockInRollValidation.count} Rolls)`
+                        : stockInVerificationStatus !== 'VERIFIED'
+                        ? 'Scan Barcode to Enable Save'
+                        : !stockInRollValidation.valid
+                        ? 'Enter Valid Roll Count (> 0)'
+                        : 'Complete Required Fields to Save'}
                     </span>
                   </button>
                 </div>
@@ -2310,23 +2410,27 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 5 & 6: Roll Quantity OUT & Date */}
+                {/* 5 & 6: Roll Count OUT & Date */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-slate-700 font-bold mb-1">
-                      5. Roll Quantity OUT <span className="text-red-500">*</span>
+                      5. Roll Count OUT <span className="text-red-500">*</span>
                     </label>
                     <input
                       ref={stockOutRollsInputRef}
-                      type="number"
-                      min="1"
-                      step="1"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       required
                       placeholder="e.g. 2"
                       value={stockOutRolls}
                       onChange={(e) => {
-                        setStockOutRolls(e.target.value);
-                        setStockOutError('');
+                        const val = e.target.value;
+                        // Strictly digits only: disallow negative signs, dots, commas, decimals
+                        if (val === '' || /^\d+$/.test(val)) {
+                          setStockOutRolls(val);
+                          setStockOutError('');
+                        }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
@@ -2334,8 +2438,18 @@ export default function App() {
                           stockOutVerificationInputRef.current?.focus();
                         }
                       }}
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                      className={`w-full p-3 bg-slate-50 border rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-amber-500 focus:outline-hidden ${
+                        stockOutRolls && (!stockOutRollValidation.valid || (matchedStockOutItem && stockOutRollValidation.count > matchedStockOutItem.currentStock))
+                          ? 'border-red-400 bg-red-50/40'
+                          : 'border-slate-300'
+                      }`}
                     />
+                    {stockOutRolls && !stockOutRollValidation.valid && (
+                      <p className="mt-1 text-[11px] text-red-600 font-semibold flex items-center space-x-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{stockOutRollValidation.error}</span>
+                      </p>
+                    )}
                   </div>
 
                   <div>
@@ -2353,8 +2467,8 @@ export default function App() {
                 {matchedStockOutItem && (
                   (() => {
                     const current = matchedStockOutItem.currentStock;
-                    const rollsOut = parseInt(stockOutRolls, 10) || 0;
-                    const isExceeded = rollsOut > current;
+                    const rollsOut = stockOutRollValidation.valid ? stockOutRollValidation.count : 0;
+                    const isExceeded = stockOutRollValidation.valid && rollsOut > current;
                     const afterStock = Math.max(0, current - rollsOut);
                     const widthNum = parseFloat(matchedStockOutItem.variantSize) || 1.0;
                     const lengthNum = matchedStockOutItem.rollLengthMtr || 70;
@@ -2390,7 +2504,7 @@ export default function App() {
                               Rolls OUT
                             </span>
                             <span className="text-base font-bold text-amber-700">
-                              -{rollsOut} Rolls
+                              {stockOutRollValidation.valid ? `-${rollsOut} Rolls` : '—'}
                             </span>
                           </div>
 
@@ -2403,7 +2517,7 @@ export default function App() {
                               After Stock OUT
                             </span>
                             <span className="text-base font-black text-white">
-                              {afterStock} Rolls
+                              {stockOutRollValidation.valid && !isExceeded ? `${afterStock} Rolls` : `${current} Rolls`}
                             </span>
                           </div>
                         </div>
@@ -2416,7 +2530,11 @@ export default function App() {
                           </div>
                           <div className="flex items-center justify-between text-amber-800 border-t border-slate-100 pt-1 font-bold">
                             <span>Total Area OUT:</span>
-                            <span>{areaPerRoll} × {rollsOut} = {totalAreaOut} m²</span>
+                            <span>
+                              {stockOutRollValidation.valid
+                                ? `${areaPerRoll} × ${rollsOut} = ${totalAreaOut} m²`
+                                : '—'}
+                            </span>
                           </div>
                         </div>
 
@@ -2529,31 +2647,28 @@ export default function App() {
                   )}
                 </div>
 
-                {/* 9. SAVE STOCK OUT (Enabled only when verified & rolls <= current) */}
+                {/* 9. SAVE STOCK OUT (Enabled only when verified & valid count <= current) */}
                 <div className="pt-2">
                   <button
                     type="submit"
-                    disabled={
-                      !matchedStockOutItem ||
-                      stockOutVerificationStatus !== 'VERIFIED' ||
-                      !stockOutRolls ||
-                      parseInt(stockOutRolls, 10) <= 0 ||
-                      (parseInt(stockOutRolls, 10) || 0) > (matchedStockOutItem?.currentStock || 0)
-                    }
+                    disabled={!isStockOutSaveEnabled}
                     className={`w-full py-3.5 px-4 font-bold rounded-xl shadow-sm transition-all text-sm flex items-center justify-center space-x-2 ${
-                      stockOutVerificationStatus === 'VERIFIED' &&
-                      matchedStockOutItem &&
-                      parseInt(stockOutRolls, 10) > 0 &&
-                      (parseInt(stockOutRolls, 10) || 0) <= matchedStockOutItem.currentStock
-                        ? 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
+                      isStockOutSaveEnabled
+                        ? 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98 shadow-md'
                         : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-75'
                     }`}
                   >
                     <ArrowUpFromLine className="w-4 h-4" />
                     <span>
-                      {stockOutVerificationStatus === 'VERIFIED'
-                        ? '9. Save Stock OUT'
-                        : 'Scan Barcode to Enable Save'}
+                      {isStockOutSaveEnabled
+                        ? `9. Save Stock OUT (-${stockOutRollValidation.count} Rolls)`
+                        : stockOutVerificationStatus !== 'VERIFIED'
+                        ? 'Scan Barcode to Enable Save'
+                        : !stockOutRollValidation.valid
+                        ? 'Enter Valid Roll Count (> 0)'
+                        : matchedStockOutItem && stockOutRollValidation.count > matchedStockOutItem.currentStock
+                        ? 'Exceeds Current Stock'
+                        : 'Complete Required Fields to Save'}
                     </span>
                   </button>
                 </div>
