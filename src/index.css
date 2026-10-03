@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+  }
+  .no-print, header, nav, button:not(.printable-action) {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  .print-label-grid {
+    display: grid !important;
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 16px !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .print-label-item {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    border: 1.5px solid #000 !important;
+    border-radius: 8px !important;
+    padding: 12px !important;
+  }
+}

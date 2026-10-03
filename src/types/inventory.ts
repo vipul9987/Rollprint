@@ -1,47 +1,48 @@
 /**
- * Simple Roll & Material Inventory Management System
+ * Matrix-Based Inventory System Data Types
+ * Model: Material + Variant/Size (+ Optional Secondary Variant) = Inventory Item
+ * Reflects the client's Excel Stock Matrix
  */
 
-export interface MaterialItem {
+export interface MatrixInventoryItem {
   id: string;
-  name: string;
-  category: string;
-  size: string; // e.g., "3 FT", "4 FT", "5 FT"
-  rollLength?: number; // e.g. 50, 70 (meters)
-  unit: string; // "M"
-  itemCode: string; // e.g. "AFN-3FT", "PVC-FLEX-4FT"
-  barcode: string; // matches itemCode
-  openingStock: number;
-  minStock: number;
-  active: boolean; // For soft delete / safety
+  materialName: string; // e.g. "Backlit Sunlex", "Premium M 9", "PVC Foam Sheet"
+  category: string; // "Backlit", "Frontlit Flex", "Self Adhesive Vinyl", "Lamination Film", "Rigid Sheet"
+  variantSize: string; // e.g. "1.02", "1.32", "1.63", "8×4"
+  secondaryVariant?: string; // e.g. "2mm", "3mm", "5mm" (thickness for sheets)
+  unit: string; // "Rolls" or "Sheets"
+  barcode: string; // unique stable identifier e.g. "BACKLIT-SUNLEX-1.63", "PVC-8X4-3MM"
+  openingStock: number; // current quantity from the Excel sheet
+  minStock: number; // minimum stock alert threshold
+  active: boolean;
   createdAt: string;
 }
 
-export interface StockTransaction {
+export interface MatrixStockTransaction {
   id: string;
-  materialId: string;
+  itemId: string;
   materialName: string;
-  size: string;
-  itemCode: string; // Unique SKU Code
+  variantSize: string;
+  secondaryVariant?: string;
+  barcode: string;
   type: 'IN' | 'OUT';
-  quantity: number;
-  unit: string;
+  quantity: number; // number of rolls / sheets / units
   stockBefore: number;
   stockAfter: number;
+  unit: string;
   date: string;
-  reference?: string;
   createdAt: string;
 }
 
-export interface MaterialWithStock extends MaterialItem {
+export interface MatrixItemWithStock extends MatrixInventoryItem {
   totalIn: number;
   totalOut: number;
   currentStock: number;
   status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
 }
 
-export interface DashboardMetrics {
-  activeSkus: number;
+export interface MatrixDashboardMetrics {
+  totalItems: number;
   totalStockIn: number;
   totalStockOut: number;
   currentStock: number;

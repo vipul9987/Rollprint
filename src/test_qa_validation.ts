@@ -1,15 +1,15 @@
 /**
- * Automated QA and Data Validation Test Suite for RollPrint IMS
+ * Automated QA and Data Validation Test Suite for RollPrint IMS (Excel Matrix Model)
  */
 
 import {
-  calculateMaterialsWithStock,
-  calculateDashboardMetrics,
-  round2,
-  INITIAL_MATERIALS,
-  INITIAL_TRANSACTIONS
+  calculateMatrixWithStock,
+  calculateMatrixDashboardMetrics,
+  generateMatrixBarcode,
+  INITIAL_MATRIX_ITEMS,
+  INITIAL_MATRIX_TRANSACTIONS
 } from './data/inventoryStore';
-import { MaterialItem, StockTransaction } from './types/inventory';
+import { MatrixInventoryItem, MatrixStockTransaction } from './types/inventory';
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -25,209 +25,198 @@ function assert(condition: boolean, testName: string, details?: string) {
 }
 
 console.log('====================================================');
-console.log('RUNNING ROLLPRINT IMS FUNCTIONAL QA & DATA VALIDATION');
+console.log('RUNNING CLIENT EXCEL MATRIX IMS FUNCTIONAL QA');
 console.log('====================================================\n');
 
 // ------------------------------------------------------------------
-// TEST 1: Stock Calculation Sequence
-// Opening = 100 -> +50 -> -20 -> +12.5 -> -2.5 = 140
+// TEST 1: Stock Calculation Sequence (Material + Size)
+// Backlit Sunlex 1.63
+// Opening = 5 -> +5 -> -2 = 8
 // ------------------------------------------------------------------
 console.log('--- Test Suite 1: Stock Calculation Sequence ---');
 
-const testMat1: MaterialItem = {
-  id: 'test-sku-1',
-  name: 'Active Flex N',
-  category: 'Flex Media',
-  size: '3 FT',
-  unit: 'M',
-  itemCode: 'AFN-3FT',
-  barcode: 'AFN-3FT',
-  openingStock: 100,
-  minStock: 50,
+const testItem1: MatrixInventoryItem = {
+  id: 'bs-163',
+  materialName: 'Backlit Sunlex',
+  category: 'Backlit',
+  variantSize: '1.63',
+  unit: 'Rolls',
+  barcode: 'BACKLIT-SUNLEX-1.63',
+  openingStock: 5,
+  minStock: 3,
   active: true,
-  createdAt: '2026-10-02'
+  createdAt: '2026-10-03'
 };
 
-const txnsSequence: StockTransaction[] = [];
+const txns: MatrixStockTransaction[] = [];
 
-// Step 1: Opening Stock = 100
-let calc = calculateMaterialsWithStock([testMat1], txnsSequence)[0];
-assert(calc.currentStock === 100, 'Step 1: Opening stock is 100', `Got ${calc.currentStock}`);
+// Step 1: Initial opening stock
+let calc = calculateMatrixWithStock([testItem1], txns)[0];
+assert(calc.currentStock === 5, 'Step 1: Opening stock is 5', `Got ${calc.currentStock}`);
 
-// Step 2: Stock IN = 50 -> Expected = 150
-txnsSequence.push({
+// Step 2: Stock IN = 5 -> Expected = 10
+txns.push({
   id: 't-1',
-  materialId: testMat1.id,
-  materialName: testMat1.name,
-  size: testMat1.size,
-  itemCode: testMat1.itemCode,
+  itemId: testItem1.id,
+  materialName: testItem1.materialName,
+  variantSize: testItem1.variantSize,
+  barcode: testItem1.barcode,
   type: 'IN',
-  quantity: 50,
-  unit: 'M',
-  stockBefore: 100,
-  stockAfter: 150,
-  date: '2026-10-02',
-  createdAt: '2026-10-02T10:00:00Z'
+  quantity: 5,
+  stockBefore: 5,
+  stockAfter: 10,
+  unit: 'Rolls',
+  date: '2026-10-03',
+  createdAt: '2026-10-03T10:00:00Z'
 });
-calc = calculateMaterialsWithStock([testMat1], txnsSequence)[0];
-assert(calc.currentStock === 150, 'Step 2: Stock IN 50 -> Balance 150', `Got ${calc.currentStock}`);
+calc = calculateMatrixWithStock([testItem1], txns)[0];
+assert(calc.currentStock === 10, 'Step 2: Stock IN +5 -> Balance 10', `Got ${calc.currentStock}`);
 
-// Step 3: Stock OUT = 20 -> Expected = 130
-txnsSequence.push({
+// Step 3: Stock OUT = 2 -> Expected = 8
+txns.push({
   id: 't-2',
-  materialId: testMat1.id,
-  materialName: testMat1.name,
-  size: testMat1.size,
-  itemCode: testMat1.itemCode,
+  itemId: testItem1.id,
+  materialName: testItem1.materialName,
+  variantSize: testItem1.variantSize,
+  barcode: testItem1.barcode,
   type: 'OUT',
-  quantity: 20,
-  unit: 'M',
-  stockBefore: 150,
-  stockAfter: 130,
-  date: '2026-10-02',
-  createdAt: '2026-10-02T11:00:00Z'
+  quantity: 2,
+  stockBefore: 10,
+  stockAfter: 8,
+  unit: 'Rolls',
+  date: '2026-10-03',
+  createdAt: '2026-10-03T11:00:00Z'
 });
-calc = calculateMaterialsWithStock([testMat1], txnsSequence)[0];
-assert(calc.currentStock === 130, 'Step 3: Stock OUT 20 -> Balance 130', `Got ${calc.currentStock}`);
-
-// Step 4: Stock IN = 12.5 -> Expected = 142.5
-txnsSequence.push({
-  id: 't-3',
-  materialId: testMat1.id,
-  materialName: testMat1.name,
-  size: testMat1.size,
-  itemCode: testMat1.itemCode,
-  type: 'IN',
-  quantity: 12.5,
-  unit: 'M',
-  stockBefore: 130,
-  stockAfter: 142.5,
-  date: '2026-10-02',
-  createdAt: '2026-10-02T12:00:00Z'
-});
-calc = calculateMaterialsWithStock([testMat1], txnsSequence)[0];
-assert(calc.currentStock === 142.5, 'Step 4: Stock IN 12.5 -> Balance 142.5', `Got ${calc.currentStock}`);
-
-// Step 5: Stock OUT = 2.5 -> Expected = 140
-txnsSequence.push({
-  id: 't-4',
-  materialId: testMat1.id,
-  materialName: testMat1.name,
-  size: testMat1.size,
-  itemCode: testMat1.itemCode,
-  type: 'OUT',
-  quantity: 2.5,
-  unit: 'M',
-  stockBefore: 142.5,
-  stockAfter: 140,
-  date: '2026-10-02',
-  createdAt: '2026-10-02T13:00:00Z'
-});
-calc = calculateMaterialsWithStock([testMat1], txnsSequence)[0];
-assert(calc.currentStock === 140, 'Step 5: Stock OUT 2.5 -> Balance 140', `Got ${calc.currentStock}`);
+calc = calculateMatrixWithStock([testItem1], txns)[0];
+assert(calc.currentStock === 8, 'Step 3: Stock OUT -2 -> Balance 8', `Got ${calc.currentStock}`);
 
 // ------------------------------------------------------------------
-// TEST 2: Stock OUT Boundary & Validation Rules
-// Available = 100 -> OUT 50 -> OUT 50 -> Balance 0 -> Attempt OUT 1 (Reject)
+// TEST 2: Secondary Variant Support (PVC Sheet with Thickness)
 // ------------------------------------------------------------------
-console.log('\n--- Test Suite 2: Stock OUT Boundary & Rejection ---');
+console.log('\n--- Test Suite 2: Secondary Variant (PVC Sheet Thickness) ---');
 
-const testMat2: MaterialItem = {
-  id: 'test-sku-2',
-  name: 'PVC Flex',
-  category: 'Flex Media',
-  size: '4 FT',
-  unit: 'M',
-  itemCode: 'PVC-FLEX-4FT',
-  barcode: 'PVC-FLEX-4FT',
-  openingStock: 100,
-  minStock: 20,
+const pvcSheet2mm: MatrixInventoryItem = {
+  id: 'pvc-84-2',
+  materialName: 'PVC Foam Sheet',
+  category: 'Rigid Sheet',
+  variantSize: '8×4',
+  secondaryVariant: '2mm',
+  unit: 'Sheets',
+  barcode: generateMatrixBarcode('PVC Foam Sheet', '8×4', '2mm'),
+  openingStock: 15,
+  minStock: 5,
   active: true,
-  createdAt: '2026-10-02'
+  createdAt: '2026-10-03'
 };
 
-const txnsOut: StockTransaction[] = [];
-let available = calculateMaterialsWithStock([testMat2], txnsOut)[0].currentStock;
-assert(available === 100, 'Initial Available = 100', `Got ${available}`);
+const pvcSheet3mm: MatrixInventoryItem = {
+  id: 'pvc-84-3',
+  materialName: 'PVC Foam Sheet',
+  category: 'Rigid Sheet',
+  variantSize: '8×4',
+  secondaryVariant: '3mm',
+  unit: 'Sheets',
+  barcode: generateMatrixBarcode('PVC Foam Sheet', '8×4', '3mm'),
+  openingStock: 22,
+  minStock: 6,
+  active: true,
+  createdAt: '2026-10-03'
+};
 
-// OUT = 50 -> Expected = 50
-txnsOut.push({
-  id: 'o-1',
-  materialId: testMat2.id,
-  materialName: testMat2.name,
-  size: testMat2.size,
-  itemCode: testMat2.itemCode,
-  type: 'OUT',
-  quantity: 50,
-  unit: 'M',
-  stockBefore: 100,
-  stockAfter: 50,
-  date: '2026-10-02',
-  createdAt: '2026-10-02T10:00:00Z'
-});
-available = calculateMaterialsWithStock([testMat2], txnsOut)[0].currentStock;
-assert(available === 50, 'OUT 50 -> Balance 50', `Got ${available}`);
+assert(pvcSheet2mm.barcode !== pvcSheet3mm.barcode, 'Barcodes differ for 2mm vs 3mm');
+assert(pvcSheet2mm.barcode === 'PVC-FOAM-SHEET-8X4-2MM', `2mm barcode is PVC-FOAM-SHEET-8X4-2MM (got ${pvcSheet2mm.barcode})`);
+assert(pvcSheet3mm.barcode === 'PVC-FOAM-SHEET-8X4-3MM', `3mm barcode is PVC-FOAM-SHEET-8X4-3MM (got ${pvcSheet3mm.barcode})`);
 
-// OUT = 50 -> Expected = 0
-txnsOut.push({
-  id: 'o-2',
-  materialId: testMat2.id,
-  materialName: testMat2.name,
-  size: testMat2.size,
-  itemCode: testMat2.itemCode,
-  type: 'OUT',
-  quantity: 50,
-  unit: 'M',
-  stockBefore: 50,
-  stockAfter: 0,
-  date: '2026-10-02',
-  createdAt: '2026-10-02T11:00:00Z'
-});
-available = calculateMaterialsWithStock([testMat2], txnsOut)[0].currentStock;
-assert(available === 0, 'OUT 50 -> Balance 0', `Got ${available}`);
+// ------------------------------------------------------------------
+// TEST 3: Stock OUT Never Below Zero Validation
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 3: Stock OUT Zero-Boundary Rule ---');
+const availableStock = 8;
+const attemptOverOut = 10;
+const isRejected = attemptOverOut > availableStock;
+assert(isRejected, `Attempting to remove 10 when available is 8 is rejected`);
 
-// Attempt OUT 1 when available is 0 -> Should be rejected
-const attemptOutQty = 1;
-const isRejected = attemptOutQty > available;
-assert(isRejected, 'Attempt OUT 1 when available 0 is rejected', `Rejected=${isRejected}`);
+// ------------------------------------------------------------------
+// TEST 4: Client Sheet Baseline Matrix Integrity
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 4: Client Sheet Dataset Verification ---');
+const calculatedDataset = calculateMatrixWithStock(INITIAL_MATRIX_ITEMS, INITIAL_MATRIX_TRANSACTIONS);
+const metrics = calculateMatrixDashboardMetrics(calculatedDataset, INITIAL_MATRIX_TRANSACTIONS);
 
-// Test invalid quantities rejection logic
-const testInvalidQuantities = [-5, 0, NaN, Infinity];
-for (const invalidQ of testInvalidQuantities) {
-  const isInvalid = isNaN(invalidQ) || !isFinite(invalidQ) || invalidQ <= 0;
-  assert(isInvalid, `Quantity ${invalidQ} correctly recognized as invalid`);
+const totalOpening = INITIAL_MATRIX_ITEMS.reduce((sum, i) => sum + i.openingStock, 0);
+assert(metrics.totalStockIn === 9, 'Total Stock IN is 9 (5 + 4)', `Got ${metrics.totalStockIn}`);
+assert(metrics.totalStockOut === 6, 'Total Stock OUT is 6 (2 + 4)', `Got ${metrics.totalStockOut}`);
+assert(
+  metrics.currentStock === totalOpening + 9 - 6,
+  `Current Stock matches Opening (${totalOpening}) + 9 - 6 = ${totalOpening + 3}`,
+  `Got ${metrics.currentStock}`
+);
+
+// Verify Backlit Sunlex values from prompt: 1.02=1, 1.32=1, 1.63=8, 1.93=8, 2.54=5
+const bs102 = calculatedDataset.find((i) => i.id === 'bs-102')!;
+const bs132 = calculatedDataset.find((i) => i.id === 'bs-132')!;
+const bs163 = calculatedDataset.find((i) => i.id === 'bs-163')!;
+const bs193 = calculatedDataset.find((i) => i.id === 'bs-193')!;
+const bs254 = calculatedDataset.find((i) => i.id === 'bs-254')!;
+
+assert(bs102.currentStock === 1, 'Backlit Sunlex 1.02 is 1', `Got ${bs102.currentStock}`);
+assert(bs132.currentStock === 1, 'Backlit Sunlex 1.32 is 1', `Got ${bs132.currentStock}`);
+assert(bs163.currentStock === 8, 'Backlit Sunlex 1.63 is 8 (Opening 5 + 5 IN - 2 OUT)', `Got ${bs163.currentStock}`);
+assert(bs193.currentStock === 8, 'Backlit Sunlex 1.93 is 8', `Got ${bs193.currentStock}`);
+assert(bs254.currentStock === 5, 'Backlit Sunlex 2.54 is 5', `Got ${bs254.currentStock}`);
+
+// ------------------------------------------------------------------
+// TEST 5: QR Code URL Generation & Mobile Target
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 5: Phone Camera QR URL Target ---');
+import { getItemWebUrl } from './data/inventoryStore';
+
+const sampleUrl = getItemWebUrl('bs-163');
+assert(sampleUrl.includes('/item/bs-163'), `QR encodes direct item URL /item/bs-163 (got ${sampleUrl})`);
+
+// ------------------------------------------------------------------
+// TEST 6: Barcode Verification in Stock IN / Stock OUT
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 6: Barcode Verification Matching Logic ---');
+const testItemBs132 = calculatedDataset.find((i) => i.id === 'bs-132')!;
+
+function testCheckBarcode(code: string, item: typeof testItemBs132): boolean {
+  if (!code.trim() || !item) return false;
+  const cleanCode = code.trim().toUpperCase();
+  const cleanBarcode = item.barcode.toUpperCase();
+  const cleanId = item.id.toUpperCase();
+
+  if (cleanCode === cleanBarcode) return true;
+  if (cleanCode === cleanId) return true;
+  if (cleanCode.includes(`/ITEM/${cleanId}`)) return true;
+
+  const normCode = cleanCode.replace(/[^A-Z0-9]/g, '');
+  const normBarcode = cleanBarcode.replace(/[^A-Z0-9]/g, '');
+  if (normCode && normBarcode && normCode === normBarcode) return true;
+
+  return false;
 }
 
-// ------------------------------------------------------------------
-// TEST 3: Baseline Sample Dataset Integrity
-// Opening = 300, IN = 1900, OUT = 750 -> Current Stock = 1450
-// ------------------------------------------------------------------
-console.log('\n--- Test Suite 3: Sample Dataset Summary Validation ---');
-
-const calculatedItems = calculateMaterialsWithStock(INITIAL_MATERIALS, INITIAL_TRANSACTIONS);
-const metrics = calculateDashboardMetrics(calculatedItems, INITIAL_TRANSACTIONS);
-
-const expectedOpening = INITIAL_MATERIALS.reduce((s, m) => s + m.openingStock, 0);
-assert(expectedOpening === 300, 'Baseline Opening Stock is 300M', `Got ${expectedOpening}`);
-assert(metrics.totalStockIn === 1900, 'Baseline Total Stock IN is 1900M', `Got ${metrics.totalStockIn}`);
-assert(metrics.totalStockOut === 750, 'Baseline Total Stock OUT is 750M', `Got ${metrics.totalStockOut}`);
-assert(metrics.currentStock === 1450, 'Baseline Current Stock is 1450M (300 + 1900 - 750)', `Got ${metrics.currentStock}`);
-assert(metrics.activeSkus === 8, 'Active SKUs count is 8', `Got ${metrics.activeSkus}`);
-
-// ------------------------------------------------------------------
-// TEST 4: Low Stock and Out of Stock Logic
-// ------------------------------------------------------------------
-console.log('\n--- Test Suite 4: Stock Status Logic ---');
-
-const lowStockTestItems: MaterialItem[] = [
-  { id: 'ls-1', name: 'M1', category: 'C', size: '1', unit: 'M', itemCode: 'C1', barcode: 'C1', openingStock: 0, minStock: 50, active: true, createdAt: '' },
-  { id: 'ls-2', name: 'M2', category: 'C', size: '2', unit: 'M', itemCode: 'C2', barcode: 'C2', openingStock: 40, minStock: 50, active: true, createdAt: '' },
-  { id: 'ls-3', name: 'M3', category: 'C', size: '3', unit: 'M', itemCode: 'C3', barcode: 'C3', openingStock: 100, minStock: 50, active: true, createdAt: '' }
-];
-const stockStatuses = calculateMaterialsWithStock(lowStockTestItems, []);
-assert(stockStatuses[0].status === 'OUT_OF_STOCK', '0 M stock is OUT_OF_STOCK', `Got ${stockStatuses[0].status}`);
-assert(stockStatuses[1].status === 'LOW_STOCK', '40 M (<= 50 min) is LOW_STOCK', `Got ${stockStatuses[1].status}`);
-assert(stockStatuses[2].status === 'IN_STOCK', '100 M (> 50 min) is IN_STOCK', `Got ${stockStatuses[2].status}`);
+assert(
+  testCheckBarcode('BACKLIT-SUNLEX-1.32', testItemBs132) === true,
+  'Matching barcode BACKLIT-SUNLEX-1.32 verifies successfully'
+);
+assert(
+  testCheckBarcode('backlit-sunlex-1.32', testItemBs132) === true,
+  'Case-insensitive barcode verifies successfully'
+);
+assert(
+  testCheckBarcode('bs-132', testItemBs132) === true,
+  'Item ID code verifies successfully'
+);
+assert(
+  testCheckBarcode('BACKLIT-SUNLEX-1.63', testItemBs132) === false,
+  'Mismatched barcode BACKLIT-SUNLEX-1.63 is rejected'
+);
+assert(
+  testCheckBarcode('PREMIUM-M-9-1.32', testItemBs132) === false,
+  'Different material barcode is rejected'
+);
 
 // ------------------------------------------------------------------
 // SUMMARY

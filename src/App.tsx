@@ -5,7 +5,7 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   History,
-  Barcode as BarcodeIcon,
+  QrCode,
   Search,
   Plus,
   Trash2,
@@ -13,51 +13,61 @@ import {
   CheckCircle2,
   AlertCircle,
   Printer,
-  Download,
   X,
-  RefreshCw,
-  QrCode,
   TrendingUp,
   TrendingDown,
   Box,
   Eye,
-  EyeOff
+  EyeOff,
+  Check,
+  Grid,
+  Table as TableIcon,
+  Camera,
+  Barcode as BarcodeIcon,
+  ShieldCheck,
+  ShieldAlert
 } from 'lucide-react';
 import {
-  getStoredMaterials,
-  saveStoredMaterials,
-  getStoredTransactions,
-  saveStoredTransactions,
-  calculateMaterialsWithStock,
-  calculateDashboardMetrics,
-  round2,
-  INITIAL_MATERIALS,
-  INITIAL_TRANSACTIONS
+  getStoredMatrixItems,
+  saveStoredMatrixItems,
+  getStoredMatrixTransactions,
+  saveStoredMatrixTransactions,
+  calculateMatrixWithStock,
+  calculateMatrixDashboardMetrics,
+  generateMatrixBarcode,
+  getItemWebUrl,
+  INITIAL_MATRIX_ITEMS,
+  INITIAL_MATRIX_TRANSACTIONS
 } from './data/inventoryStore';
-import { MaterialItem, StockTransaction, MaterialWithStock } from './types/inventory';
-import { BarcodeDisplay } from './components/BarcodeDisplay';
+import { MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock } from './types/inventory';
+import { QRCodeLabel } from './components/QRCodeLabel';
+import { MobileItemView } from './components/MobileItemView';
+import { CameraScannerModal } from './components/CameraScannerModal';
 
-type TabType = 'dashboard' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'barcodes';
+type TabType = 'dashboard' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
+type DashboardViewMode = 'matrix' | 'table';
+type VerificationStatus = 'IDLE' | 'VERIFIED' | 'MISMATCH';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const [dashboardViewMode, setDashboardViewMode] = useState<DashboardViewMode>('matrix');
 
   // Core Data State
-  const [materials, setMaterials] = useState<MaterialItem[]>(() => getStoredMaterials());
-  const [transactions, setTransactions] = useState<StockTransaction[]>(() => getStoredTransactions());
+  const [items, setItems] = useState<MatrixInventoryItem[]>(() => getStoredMatrixItems());
+  const [transactions, setTransactions] = useState<MatrixStockTransaction[]>(() => getStoredMatrixTransactions());
 
   // Show inactive materials toggle in Material Master
   const [showInactive, setShowInactive] = useState<boolean>(false);
 
   // Synchronize derived stock values
-  const materialsWithStock: MaterialWithStock[] = useMemo(() => {
-    return calculateMaterialsWithStock(materials, transactions);
-  }, [materials, transactions]);
+  const itemsWithStock: MatrixItemWithStock[] = useMemo(() => {
+    return calculateMatrixWithStock(items, transactions);
+  }, [items, transactions]);
 
   // Dashboard Metrics
   const dashboardMetrics = useMemo(() => {
-    return calculateDashboardMetrics(materialsWithStock, transactions);
-  }, [materialsWithStock, transactions]);
+    return calculateMatrixDashboardMetrics(itemsWithStock, transactions);
+  }, [itemsWithStock, transactions]);
 
   // Global Toast Notification State
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -66,885 +76,1217 @@ export default function App() {
     setNotification({ message, type });
     setTimeout(() => {
       setNotification(null);
-    }, 4500);
+    }, 4000);
   };
 
-  // Stock IN Form State
-  const [stockInMaterialId, setStockInMaterialId] = useState<string>('');
-  const [stockInQty, setStockInQty] = useState<string>('');
-  const [stockInDate, setStockInDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [stockInRef, setStockInRef] = useState<string>('');
-  const [stockInError, setStockInError] = useState<string>('');
-  const stockInQtyRef = useRef<HTMLInputElement | null>(null);
-
-  // Stock OUT Form State
-  const [stockOutMaterialId, setStockOutMaterialId] = useState<string>('');
-  const [stockOutQty, setStockOutQty] = useState<string>('');
-  const [stockOutDate, setStockOutDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [stockOutRef, setStockOutRef] = useState<string>('');
-  const [stockOutError, setStockOutError] = useState<string>('');
-  const stockOutQtyRef = useRef<HTMLInputElement | null>(null);
-
-  // Material Modal State (Add / Edit)
-  const [isMaterialModalOpen, setIsMaterialModalOpen] = useState<boolean>(false);
-  const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null);
-  const [matFormName, setMatFormName] = useState<string>('');
-  const [matFormCategory, setMatFormCategory] = useState<string>('Flex Media');
-  const [matFormSize, setMatFormSize] = useState<string>('3 FT');
-  const [matFormRollLength, setMatFormRollLength] = useState<string>('50');
-  const [matFormUnit, setMatFormUnit] = useState<string>('M');
-  const [matFormItemCode, setMatFormItemCode] = useState<string>('');
-  const [matFormOpening, setMatFormOpening] = useState<string>('0');
-  const [matFormMinStock, setMatFormMinStock] = useState<string>('50');
-
-  // Scanner State
-  const [scannerQuery, setScannerQuery] = useState<string>('');
-  const [scannedMaterial, setScannedMaterial] = useState<MaterialWithStock | null>(null);
-  const [scanStatusMessage, setScanStatusMessage] = useState<string>('');
-  const scannerInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Filters
-  const [searchQuery, setSearchQuery] = useState<string>('');
-  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [txnTypeFilter, setTxnTypeFilter] = useState<string>('ALL');
-
-  // Distinct Categories across active materials
-  const categories = useMemo(() => {
+  // Distinct Material Names (displays ONLY material names in dropdowns)
+  const uniqueMaterialNames = useMemo(() => {
     const set = new Set<string>();
-    materials.forEach((m) => {
-      if (m.category) set.add(m.category);
-    });
-    return Array.from(set);
-  }, [materials]);
+    items.filter((i) => i.active).forEach((i) => set.add(i.materialName));
+    return Array.from(set).sort();
+  }, [items]);
 
-  // Focus scanner input whenever user navigates to barcodes tab
+  // -------------------------------------------------------------
+  // MOBILE ITEM PAGE / QR DIRECT URL ROUTING
+  // -------------------------------------------------------------
+  const [selectedMobileItemId, setSelectedMobileItemId] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const match = window.location.pathname.match(/\/item\/([^/?#]+)/);
+    if (match && match[1]) return match[1];
+    const q = new URLSearchParams(window.location.search).get('item');
+    if (q) return q;
+    const h = window.location.hash.match(/item\/([^/?#]+)/);
+    if (h && h[1]) return h[1];
+    return null;
+  });
+
+  // Listen for browser navigation (back/forward)
   useEffect(() => {
-    if (activeTab === 'barcodes' && scannerInputRef.current) {
-      scannerInputRef.current.focus();
-    }
-  }, [activeTab]);
+    const handlePopState = () => {
+      const match = window.location.pathname.match(/\/item\/([^/?#]+)/);
+      const q = new URLSearchParams(window.location.search).get('item');
+      if (match && match[1]) {
+        setSelectedMobileItemId(match[1]);
+      } else if (q) {
+        setSelectedMobileItemId(q);
+      } else {
+        setSelectedMobileItemId(null);
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
-  // Handle Save Stock IN
+  const openMobileItemPage = (itemId: string) => {
+    try {
+      window.history.pushState({}, '', `/item/${itemId}`);
+    } catch {
+      // ignore
+    }
+    setSelectedMobileItemId(itemId);
+  };
+
+  const closeMobileItemPage = () => {
+    try {
+      window.history.pushState({}, '', '/');
+    } catch {
+      // ignore
+    }
+    setSelectedMobileItemId(null);
+  };
+
+  // Quick Stock Update Modal from Matrix Click
+  const [modalItem, setModalItem] = useState<MatrixItemWithStock | null>(null);
+
+  // Camera Scanner Modal State
+  const [cameraScannerOpen, setCameraScannerOpen] = useState<boolean>(false);
+  const [cameraScannerTarget, setCameraScannerTarget] = useState<'stock-in' | 'stock-out'>('stock-in');
+
+  // -------------------------------------------------------------
+  // HELPER: BARCODE VERIFICATION MATCH
+  // -------------------------------------------------------------
+  const checkBarcodeMatch = (scannedCode: string, targetItem: MatrixItemWithStock | undefined): boolean => {
+    if (!scannedCode.trim() || !targetItem) return false;
+    const cleanCode = scannedCode.trim().toUpperCase();
+    const cleanBarcode = targetItem.barcode.toUpperCase();
+    const cleanId = targetItem.id.toUpperCase();
+
+    // 1. Direct match with permanent barcode (e.g. BACKLIT-SUNLEX-1.32)
+    if (cleanCode === cleanBarcode) return true;
+
+    // 2. Direct match with item ID (e.g. bs-132)
+    if (cleanCode === cleanId) return true;
+
+    // 3. Match from scanned QR URL (e.g. https://domain.com/item/bs-132)
+    if (cleanCode.includes(`/ITEM/${cleanId}`)) return true;
+
+    // 4. Normalized match (without hyphens or whitespace)
+    const normCode = cleanCode.replace(/[^A-Z0-9]/g, '');
+    const normBarcode = cleanBarcode.replace(/[^A-Z0-9]/g, '');
+    if (normCode && normBarcode && normCode === normBarcode) return true;
+
+    return false;
+  };
+
+  // -------------------------------------------------------------
+  // STOCK IN FORM STATE
+  // Flow: Material -> Size -> Rolls -> Date -> Calculation -> Barcode Verification -> Save
+  // -------------------------------------------------------------
+  const [stockInMaterial, setStockInMaterial] = useState<string>('');
+  const [stockInVariantSize, setStockInVariantSize] = useState<string>('');
+  const [stockInSecondary, setStockInSecondary] = useState<string>('');
+  const [stockInRolls, setStockInRolls] = useState<string>('');
+  const [stockInDate, setStockInDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [stockInError, setStockInError] = useState<string>('');
+
+  // Barcode Verification State for Stock IN
+  const [stockInBarcodeCode, setStockInBarcodeCode] = useState<string>('');
+  const [stockInVerificationStatus, setStockInVerificationStatus] = useState<VerificationStatus>('IDLE');
+
+  const stockInRollsInputRef = useRef<HTMLInputElement | null>(null);
+  const stockInVerificationInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Available Sizes for selected Stock IN material
+  const stockInAvailableSizes = useMemo(() => {
+    if (!stockInMaterial) return [];
+    const set = new Set<string>();
+    items
+      .filter((i) => i.active && i.materialName === stockInMaterial)
+      .forEach((i) => set.add(i.variantSize));
+    return Array.from(set);
+  }, [items, stockInMaterial]);
+
+  // Available Secondary Variants for selected material + size
+  const stockInAvailableSecondaries = useMemo(() => {
+    if (!stockInMaterial || !stockInVariantSize) return [];
+    const set = new Set<string>();
+    items
+      .filter(
+        (i) =>
+          i.active &&
+          i.materialName === stockInMaterial &&
+          i.variantSize === stockInVariantSize &&
+          i.secondaryVariant
+      )
+      .forEach((i) => {
+        if (i.secondaryVariant) set.add(i.secondaryVariant);
+      });
+    return Array.from(set);
+  }, [items, stockInMaterial, stockInVariantSize]);
+
+  // Find exact inventory item matching Stock IN inputs
+  const matchedStockInItem: MatrixItemWithStock | undefined = useMemo(() => {
+    if (!stockInMaterial || !stockInVariantSize) return undefined;
+    return itemsWithStock.find(
+      (i) =>
+        i.active &&
+        i.materialName === stockInMaterial &&
+        i.variantSize === stockInVariantSize &&
+        (stockInAvailableSecondaries.length === 0 || i.secondaryVariant === stockInSecondary)
+    );
+  }, [itemsWithStock, stockInMaterial, stockInVariantSize, stockInSecondary, stockInAvailableSecondaries]);
+
+  // Validate Stock IN Barcode
+  const validateStockInBarcode = (code: string) => {
+    const trimmed = code.trim();
+    if (!trimmed) {
+      setStockInVerificationStatus('IDLE');
+      return;
+    }
+    if (!matchedStockInItem) {
+      setStockInVerificationStatus('MISMATCH');
+      return;
+    }
+    const isMatch = checkBarcodeMatch(trimmed, matchedStockInItem);
+    setStockInVerificationStatus(isMatch ? 'VERIFIED' : 'MISMATCH');
+  };
+
+  // -------------------------------------------------------------
+  // STOCK OUT FORM STATE
+  // Flow: Material -> Size -> Rolls -> Date -> Calculation -> Barcode Verification -> Save
+  // -------------------------------------------------------------
+  const [stockOutMaterial, setStockOutMaterial] = useState<string>('');
+  const [stockOutVariantSize, setStockOutVariantSize] = useState<string>('');
+  const [stockOutSecondary, setStockOutSecondary] = useState<string>('');
+  const [stockOutRolls, setStockOutRolls] = useState<string>('');
+  const [stockOutDate, setStockOutDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [stockOutError, setStockOutError] = useState<string>('');
+
+  // Barcode Verification State for Stock OUT
+  const [stockOutBarcodeCode, setStockOutBarcodeCode] = useState<string>('');
+  const [stockOutVerificationStatus, setStockOutVerificationStatus] = useState<VerificationStatus>('IDLE');
+
+  const stockOutRollsInputRef = useRef<HTMLInputElement | null>(null);
+  const stockOutVerificationInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Available Sizes for selected Stock OUT material
+  const stockOutAvailableSizes = useMemo(() => {
+    if (!stockOutMaterial) return [];
+    const set = new Set<string>();
+    items
+      .filter((i) => i.active && i.materialName === stockOutMaterial)
+      .forEach((i) => set.add(i.variantSize));
+    return Array.from(set);
+  }, [items, stockOutMaterial]);
+
+  // Available Secondary Variants for selected material + size
+  const stockOutAvailableSecondaries = useMemo(() => {
+    if (!stockOutMaterial || !stockOutVariantSize) return [];
+    const set = new Set<string>();
+    items
+      .filter(
+        (i) =>
+          i.active &&
+          i.materialName === stockOutMaterial &&
+          i.variantSize === stockOutVariantSize &&
+          i.secondaryVariant
+      )
+      .forEach((i) => {
+        if (i.secondaryVariant) set.add(i.secondaryVariant);
+      });
+    return Array.from(set);
+  }, [items, stockOutMaterial, stockOutVariantSize]);
+
+  // Find exact inventory item matching Stock OUT inputs
+  const matchedStockOutItem: MatrixItemWithStock | undefined = useMemo(() => {
+    if (!stockOutMaterial || !stockOutVariantSize) return undefined;
+    return itemsWithStock.find(
+      (i) =>
+        i.active &&
+        i.materialName === stockOutMaterial &&
+        i.variantSize === stockOutVariantSize &&
+        (stockOutAvailableSecondaries.length === 0 || i.secondaryVariant === stockOutSecondary)
+    );
+  }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutSecondary, stockOutAvailableSecondaries]);
+
+  // Validate Stock OUT Barcode
+  const validateStockOutBarcode = (code: string) => {
+    const trimmed = code.trim();
+    if (!trimmed) {
+      setStockOutVerificationStatus('IDLE');
+      return;
+    }
+    if (!matchedStockOutItem) {
+      setStockOutVerificationStatus('MISMATCH');
+      return;
+    }
+    const isMatch = checkBarcodeMatch(trimmed, matchedStockOutItem);
+    setStockOutVerificationStatus(isMatch ? 'VERIFIED' : 'MISMATCH');
+  };
+
+  // Camera scan success handler
+  const handleCameraScanSuccess = (decodedText: string) => {
+    if (cameraScannerTarget === 'stock-in') {
+      setStockInBarcodeCode(decodedText);
+      validateStockInBarcode(decodedText);
+    } else {
+      setStockOutBarcodeCode(decodedText);
+      validateStockOutBarcode(decodedText);
+    }
+  };
+
+  // -------------------------------------------------------------
+  // SHARED STOCK MUTATION HANDLER (Used by forms, mobile view, modal)
+  // -------------------------------------------------------------
+  const executeStockTransaction = (itemId: string, type: 'IN' | 'OUT', quantity: number, dateStr?: string) => {
+    const targetItem = itemsWithStock.find((i) => i.id === itemId);
+    if (!targetItem) {
+      showNotification('Item not found in inventory.', 'error');
+      return false;
+    }
+
+    if (quantity <= 0) {
+      showNotification('Quantity must be at least 1 roll.', 'error');
+      return false;
+    }
+
+    if (type === 'OUT' && quantity > targetItem.currentStock) {
+      showNotification(
+        `Cannot remove ${quantity} ${targetItem.unit}. Only ${targetItem.currentStock} available.`,
+        'error'
+      );
+      return false;
+    }
+
+    const stockBefore = targetItem.currentStock;
+    const stockAfter = type === 'IN' ? stockBefore + quantity : stockBefore - quantity;
+    const transactionDate = dateStr || new Date().toISOString().split('T')[0];
+
+    const newTxn: MatrixStockTransaction = {
+      id: `tx-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+      itemId: targetItem.id,
+      materialName: targetItem.materialName,
+      variantSize: targetItem.variantSize,
+      secondaryVariant: targetItem.secondaryVariant,
+      barcode: targetItem.barcode,
+      type,
+      quantity,
+      stockBefore,
+      stockAfter,
+      unit: targetItem.unit,
+      date: transactionDate,
+      createdAt: new Date().toISOString()
+    };
+
+    const updatedTxns = [newTxn, ...transactions];
+    setTransactions(updatedTxns);
+    saveStoredMatrixTransactions(updatedTxns);
+
+    showNotification(
+      `${type === 'IN' ? 'Stock IN' : 'Stock OUT'} confirmed: ${quantity} ${targetItem.unit} for ${targetItem.materialName} (${targetItem.variantSize}). New stock: ${stockAfter} ${targetItem.unit}.`,
+      'success'
+    );
+    return true;
+  };
+
+  // Submit Stock IN Form
   const handleStockInSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setStockInError('');
 
-    if (!stockInMaterialId) {
-      setStockInError('Please select a material.');
-      showNotification('Please select a material.', 'error');
+    if (!matchedStockInItem) {
+      setStockInError('Please select a valid material and size.');
       return;
     }
 
-    const trimmedQty = stockInQty.trim();
-    if (!trimmedQty) {
-      setStockInError('Quantity cannot be empty.');
-      showNotification('Quantity cannot be empty.', 'error');
+    if (stockInVerificationStatus !== 'VERIFIED') {
+      setStockInError('Barcode verification is required. Please scan the matching barcode before saving.');
       return;
     }
 
-    const qty = parseFloat(trimmedQty);
-    if (isNaN(qty) || !isFinite(qty)) {
-      setStockInError('Please enter a valid numeric quantity.');
-      showNotification('Please enter a valid numeric quantity.', 'error');
+    const rollsToAdd = parseInt(stockInRolls, 10);
+    if (isNaN(rollsToAdd) || rollsToAdd <= 0) {
+      setStockInError('Please enter a valid number of rolls to add (minimum 1).');
       return;
     }
 
-    if (qty <= 0) {
-      setStockInError('Quantity must be greater than zero.');
-      showNotification('Quantity must be greater than zero.', 'error');
-      return;
-    }
-
-    const targetMaterial = materialsWithStock.find((m) => m.id === stockInMaterialId);
-    if (!targetMaterial) return;
-
-    const roundedQty = round2(qty);
-    const stockBefore = targetMaterial.currentStock;
-    const stockAfter = round2(stockBefore + roundedQty);
-
-    const newTxn: StockTransaction = {
-      id: `txn-${Date.now()}`,
-      materialId: targetMaterial.id,
-      materialName: targetMaterial.name,
-      size: targetMaterial.size,
-      itemCode: targetMaterial.itemCode,
-      type: 'IN',
-      quantity: roundedQty,
-      unit: targetMaterial.unit,
-      stockBefore,
-      stockAfter,
-      date: stockInDate || new Date().toISOString().split('T')[0],
-      reference: stockInRef.trim() || undefined,
-      createdAt: new Date().toISOString()
-    };
-
-    const updatedTxns = [newTxn, ...transactions];
-    setTransactions(updatedTxns);
-    saveStoredTransactions(updatedTxns);
-
-    showNotification(
-      `Stock IN recorded: +${roundedQty} ${targetMaterial.unit} added to ${targetMaterial.name} (${targetMaterial.size}). New Stock: ${stockAfter} ${targetMaterial.unit}`
+    const success = executeStockTransaction(
+      matchedStockInItem.id,
+      'IN',
+      rollsToAdd,
+      stockInDate
     );
 
-    // Reset inputs
-    setStockInQty('');
-    setStockInRef('');
-    setStockInError('');
+    if (success) {
+      setStockInRolls('');
+      setStockInBarcodeCode('');
+      setStockInVerificationStatus('IDLE');
+      stockInRollsInputRef.current?.focus();
+    }
   };
 
-  // Handle Save Stock OUT
+  // Submit Stock OUT Form
   const handleStockOutSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setStockOutError('');
 
-    if (!stockOutMaterialId) {
-      setStockOutError('Please select a material.');
-      showNotification('Please select a material.', 'error');
+    if (!matchedStockOutItem) {
+      setStockOutError('Please select a valid material and size.');
       return;
     }
 
-    const trimmedQty = stockOutQty.trim();
-    if (!trimmedQty) {
-      setStockOutError('Quantity cannot be empty.');
-      showNotification('Quantity cannot be empty.', 'error');
+    if (stockOutVerificationStatus !== 'VERIFIED') {
+      setStockOutError('Barcode verification is required. Please scan the matching barcode before saving.');
       return;
     }
 
-    const qty = parseFloat(trimmedQty);
-    if (isNaN(qty) || !isFinite(qty)) {
-      setStockOutError('Please enter a valid numeric quantity.');
-      showNotification('Please enter a valid numeric quantity.', 'error');
+    const rollsToRemove = parseInt(stockOutRolls, 10);
+    if (isNaN(rollsToRemove) || rollsToRemove <= 0) {
+      setStockOutError('Please enter a valid number of rolls to remove (minimum 1).');
       return;
     }
 
-    if (qty <= 0) {
-      setStockOutError('Quantity must be greater than zero.');
-      showNotification('Quantity must be greater than zero.', 'error');
+    if (rollsToRemove > matchedStockOutItem.currentStock) {
+      setStockOutError(
+        `Cannot remove ${rollsToRemove} rolls. Only ${matchedStockOutItem.currentStock} rolls available in stock.`
+      );
       return;
     }
 
-    const targetMaterial = materialsWithStock.find((m) => m.id === stockOutMaterialId);
-    if (!targetMaterial) return;
-
-    const roundedQty = round2(qty);
-
-    // Strict validation: cannot exceed available stock
-    if (roundedQty > targetMaterial.currentStock) {
-      const err = `Insufficient stock. Available stock: ${targetMaterial.currentStock} ${targetMaterial.unit}.`;
-      setStockOutError(err);
-      showNotification(err, 'error');
-      return;
-    }
-
-    const stockBefore = targetMaterial.currentStock;
-    const stockAfter = round2(stockBefore - roundedQty);
-
-    const newTxn: StockTransaction = {
-      id: `txn-${Date.now()}`,
-      materialId: targetMaterial.id,
-      materialName: targetMaterial.name,
-      size: targetMaterial.size,
-      itemCode: targetMaterial.itemCode,
-      type: 'OUT',
-      quantity: roundedQty,
-      unit: targetMaterial.unit,
-      stockBefore,
-      stockAfter,
-      date: stockOutDate || new Date().toISOString().split('T')[0],
-      reference: stockOutRef.trim() || undefined,
-      createdAt: new Date().toISOString()
-    };
-
-    const updatedTxns = [newTxn, ...transactions];
-    setTransactions(updatedTxns);
-    saveStoredTransactions(updatedTxns);
-
-    showNotification(
-      `Stock OUT recorded: -${roundedQty} ${targetMaterial.unit} from ${targetMaterial.name} (${targetMaterial.size}). Remaining Stock: ${stockAfter} ${targetMaterial.unit}`
+    const success = executeStockTransaction(
+      matchedStockOutItem.id,
+      'OUT',
+      rollsToRemove,
+      stockOutDate
     );
 
-    // Reset inputs
-    setStockOutQty('');
-    setStockOutRef('');
-    setStockOutError('');
+    if (success) {
+      setStockOutRolls('');
+      setStockOutBarcodeCode('');
+      setStockOutVerificationStatus('IDLE');
+      stockOutRollsInputRef.current?.focus();
+    }
   };
 
-  // Open Add Material Modal
+  // -------------------------------------------------------------
+  // MATERIAL MASTER MODAL & HANDLERS
+  // -------------------------------------------------------------
+  const [isItemModalOpen, setIsItemModalOpen] = useState<boolean>(false);
+  const [editingItem, setEditingItem] = useState<MatrixInventoryItem | null>(null);
+  const [itemFormMaterial, setItemFormMaterial] = useState<string>('');
+  const [itemFormCategory, setItemFormCategory] = useState<string>('Frontlit Flex');
+  const [itemFormSize, setItemFormSize] = useState<string>('');
+  const [itemFormSecondary, setItemFormSecondary] = useState<string>('');
+  const [itemFormUnit, setItemFormUnit] = useState<string>('Rolls');
+  const [itemFormOpeningStock, setItemFormOpeningStock] = useState<string>('0');
+  const [itemFormMinStock, setItemFormMinStock] = useState<string>('2');
+  const [itemFormError, setItemFormError] = useState<string>('');
+
   const openAddModal = () => {
-    setEditingMaterialId(null);
-    setMatFormName('');
-    setMatFormCategory('Flex Media');
-    setMatFormSize('3 FT');
-    setMatFormRollLength('50');
-    setMatFormUnit('M');
-    setMatFormItemCode('');
-    setMatFormOpening('0');
-    setMatFormMinStock('50');
-    setIsMaterialModalOpen(true);
+    setEditingItem(null);
+    setItemFormMaterial('');
+    setItemFormCategory('Frontlit Flex');
+    setItemFormSize('');
+    setItemFormSecondary('');
+    setItemFormUnit('Rolls');
+    setItemFormOpeningStock('0');
+    setItemFormMinStock('2');
+    setItemFormError('');
+    setIsItemModalOpen(true);
   };
 
-  // Open Edit Material Modal
-  const openEditModal = (mat: MaterialItem) => {
-    setEditingMaterialId(mat.id);
-    setMatFormName(mat.name);
-    setMatFormCategory(mat.category);
-    setMatFormSize(mat.size);
-    setMatFormRollLength(mat.rollLength ? String(mat.rollLength) : '50');
-    setMatFormUnit(mat.unit);
-    setMatFormItemCode(mat.itemCode);
-    setMatFormOpening(String(mat.openingStock));
-    setMatFormMinStock(String(mat.minStock));
-    setIsMaterialModalOpen(true);
+  const openEditModal = (item: MatrixInventoryItem) => {
+    setEditingItem(item);
+    setItemFormMaterial(item.materialName);
+    setItemFormCategory(item.category);
+    setItemFormSize(item.variantSize);
+    setItemFormSecondary(item.secondaryVariant || '');
+    setItemFormUnit(item.unit);
+    setItemFormOpeningStock(item.openingStock.toString());
+    setItemFormMinStock(item.minStock.toString());
+    setItemFormError('');
+    setIsItemModalOpen(true);
   };
 
-  // Save Material (Add / Update)
-  const handleSaveMaterial = (e: React.FormEvent) => {
+  const handleSaveItemModal = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!matFormName.trim()) {
-      showNotification('Material name is required.', 'error');
-      return;
-    }
-    if (!matFormSize.trim()) {
-      showNotification('Size is required.', 'error');
+    setItemFormError('');
+
+    const trimMaterial = itemFormMaterial.trim();
+    const trimSize = itemFormSize.trim();
+    const trimSecondary = itemFormSecondary.trim();
+
+    if (!trimMaterial || !trimSize) {
+      setItemFormError('Material name and size/width are required.');
       return;
     }
 
-    // Auto-generate SKU/Barcode if left empty
-    let code = matFormItemCode.trim();
-    if (!code) {
-      const cleanName = matFormName.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4);
-      const cleanSize = matFormSize.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
-      code = `${cleanName}-${cleanSize}`;
+    const openingVal = parseInt(itemFormOpeningStock, 10);
+    const minVal = parseInt(itemFormMinStock, 10);
+
+    if (isNaN(openingVal) || openingVal < 0) {
+      setItemFormError('Opening stock must be 0 or greater.');
+      return;
     }
 
-    // Check SKU uniqueness
-    const existing = materials.find(
-      (m) => m.itemCode.toUpperCase() === code.toUpperCase() && m.id !== editingMaterialId
+    if (isNaN(minVal) || minVal < 0) {
+      setItemFormError('Minimum stock threshold must be 0 or greater.');
+      return;
+    }
+
+    const barcode = generateMatrixBarcode(trimMaterial, trimSize, trimSecondary || undefined);
+
+    const duplicate = items.find(
+      (i) =>
+        i.id !== editingItem?.id &&
+        i.materialName.toLowerCase() === trimMaterial.toLowerCase() &&
+        i.variantSize.toLowerCase() === trimSize.toLowerCase() &&
+        (i.secondaryVariant || '').toLowerCase() === trimSecondary.toLowerCase()
     );
-    if (existing) {
-      showNotification(`Item Code "${code}" already exists for ${existing.name} (${existing.size}). Must be unique.`, 'error');
+
+    if (duplicate) {
+      setItemFormError(`Item combination "${trimMaterial} - ${trimSize}" already exists.`);
       return;
     }
 
-    const opening = round2(parseFloat(matFormOpening) || 0);
-    const minStock = round2(parseFloat(matFormMinStock) || 0);
-    const rollLen = parseFloat(matFormRollLength) || 50;
-
-    if (editingMaterialId) {
-      // Edit existing
-      const updated = materials.map((m) => {
-        if (m.id === editingMaterialId) {
-          return {
-            ...m,
-            name: matFormName.trim(),
-            category: matFormCategory.trim() || 'General',
-            size: matFormSize.trim(),
-            rollLength: rollLen,
-            unit: matFormUnit.trim() || 'M',
-            itemCode: code,
-            barcode: code,
-            openingStock: opening,
-            minStock
-          };
-        }
-        return m;
-      });
-      setMaterials(updated);
-      saveStoredMaterials(updated);
-      showNotification('Material updated successfully.');
+    if (editingItem) {
+      const updated = items.map((i) =>
+        i.id === editingItem.id
+          ? {
+              ...i,
+              materialName: trimMaterial,
+              category: itemFormCategory,
+              variantSize: trimSize,
+              secondaryVariant: trimSecondary || undefined,
+              unit: itemFormUnit,
+              openingStock: openingVal,
+              minStock: minVal,
+              barcode
+            }
+          : i
+      );
+      setItems(updated);
+      saveStoredMatrixItems(updated);
+      showNotification(`Updated item "${trimMaterial} (${trimSize})".`);
     } else {
-      // Create new
-      const newMat: MaterialItem = {
-        id: `mat-${Date.now()}`,
-        name: matFormName.trim(),
-        category: matFormCategory.trim() || 'General',
-        size: matFormSize.trim(),
-        rollLength: rollLen,
-        unit: matFormUnit.trim() || 'M',
-        itemCode: code,
-        barcode: code,
-        openingStock: opening,
-        minStock,
+      const newItem: MatrixInventoryItem = {
+        id: `item-${Date.now()}`,
+        materialName: trimMaterial,
+        category: itemFormCategory,
+        variantSize: trimSize,
+        secondaryVariant: trimSecondary || undefined,
+        unit: itemFormUnit,
+        barcode,
+        openingStock: openingVal,
+        minStock: minVal,
         active: true,
         createdAt: new Date().toISOString().split('T')[0]
       };
-      const updated = [...materials, newMat];
-      setMaterials(updated);
-      saveStoredMaterials(updated);
-      showNotification(`New SKU "${newMat.itemCode}" (${newMat.name} - ${newMat.size}) created.`);
+      const updated = [newItem, ...items];
+      setItems(updated);
+      saveStoredMatrixItems(updated);
+      showNotification(`Added new item "${trimMaterial} (${trimSize})".`);
     }
 
-    setIsMaterialModalOpen(false);
+    setIsItemModalOpen(false);
   };
 
-  // Safe Deactivation / Soft Delete Logic
-  const handleToggleMaterialStatus = (id: string, name: string, currentActive: boolean) => {
-    const hasTransactions = transactions.some((t) => t.materialId === id);
-
-    if (currentActive) {
-      if (hasTransactions) {
-        if (
-          window.confirm(
-            `"${name}" has recorded transactions in history. To preserve audit integrity, it will be marked as INACTIVE (hidden from active stock but preserved in history). Continue?`
-          )
-        ) {
-          const updated = materials.map((m) => (m.id === id ? { ...m, active: false } : m));
-          setMaterials(updated);
-          saveStoredMaterials(updated);
-          showNotification(`Material "${name}" marked as Inactive.`);
-        }
-      } else {
-        if (window.confirm(`Delete "${name}" permanently? (This item has no recorded transactions).`)) {
-          const updated = materials.filter((m) => m.id !== id);
-          setMaterials(updated);
-          saveStoredMaterials(updated);
-          showNotification(`Material "${name}" deleted.`);
+  const handleToggleItemStatus = (id: string, name: string, currentStatus: boolean) => {
+    if (currentStatus) {
+      if (window.confirm(`Deactivate "${name}"? It will be hidden from daily operations.`)) {
+        const hasTxns = transactions.some((t) => t.itemId === id);
+        if (hasTxns) {
+          const updated = items.map((i) => (i.id === id ? { ...i, active: false } : i));
+          setItems(updated);
+          saveStoredMatrixItems(updated);
+          showNotification(`Item deactivated.`);
+        } else {
+          const updated = items.filter((i) => i.id !== id);
+          setItems(updated);
+          saveStoredMatrixItems(updated);
+          showNotification(`Item deleted.`);
         }
       }
     } else {
-      const updated = materials.map((m) => (m.id === id ? { ...m, active: true } : m));
-      setMaterials(updated);
-      saveStoredMaterials(updated);
-      showNotification(`Material "${name}" reactivated.`);
+      const updated = items.map((i) => (i.id === id ? { ...i, active: true } : i));
+      setItems(updated);
+      saveStoredMatrixItems(updated);
+      showNotification(`Item reactivated.`);
     }
   };
 
-  // Barcode Scanner Lookup Logic
-  const performBarcodeLookup = (codeToSearch: string) => {
-    const trimmed = codeToSearch.trim().toUpperCase();
-    if (!trimmed) {
-      setScannedMaterial(null);
-      setScanStatusMessage('');
+  // -------------------------------------------------------------
+  // QR LABELS PAGE STATE & PRINTING
+  // -------------------------------------------------------------
+  const [labelSearch, setLabelSearch] = useState<string>('');
+  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
+
+  const filteredLabelItems = useMemo(() => {
+    const q = labelSearch.trim().toLowerCase();
+    return itemsWithStock.filter((i) => {
+      if (!i.active) return false;
+      if (!q) return true;
+      return (
+        i.materialName.toLowerCase().includes(q) ||
+        i.variantSize.toLowerCase().includes(q) ||
+        (i.secondaryVariant && i.secondaryVariant.toLowerCase().includes(q)) ||
+        i.barcode.toLowerCase().includes(q)
+      );
+    });
+  }, [itemsWithStock, labelSearch]);
+
+  const toggleSelectLabel = (itemId: string) => {
+    setSelectedLabelIds((prev) =>
+      prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]
+    );
+  };
+
+  const toggleSelectAllLabels = () => {
+    if (selectedLabelIds.length === filteredLabelItems.length) {
+      setSelectedLabelIds([]);
+    } else {
+      setSelectedLabelIds(filteredLabelItems.map((i) => i.id));
+    }
+  };
+
+  const printSingleLabel = (item: MatrixItemWithStock) => {
+    setSelectedLabelIds([item.id]);
+    setTimeout(() => {
+      window.print();
+    }, 100);
+  };
+
+  const printSelectedLabels = () => {
+    if (selectedLabelIds.length === 0) {
+      showNotification('Please select at least one label to print.', 'error');
       return;
     }
-
-    const found = materialsWithStock.find(
-      (m) =>
-        m.barcode.toUpperCase() === trimmed ||
-        m.itemCode.toUpperCase() === trimmed ||
-        `${m.name} ${m.size}`.toUpperCase() === trimmed
-    );
-
-    if (found) {
-      setScannedMaterial(found);
-      setScanStatusMessage(`Found SKU: ${found.name} (${found.size}) - Available: ${found.currentStock} ${found.unit}`);
-    } else {
-      setScannedMaterial(null);
-      setScanStatusMessage(`No inventory item matches barcode "${codeToSearch}".`);
-    }
+    window.print();
   };
 
-  // Scanner Input Keydown Handler
-  const handleScannerKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      performBarcodeLookup(scannerQuery);
-    }
-  };
-
-  // Quick Action: Pre-fill Stock IN from Scanner
-  const quickStockInFromScanner = (mat: MaterialWithStock) => {
-    setStockInMaterialId(mat.id);
-    setActiveTab('stock-in');
+  const printAllLabels = () => {
+    setSelectedLabelIds(filteredLabelItems.map((i) => i.id));
     setTimeout(() => {
-      stockInQtyRef.current?.focus();
+      window.print();
     }, 100);
   };
 
-  // Quick Action: Pre-fill Stock OUT from Scanner
-  const quickStockOutFromScanner = (mat: MaterialWithStock) => {
-    setStockOutMaterialId(mat.id);
-    setActiveTab('stock-out');
-    setTimeout(() => {
-      stockOutQtyRef.current?.focus();
-    }, 100);
-  };
+  // -------------------------------------------------------------
+  // SEARCH & FILTER STATE FOR MATERIALS & TRANSACTIONS
+  // -------------------------------------------------------------
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
+  const [txnTypeFilter, setTxnTypeFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
 
-  // Export Inventory CSV
-  const exportInventoryCSV = () => {
-    const headers = [
-      'Material Name',
-      'Category',
-      'Size',
-      'Item Code (SKU)',
-      'Opening Stock (M)',
-      'Total Stock IN (M)',
-      'Total Stock OUT (M)',
-      'Current Balance (M)',
-      'Unit',
-      'Status'
-    ];
-    const rows = displayedMaterials.map((m) => [
-      `"${m.name.replace(/"/g, '""')}"`,
-      `"${m.category.replace(/"/g, '""')}"`,
-      `"${m.size.replace(/"/g, '""')}"`,
-      `"${m.itemCode}"`,
-      m.openingStock,
-      m.totalIn,
-      m.totalOut,
-      m.currentStock,
-      `"${m.unit}"`,
-      `"${m.status}"`
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `inventory_summary_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showNotification('Inventory summary exported to CSV.');
-  };
-
-  // Export Transactions CSV
-  const exportTransactionsCSV = () => {
-    const headers = [
-      'Date',
-      'Time',
-      'Material Name',
-      'Size',
-      'Item Code (SKU)',
-      'Type',
-      'Quantity (M)',
-      'Stock Before (M)',
-      'Stock After (M)',
-      'Reference / Note'
-    ];
-    const rows = filteredTransactions.map((t) => [
-      `"${t.date}"`,
-      `"${t.createdAt ? new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}"`,
-      `"${t.materialName.replace(/"/g, '""')}"`,
-      `"${t.size.replace(/"/g, '""')}"`,
-      `"${t.itemCode}"`,
-      `"${t.type}"`,
-      t.quantity,
-      t.stockBefore,
-      t.stockAfter,
-      `"${(t.reference || '').replace(/"/g, '""')}"`
-    ]);
-
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `transactions_history_${new Date().toISOString().split('T')[0]}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showNotification('Transaction history exported to CSV.');
-  };
-
-  // Filtered Materials for Dashboard & Material Master
-  const displayedMaterials = useMemo(() => {
-    return materialsWithStock.filter((m) => {
-      if (!showInactive && !m.active && activeTab === 'materials') {
+  const displayedItems = useMemo(() => {
+    return itemsWithStock.filter((i) => {
+      if (!showInactive && !i.active && activeTab === 'materials') {
         return false;
       }
-      if (!m.active && activeTab === 'dashboard') {
+      if (!i.active && activeTab === 'dashboard') {
         return false;
       }
 
       const matchesSearch =
-        m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        m.size.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        m.itemCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        m.category.toLowerCase().includes(searchQuery.toLowerCase());
+        i.materialName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        i.variantSize.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (i.secondaryVariant && i.secondaryVariant.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        i.barcode.toLowerCase().includes(searchQuery.toLowerCase());
 
-      const matchesCategory = categoryFilter === 'ALL' || m.category === categoryFilter;
-
-      let matchesStatus = true;
-      if (statusFilter === 'LOW_STOCK') {
-        matchesStatus = m.status === 'LOW_STOCK';
-      } else if (statusFilter === 'OUT_OF_STOCK') {
-        matchesStatus = m.status === 'OUT_OF_STOCK';
-      } else if (statusFilter === 'IN_STOCK') {
-        matchesStatus = m.status === 'IN_STOCK';
-      }
-
-      return matchesSearch && matchesCategory && matchesStatus;
+      const matchesCategory = categoryFilter === 'ALL' || i.category === categoryFilter;
+      return matchesSearch && matchesCategory;
     });
-  }, [materialsWithStock, searchQuery, categoryFilter, statusFilter, showInactive, activeTab]);
+  }, [itemsWithStock, searchQuery, categoryFilter, showInactive, activeTab]);
 
-  // Filtered Transactions
   const filteredTransactions = useMemo(() => {
     return transactions.filter((t) => {
       const matchesType = txnTypeFilter === 'ALL' || t.type === txnTypeFilter;
       const matchesSearch =
         t.materialName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.size.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        t.itemCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (t.reference && t.reference.toLowerCase().includes(searchQuery.toLowerCase()));
-
+        t.variantSize.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (t.secondaryVariant && t.secondaryVariant.toLowerCase().includes(searchQuery.toLowerCase())) ||
+        t.barcode.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesType && matchesSearch;
     });
   }, [transactions, txnTypeFilter, searchQuery]);
 
-  // Reset to default sample data
-  const handleResetData = () => {
-    if (window.confirm('Reset all inventory and transactions to standard verified sample dataset?')) {
-      setMaterials(INITIAL_MATERIALS);
-      saveStoredMaterials(INITIAL_MATERIALS);
-      setTransactions(INITIAL_TRANSACTIONS);
-      saveStoredTransactions(INITIAL_TRANSACTIONS);
-      showNotification('Dataset restored to verified baseline.');
+  // -------------------------------------------------------------
+  // CLIENT EXCEL MATRIX VIEW DATA COMPUTATION
+  // -------------------------------------------------------------
+  const matrixData = useMemo(() => {
+    // 1. Group roll materials (Width columns)
+    const rollItems = itemsWithStock.filter((i) => i.active && i.unit === 'Rolls');
+    const rollSizes = Array.from(new Set(rollItems.map((i) => i.variantSize))).sort((a, b) => {
+      const numA = parseFloat(a);
+      const numB = parseFloat(b);
+      if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+      return a.localeCompare(b);
+    });
+
+    const rollMaterials = Array.from(new Set(rollItems.map((i) => i.materialName))).sort();
+    const rollMatrixRows = rollMaterials.map((matName) => {
+      const matItems = rollItems.filter((i) => i.materialName === matName);
+      const rowTotals = matItems.reduce((sum, i) => sum + i.currentStock, 0);
+      const cells: { [size: string]: MatrixItemWithStock | undefined } = {};
+      matItems.forEach((i) => {
+        cells[i.variantSize] = i;
+      });
+      return {
+        materialName: matName,
+        category: matItems[0]?.category || 'Roll Material',
+        cells,
+        total: rowTotals
+      };
+    });
+
+    // 2. Group sheet materials (e.g. PVC Foam Sheet with Size x Thickness)
+    const sheetItems = itemsWithStock.filter((i) => i.active && i.unit !== 'Rolls');
+    const sheetRows = Array.from(new Set(sheetItems.map((i) => i.materialName))).map((matName) => {
+      const matItems = sheetItems.filter((i) => i.materialName === matName);
+      return {
+        materialName: matName,
+        items: matItems,
+        total: matItems.reduce((sum, i) => sum + i.currentStock, 0)
+      };
+    });
+
+    return {
+      rollSizes,
+      rollMatrixRows,
+      sheetRows
+    };
+  }, [itemsWithStock]);
+
+  // Reset sample dataset helper
+  const handleResetSampleData = () => {
+    if (window.confirm('Reset inventory and transaction history to the baseline client Excel sheet data?')) {
+      setItems(INITIAL_MATRIX_ITEMS);
+      setTransactions(INITIAL_MATRIX_TRANSACTIONS);
+      saveStoredMatrixItems(INITIAL_MATRIX_ITEMS);
+      saveStoredMatrixTransactions(INITIAL_MATRIX_TRANSACTIONS);
+      showNotification('Restored baseline Excel sheet dataset.');
     }
   };
 
+  // -------------------------------------------------------------
+  // STANDALONE MOBILE ITEM VIEW (If URL is /item/:id)
+  // -------------------------------------------------------------
+  if (selectedMobileItemId) {
+    const targetItem = itemsWithStock.find((i) => i.id === selectedMobileItemId);
+    if (targetItem) {
+      return (
+        <MobileItemView
+          item={targetItem}
+          onStockChange={(itemId, type, qty) => executeStockTransaction(itemId, type, qty)}
+          onBackToDashboard={closeMobileItemPage}
+        />
+      );
+    } else {
+      return (
+        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+          <div className="bg-white p-6 rounded-2xl shadow-lg border border-slate-200 max-w-sm w-full text-center space-y-4">
+            <AlertCircle className="w-12 h-12 text-amber-500 mx-auto" />
+            <h2 className="text-lg font-bold text-slate-900">Item Not Found</h2>
+            <p className="text-xs text-slate-500">
+              The scanned item code ({selectedMobileItemId}) does not exist or may have been deleted.
+            </p>
+            <button
+              onClick={closeMobileItemPage}
+              className="w-full py-2.5 bg-slate-900 text-white font-bold rounded-xl text-xs hover:bg-slate-800"
+            >
+              Go to Full Dashboard
+            </button>
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // -------------------------------------------------------------
+  // DESKTOP / MAIN APPLICATION VIEW
+  // -------------------------------------------------------------
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
       {/* Toast Notification */}
       {notification && (
-        <div
-          className={`no-print fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-xl text-xs sm:text-sm font-semibold flex items-center space-x-2 transition-all duration-300 ${
-            notification.type === 'error'
-              ? 'bg-red-600 text-white shadow-red-500/20'
-              : 'bg-emerald-600 text-white shadow-emerald-500/20'
-          }`}
-        >
-          {notification.type === 'error' ? (
-            <AlertCircle className="w-5 h-5 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-5 h-5 shrink-0" />
-          )}
-          <span>{notification.message}</span>
+        <div className="fixed top-4 right-4 z-50 transition-all max-w-md print:hidden">
+          <div
+            className={`p-3.5 rounded-xl shadow-lg border flex items-center space-x-2 text-xs font-semibold ${
+              notification.type === 'success'
+                ? 'bg-emerald-900 text-white border-emerald-800'
+                : 'bg-red-900 text-white border-red-800'
+            }`}
+          >
+            {notification.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-300 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-red-300 shrink-0" />
+            )}
+            <span>{notification.message}</span>
+            <button onClick={() => setNotification(null)} className="ml-auto pl-2 text-slate-300 hover:text-white">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Main Top Header */}
-      <header className="no-print bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center space-x-3">
-            <div className="h-9 w-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-sm">
-              <Box className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-base sm:text-lg font-bold text-slate-900 leading-tight">RollPrint IMS</h1>
-              <p className="text-[11px] text-slate-500">Inventory Management System</p>
-            </div>
+      {/* Camera Scanner Modal */}
+      <CameraScannerModal
+        isOpen={cameraScannerOpen}
+        onClose={() => setCameraScannerOpen(false)}
+        onScanSuccess={handleCameraScanSuccess}
+        title={cameraScannerTarget === 'stock-in' ? 'Scan Code for Stock IN' : 'Scan Code for Stock OUT'}
+      />
+
+      {/* Quick Stock Update Modal from Matrix Click */}
+      {modalItem && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
+          <div className="w-full max-w-md animate-in fade-in zoom-in duration-150">
+            <MobileItemView
+              item={modalItem}
+              isModal={true}
+              onClose={() => setModalItem(null)}
+              onStockChange={(itemId, type, qty) => {
+                executeStockTransaction(itemId, type, qty);
+                const refreshed = itemsWithStock.find((i) => i.id === itemId);
+                if (refreshed) {
+                  setModalItem({
+                    ...refreshed,
+                    currentStock:
+                      type === 'IN' ? refreshed.currentStock + qty : Math.max(0, refreshed.currentStock - qty)
+                  });
+                }
+              }}
+            />
           </div>
+        </div>
+      )}
 
-          {/* Navigation Bar */}
-          <nav className="flex items-center space-x-1 overflow-x-auto py-1">
-            <button
-              onClick={() => {
-                setActiveTab('dashboard');
-                setSearchQuery('');
-              }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-colors ${
-                activeTab === 'dashboard'
-                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4" />
-              <span>Dashboard</span>
-            </button>
+      {/* Printable Area for QR Labels (@media print) */}
+      <div className="hidden print:block print-label-grid">
+        {(selectedLabelIds.length > 0
+          ? itemsWithStock.filter((i) => selectedLabelIds.includes(i.id))
+          : filteredLabelItems
+        ).map((item) => (
+          <div key={item.id} className="print-label-item">
+            <QRCodeLabel item={item} itemUrl={getItemWebUrl(item.id)} />
+          </div>
+        ))}
+      </div>
 
-            <button
-              onClick={() => {
-                setActiveTab('materials');
-                setSearchQuery('');
-              }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-colors ${
-                activeTab === 'materials'
-                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <Layers className="w-4 h-4" />
-              <span>Materials</span>
-            </button>
+      {/* Main App Header */}
+      <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 print:hidden">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <div className="flex items-center justify-between h-16">
+            {/* Logo & Title */}
+            <div className="flex items-center space-x-3">
+              <div className="p-2 bg-indigo-600 rounded-xl shadow-inner text-white">
+                <Box className="w-5 h-5 stroke-[2.5]" />
+              </div>
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h1 className="text-base font-black tracking-tight text-white">
+                    RollPrint <span className="text-indigo-400 font-medium">IMS</span>
+                  </h1>
+                  <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-950 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded-full">
+                    Excel Roll Tracker
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Digital Inventory & Roll-Count Matrix
+                </p>
+              </div>
+            </div>
 
-            <button
-              onClick={() => {
-                setActiveTab('stock-in');
-                setStockInError('');
-              }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-colors ${
-                activeTab === 'stock-in'
-                  ? 'bg-emerald-50 text-emerald-700 font-bold border border-emerald-200'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <ArrowDownToLine className="w-4 h-4 text-emerald-600" />
-              <span>Stock IN</span>
-            </button>
+            {/* Navigation Tabs */}
+            <nav className="flex items-center space-x-1 sm:space-x-2 overflow-x-auto py-2">
+              <button
+                onClick={() => setActiveTab('dashboard')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                  activeTab === 'dashboard'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                <span>Dashboard</span>
+              </button>
 
-            <button
-              onClick={() => {
-                setActiveTab('stock-out');
-                setStockOutError('');
-              }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-colors ${
-                activeTab === 'stock-out'
-                  ? 'bg-amber-50 text-amber-700 font-bold border border-amber-200'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <ArrowUpFromLine className="w-4 h-4 text-amber-600" />
-              <span>Stock OUT</span>
-            </button>
+              <button
+                onClick={() => setActiveTab('materials')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                  activeTab === 'materials'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <Layers className="w-3.5 h-3.5" />
+                <span>Materials</span>
+              </button>
 
-            <button
-              onClick={() => {
-                setActiveTab('transactions');
-                setSearchQuery('');
-              }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-colors ${
-                activeTab === 'transactions'
-                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <History className="w-4 h-4" />
-              <span>Transactions</span>
-            </button>
+              <button
+                onClick={() => {
+                  setActiveTab('stock-in');
+                  setTimeout(() => stockInRollsInputRef.current?.focus(), 100);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                  activeTab === 'stock-in'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-emerald-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <ArrowDownToLine className="w-3.5 h-3.5" />
+                <span>Stock IN</span>
+              </button>
 
-            <button
-              onClick={() => {
-                setActiveTab('barcodes');
-                setSearchQuery('');
-              }}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold flex items-center space-x-1.5 transition-colors ${
-                activeTab === 'barcodes'
-                  ? 'bg-indigo-50 text-indigo-700 font-bold border border-indigo-200'
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-              }`}
-            >
-              <BarcodeIcon className="w-4 h-4" />
-              <span>Barcodes</span>
-            </button>
-          </nav>
+              <button
+                onClick={() => {
+                  setActiveTab('stock-out');
+                  setTimeout(() => stockOutRollsInputRef.current?.focus(), 100);
+                }}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                  activeTab === 'stock-out'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-amber-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <ArrowUpFromLine className="w-3.5 h-3.5" />
+                <span>Stock OUT</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('transactions')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                  activeTab === 'transactions'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <History className="w-3.5 h-3.5" />
+                <span>Transactions</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('qr-labels')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                  activeTab === 'qr-labels'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-indigo-400 hover:text-white hover:bg-slate-800'
+                }`}
+              >
+                <QrCode className="w-3.5 h-3.5" />
+                <span>QR Labels</span>
+              </button>
+            </nav>
+          </div>
         </div>
       </header>
 
-      {/* Main Body Content */}
-      <main className="flex-1 max-w-7xl mx-auto w-full p-4 sm:p-6 space-y-6">
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6 print:hidden">
         {/* ========================================================= */}
         {/* TAB 1: DASHBOARD */}
         {/* ========================================================= */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            {/* Top Cards: Active SKUs | Stock IN | Stock OUT | Current Stock */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">
-                  Active SKUs
+            {/* KPI Summary Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                  Total Active Items
+                </span>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl sm:text-3xl font-black text-slate-900 font-mono">
+                    {dashboardMetrics.totalItems}
+                  </span>
+                  <span className="text-xs font-semibold text-slate-500">Variants</span>
                 </div>
-                <div className="text-2xl font-bold text-slate-900 mt-1">
-                  {dashboardMetrics.activeSkus}
-                </div>
-                <div className="text-[11px] text-slate-400 mt-0.5">Inventory items / sizes</div>
               </div>
 
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-                <div className="text-xs font-medium text-emerald-600 uppercase tracking-wider flex items-center space-x-1">
-                  <TrendingUp className="w-3.5 h-3.5" />
-                  <span>Stock IN</span>
+              <div className="bg-white p-4 rounded-2xl border border-indigo-100 shadow-xs bg-gradient-to-br from-white to-indigo-50/40">
+                <span className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block">
+                  Current Stock Available
+                </span>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl sm:text-3xl font-black text-indigo-900 font-mono">
+                    {dashboardMetrics.currentStock}
+                  </span>
+                  <span className="text-xs font-bold text-indigo-700">Total Rolls</span>
                 </div>
-                <div className="text-2xl font-bold text-slate-900 mt-1">
-                  {dashboardMetrics.totalStockIn.toLocaleString()} M
-                </div>
-                <div className="text-[11px] text-slate-400 mt-0.5">Total received</div>
               </div>
 
-              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
-                <div className="text-xs font-medium text-amber-600 uppercase tracking-wider flex items-center space-x-1">
-                  <TrendingDown className="w-3.5 h-3.5" />
-                  <span>Stock OUT</span>
+              <div className="bg-white p-4 rounded-2xl border border-emerald-100 shadow-xs">
+                <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block flex items-center space-x-1">
+                  <TrendingUp className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Total Stock IN</span>
+                </span>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl sm:text-3xl font-black text-emerald-700 font-mono">
+                    +{dashboardMetrics.totalStockIn}
+                  </span>
+                  <span className="text-xs font-semibold text-emerald-600">Rolls</span>
                 </div>
-                <div className="text-2xl font-bold text-slate-900 mt-1">
-                  {dashboardMetrics.totalStockOut.toLocaleString()} M
-                </div>
-                <div className="text-[11px] text-slate-400 mt-0.5">Total consumed</div>
               </div>
 
-              <div className="bg-white p-4 rounded-xl border-2 border-indigo-200 bg-indigo-50/30 shadow-xs">
-                <div className="text-xs font-semibold text-indigo-700 uppercase tracking-wider">
-                  Current Stock
-                </div>
-                <div className="text-2xl font-extrabold text-indigo-900 mt-1">
-                  {dashboardMetrics.currentStock.toLocaleString()} M
-                </div>
-                <div className="text-[11px] mt-0.5">
-                  {dashboardMetrics.outOfStockCount > 0 || dashboardMetrics.lowStockCount > 0 ? (
-                    <span className="text-amber-700 font-semibold">
-                      ⚠️ {dashboardMetrics.outOfStockCount} out of stock, {dashboardMetrics.lowStockCount} low
-                    </span>
-                  ) : (
-                    <span className="text-emerald-700 font-medium">All items healthy</span>
-                  )}
+              <div className="bg-white p-4 rounded-2xl border border-amber-100 shadow-xs">
+                <span className="text-[11px] font-bold text-amber-700 uppercase tracking-wider block flex items-center space-x-1">
+                  <TrendingDown className="w-3.5 h-3.5 text-amber-600" />
+                  <span>Total Stock OUT</span>
+                </span>
+                <div className="mt-2 flex items-baseline justify-between">
+                  <span className="text-2xl sm:text-3xl font-black text-amber-700 font-mono">
+                    -{dashboardMetrics.totalStockOut}
+                  </span>
+                  <span className="text-xs font-semibold text-amber-600">Rolls</span>
                 </div>
               </div>
             </div>
 
-            {/* Inventory Summary Table */}
-            <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-              <div className="p-4 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+            {/* Matrix Header & Controls */}
+            <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">Current Inventory Summary</h2>
-                  <p className="text-xs text-slate-500">
-                    Formula: <span className="font-mono text-slate-700">Current = Opening + Total IN - Total OUT</span>
+                  <div className="flex items-center space-x-2">
+                    <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
+                      Inventory Stock Matrix
+                    </h2>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      Click any cell to update stock
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Excel-style roll matrix. Rows = Materials, Columns = Sizes, Cells = Current Number of Rolls.
                   </p>
                 </div>
 
-                {/* Filters & Export */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative">
-                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      placeholder="Search material, size, or SKU..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-indigo-500 text-slate-800 w-44 sm:w-52"
-                    />
+                <div className="flex items-center space-x-2">
+                  <div className="inline-flex rounded-lg bg-slate-100 p-0.5 border border-slate-200">
+                    <button
+                      onClick={() => setDashboardViewMode('matrix')}
+                      className={`px-3 py-1 rounded-md text-xs font-bold flex items-center space-x-1 transition-colors ${
+                        dashboardViewMode === 'matrix'
+                          ? 'bg-white text-indigo-700 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <Grid className="w-3.5 h-3.5" />
+                      <span>Matrix View</span>
+                    </button>
+                    <button
+                      onClick={() => setDashboardViewMode('table')}
+                      className={`px-3 py-1 rounded-md text-xs font-bold flex items-center space-x-1 transition-colors ${
+                        dashboardViewMode === 'table'
+                          ? 'bg-white text-indigo-700 shadow-xs'
+                          : 'text-slate-600 hover:text-slate-900'
+                      }`}
+                    >
+                      <TableIcon className="w-3.5 h-3.5" />
+                      <span>Table List</span>
+                    </button>
                   </div>
 
-                  <select
-                    value={categoryFilter}
-                    onChange={(e) => setCategoryFilter(e.target.value)}
-                    className="py-1.5 px-2.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:outline-hidden"
-                  >
-                    <option value="ALL">All Categories</option>
-                    {categories.map((c) => (
-                      <option key={c} value={c}>
-                        {c}
-                      </option>
-                    ))}
-                  </select>
-
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => setStatusFilter(e.target.value)}
-                    className="py-1.5 px-2.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:outline-hidden"
-                  >
-                    <option value="ALL">All Status</option>
-                    <option value="IN_STOCK">In Stock</option>
-                    <option value="LOW_STOCK">Low Stock</option>
-                    <option value="OUT_OF_STOCK">Out of Stock</option>
-                  </select>
-
                   <button
-                    onClick={exportInventoryCSV}
-                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors border border-slate-300"
-                    title="Export Inventory as CSV"
+                    onClick={() => setActiveTab('stock-in')}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>CSV</span>
+                    <ArrowDownToLine className="w-3.5 h-3.5" />
+                    <span>+ Stock IN</span>
                   </button>
                 </div>
               </div>
 
-              {/* Table */}
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
-                      <th className="py-3 px-4">Material</th>
-                      <th className="py-3 px-4">Size</th>
-                      <th className="py-3 px-4">SKU / Code</th>
-                      <th className="py-3 px-4 text-right">Opening</th>
-                      <th className="py-3 px-4 text-right text-emerald-600">Total IN</th>
-                      <th className="py-3 px-4 text-right text-amber-600">Total OUT</th>
-                      <th className="py-3 px-4 text-right font-bold text-slate-900">Current Stock</th>
-                      <th className="py-3 px-4 text-center">Unit</th>
-                      <th className="py-3 px-4 text-center">Status</th>
-                      <th className="py-3 px-4 text-center">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {displayedMaterials.length === 0 ? (
-                      <tr>
-                        <td colSpan={10} className="py-8 text-center text-slate-400">
-                          No matching inventory items found.
-                        </td>
-                      </tr>
-                    ) : (
-                      displayedMaterials.map((mat) => (
-                        <tr key={mat.id} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="py-3 px-4 font-semibold text-slate-900">{mat.name}</td>
-                          <td className="py-3 px-4 font-medium text-slate-700">{mat.size}</td>
-                          <td className="py-3 px-4 font-mono font-semibold text-indigo-700">
-                            {mat.itemCode}
-                          </td>
-                          <td className="py-3 px-4 text-right text-slate-500 font-mono">
-                            {mat.openingStock} {mat.unit}
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono font-medium text-emerald-600">
-                            +{mat.totalIn} {mat.unit}
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono font-medium text-amber-600">
-                            -{mat.totalOut} {mat.unit}
-                          </td>
-                          <td className="py-3 px-4 text-right font-mono font-bold text-sm text-slate-900">
-                            {mat.currentStock} {mat.unit}
-                          </td>
-                          <td className="py-3 px-4 text-center text-slate-500">{mat.unit}</td>
-                          <td className="py-3 px-4 text-center">
-                            {mat.status === 'IN_STOCK' && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                In Stock
-                              </span>
-                            )}
-                            {mat.status === 'LOW_STOCK' && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                                Low Stock
-                              </span>
-                            )}
-                            {mat.status === 'OUT_OF_STOCK' && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
-                                Out of Stock
-                              </span>
-                            )}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <div className="inline-flex items-center space-x-1">
-                              <button
-                                onClick={() => {
-                                  setStockInMaterialId(mat.id);
-                                  setActiveTab('stock-in');
-                                }}
-                                className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-medium rounded text-[11px] border border-emerald-200"
-                                title="Stock IN"
+              {/* VIEW 1: EXCEL MATRIX VIEW */}
+              {dashboardViewMode === 'matrix' && (
+                <div className="space-y-6 pt-2">
+                  {/* Roll Materials Matrix Table */}
+                  <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                    <div className="overflow-x-auto">
+                      <table className="w-full border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-900 text-white font-bold text-center">
+                            <th className="py-3 px-4 text-left font-black tracking-wide text-xs w-48 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
+                              Material Name
+                            </th>
+                            {matrixData.rollSizes.map((size) => (
+                              <th
+                                key={size}
+                                className="py-3 px-3 min-w-[70px] border-r border-slate-800 font-mono text-indigo-200"
                               >
-                                + IN
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setStockOutMaterialId(mat.id);
-                                  setActiveTab('stock-out');
-                                }}
-                                className="px-2 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 font-medium rounded text-[11px] border border-amber-200"
-                                title="Stock OUT"
-                              >
-                                - OUT
-                              </button>
+                                {size} M
+                              </th>
+                            ))}
+                            <th className="py-3 px-4 bg-slate-950 font-black text-white min-w-[80px]">
+                              Total
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {matrixData.rollMatrixRows.map((row) => (
+                            <tr key={row.materialName} className="hover:bg-indigo-50/40 transition-colors">
+                              {/* Row Header (Material Name) */}
+                              <td className="py-3 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
+                                <div className="leading-tight">
+                                  <span>{row.materialName}</span>
+                                  <span className="block text-[10px] text-slate-400 font-normal">
+                                    {row.category}
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* Size Columns */}
+                              {matrixData.rollSizes.map((size) => {
+                                const item = row.cells[size];
+                                if (!item) {
+                                  return (
+                                    <td
+                                      key={size}
+                                      className="py-3 px-3 text-center text-slate-300 border-r border-slate-100 font-mono bg-slate-50/50"
+                                    >
+                                      —
+                                    </td>
+                                  );
+                                }
+
+                                const qty = item.currentStock;
+                                const isOutOfStock = qty <= 0;
+                                const isLowStock = qty > 0 && qty <= item.minStock;
+
+                                return (
+                                  <td
+                                    key={size}
+                                    onClick={() => setModalItem(item)}
+                                    className={`py-3 px-3 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
+                                      isOutOfStock
+                                        ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                        : isLowStock
+                                        ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                        : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
+                                    }`}
+                                    title={`Click to update ${item.materialName} (${item.variantSize}) - Current: ${qty} Rolls`}
+                                  >
+                                    <span className="text-sm">{qty}</span>
+                                  </td>
+                                );
+                              })}
+
+                              {/* Row Total */}
+                              <td className="py-3 px-4 text-center font-mono font-black text-slate-900 bg-slate-50">
+                                {row.total}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {/* Secondary Sheet Materials (e.g. PVC Foam Sheets) */}
+                  {matrixData.sheetRows.length > 0 && (
+                    <div className="space-y-2 pt-2">
+                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        Rigid Sheet Substrates (Thickness Variants)
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                        {matrixData.sheetRows.map((group) => (
+                          <div
+                            key={group.materialName}
+                            className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-xs text-slate-900">
+                                {group.materialName}
+                              </span>
+                              <span className="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">
+                                Total: {group.total}
+                              </span>
                             </div>
-                          </td>
+                            <div className="grid grid-cols-2 gap-1.5">
+                              {group.items.map((item) => (
+                                <div
+                                  key={item.id}
+                                  onClick={() => setModalItem(item)}
+                                  className="p-2 bg-white rounded-lg border border-slate-200 text-center cursor-pointer hover:border-indigo-500 hover:bg-indigo-50/30 transition-all"
+                                >
+                                  <span className="text-[10px] text-slate-500 block font-mono">
+                                    {item.variantSize} - {item.secondaryVariant}
+                                  </span>
+                                  <span className="font-mono font-bold text-sm text-slate-900">
+                                    {item.currentStock} {item.unit}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* VIEW 2: TABLE LIST VIEW */}
+              {dashboardViewMode === 'table' && (
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
+                          <th className="py-3 px-4">Material Name</th>
+                          <th className="py-3 px-4">Category</th>
+                          <th className="py-3 px-4">Size / Width</th>
+                          <th className="py-3 px-4 text-right">Current Stock</th>
+                          <th className="py-3 px-4 text-center">Status</th>
+                          <th className="py-3 px-4 text-center">Quick Action</th>
                         </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {displayedItems.map((item) => (
+                          <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                            <td className="py-3 px-4 font-bold text-slate-900">{item.materialName}</td>
+                            <td className="py-3 px-4 text-slate-600">{item.category}</td>
+                            <td className="py-3 px-4 font-mono font-medium text-slate-800">
+                              {item.variantSize}
+                              {item.secondaryVariant ? ` (${item.secondaryVariant})` : ''}
+                            </td>
+                            <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
+                              {item.currentStock} {item.unit}
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              {item.status === 'IN_STOCK' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  In Stock
+                                </span>
+                              )}
+                              {item.status === 'LOW_STOCK' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                  Low Stock
+                                </span>
+                              )}
+                              {item.status === 'OUT_OF_STOCK' && (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
+                                  Out of Stock
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-center">
+                              <button
+                                onClick={() => setModalItem(item)}
+                                className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-md text-[11px] border border-indigo-200"
+                              >
+                                Update Stock
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {/* ========================================================= */}
-        {/* TAB 2: MATERIAL MASTER */}
+        {/* TAB 2: MATERIALS MASTER */}
         {/* ========================================================= */}
         {activeTab === 'materials' && (
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Material Master</h2>
+                <h2 className="text-lg font-bold text-slate-900">Materials Master</h2>
                 <p className="text-xs text-slate-500">
-                  Manage materials, size specifications, unique SKUs, and stock alert levels.
+                  Manage inventory materials, size variants, and barcodes.
                 </p>
               </div>
 
@@ -966,36 +1308,23 @@ export default function App() {
                   className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-colors"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>Add Material</span>
+                  <span>Add Material Item</span>
                 </button>
               </div>
             </div>
 
-            {/* Search & Filter Bar */}
-            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs flex flex-wrap items-center gap-3">
-              <div className="relative flex-1 min-w-[200px]">
+            {/* Search Bar */}
+            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
+              <div className="relative">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search by name, size, or item code..."
+                  placeholder="Search by Material Name, Size, or Barcode..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
-
-              <select
-                value={categoryFilter}
-                onChange={(e) => setCategoryFilter(e.target.value)}
-                className="py-1.5 px-3 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-700 focus:outline-hidden"
-              >
-                <option value="ALL">All Categories</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
             </div>
 
             {/* Materials Table */}
@@ -1007,8 +1336,7 @@ export default function App() {
                       <th className="py-3 px-4">Material Name</th>
                       <th className="py-3 px-4">Category</th>
                       <th className="py-3 px-4">Size / Width</th>
-                      <th className="py-3 px-4">Roll Length</th>
-                      <th className="py-3 px-4">Unique SKU / Barcode</th>
+                      <th className="py-3 px-4">Unique Barcode</th>
                       <th className="py-3 px-4 text-right">Current Stock</th>
                       <th className="py-3 px-4 text-right">Min Stock</th>
                       <th className="py-3 px-4 text-center">Status</th>
@@ -1016,41 +1344,37 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {displayedMaterials.map((mat) => (
+                    {displayedItems.map((item) => (
                       <tr
-                        key={mat.id}
+                        key={item.id}
                         className={`hover:bg-slate-50 transition-colors ${
-                          !mat.active ? 'bg-slate-50/60 opacity-65' : ''
+                          !item.active ? 'bg-slate-50/60 opacity-65' : ''
                         }`}
                       >
                         <td className="py-3 px-4 font-bold text-slate-900">
-                          {mat.name}
-                          {!mat.active && (
+                          {item.materialName}
+                          {!item.active && (
                             <span className="ml-2 text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-normal">
                               Inactive
                             </span>
                           )}
                         </td>
-                        <td className="py-3 px-4 text-slate-600">
-                          <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[11px]">
-                            {mat.category}
-                          </span>
+                        <td className="py-3 px-4 text-slate-600">{item.category}</td>
+                        <td className="py-3 px-4 font-mono font-medium text-slate-800">
+                          {item.variantSize}
+                          {item.secondaryVariant ? ` (${item.secondaryVariant})` : ''}
                         </td>
-                        <td className="py-3 px-4 font-medium text-slate-800">{mat.size}</td>
-                        <td className="py-3 px-4 text-slate-500 font-mono">
-                          {mat.rollLength ? `${mat.rollLength} ${mat.unit}` : '-'}
-                        </td>
-                        <td className="py-3 px-4 font-mono font-semibold text-indigo-700">
-                          {mat.itemCode}
+                        <td className="py-3 px-4 font-mono font-bold text-indigo-700">
+                          {item.barcode}
                         </td>
                         <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
-                          {mat.currentStock} {mat.unit}
+                          {item.currentStock} {item.unit}
                         </td>
                         <td className="py-3 px-4 text-right font-mono text-slate-500">
-                          {mat.minStock} {mat.unit}
+                          {item.minStock} {item.unit}
                         </td>
                         <td className="py-3 px-4 text-center">
-                          {mat.active ? (
+                          {item.active ? (
                             <span className="text-emerald-700 font-medium">Active</span>
                           ) : (
                             <span className="text-slate-400 font-medium">Deactivated</span>
@@ -1059,26 +1383,24 @@ export default function App() {
                         <td className="py-3 px-4 text-center">
                           <div className="inline-flex items-center space-x-1.5">
                             <button
-                              onClick={() => openEditModal(mat)}
+                              onClick={() => openEditModal(item)}
                               className="p-1 text-slate-500 hover:text-indigo-600 rounded hover:bg-slate-100"
-                              title="Edit Material"
+                              title="Edit Item"
                             >
                               <Edit2 className="w-4 h-4" />
                             </button>
                             <button
                               onClick={() =>
-                                handleToggleMaterialStatus(
-                                  mat.id,
-                                  `${mat.name} (${mat.size})`,
-                                  mat.active
+                                handleToggleItemStatus(
+                                  item.id,
+                                  `${item.materialName} (${item.variantSize})`,
+                                  item.active
                                 )
                               }
                               className={`p-1 rounded hover:bg-slate-100 ${
-                                mat.active
-                                  ? 'text-slate-400 hover:text-red-600'
-                                  : 'text-slate-400 hover:text-emerald-600'
+                                item.active ? 'text-slate-400 hover:text-red-600' : 'text-slate-400 hover:text-emerald-600'
                               }`}
-                              title={mat.active ? 'Deactivate Material' : 'Reactivate Material'}
+                              title={item.active ? 'Deactivate' : 'Reactivate'}
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -1094,143 +1416,311 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 3: STOCK IN */}
+        {/* TAB 3: STOCK IN (With Barcode Verification AFTER Calculation) */}
         {/* ========================================================= */}
         {activeTab === 'stock-in' && (
-          <div className="max-w-2xl mx-auto space-y-5">
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-5">
-              <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
-                <div className="p-2 rounded-lg bg-emerald-50 text-emerald-700">
-                  <ArrowDownToLine className="w-5 h-5" />
+          <div className="max-w-xl mx-auto space-y-5">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+              <div className="flex items-center space-x-3 border-b border-slate-100 pb-4">
+                <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-700">
+                  <ArrowDownToLine className="w-6 h-6 stroke-[2.5]" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">Stock IN — Goods Receiving</h2>
+                  <h2 className="text-lg font-black text-slate-900 tracking-tight">Stock IN</h2>
                   <p className="text-xs text-slate-500">
-                    Add incoming material stock. Current stock will update automatically.
+                    Add rolls into inventory. Barcode verification required before saving.
                   </p>
                 </div>
               </div>
 
               {stockInError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center space-x-2 font-medium">
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center space-x-2 font-medium">
                   <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
                   <span>{stockInError}</span>
                 </div>
               )}
 
               <form onSubmit={handleStockInSubmit} className="space-y-4 text-xs">
-                {/* Select Material */}
+                {/* 1. Material Dropdown (Displays ONLY material names) */}
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Select Material <span className="text-red-500">*</span>
+                  <label className="block text-slate-700 font-bold mb-1">
+                    1. Material <span className="text-red-500">*</span>
                   </label>
                   <select
-                    value={stockInMaterialId}
+                    value={stockInMaterial}
                     onChange={(e) => {
-                      setStockInMaterialId(e.target.value);
+                      setStockInMaterial(e.target.value);
+                      setStockInVariantSize('');
+                      setStockInSecondary('');
+                      setStockInBarcodeCode('');
+                      setStockInVerificationStatus('IDLE');
                       setStockInError('');
                     }}
                     required
-                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                   >
-                    <option value="">-- Choose Material &amp; Size --</option>
-                    {materialsWithStock
-                      .filter((m) => m.active)
-                      .map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name} — {m.size} [SKU: {m.itemCode}] (Current: {m.currentStock} {m.unit})
-                        </option>
-                      ))}
+                    <option value="">-- Select Material --</option>
+                    {uniqueMaterialNames.map((mat) => (
+                      <option key={mat} value={mat}>
+                        {mat}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
-                {/* Stock In Preview Card */}
-                {stockInMaterialId && (
+                {/* 2 & 3. Size and Rolls to Add in ONE ROW */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      2. Size <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockInVariantSize}
+                      disabled={!stockInMaterial}
+                      onChange={(e) => {
+                        setStockInVariantSize(e.target.value);
+                        setStockInSecondary('');
+                        setStockInBarcodeCode('');
+                        setStockInVerificationStatus('IDLE');
+                        setStockInError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <option value="">
+                        {stockInMaterial ? '-- Select Size --' : '-- Choose Material First --'}
+                      </option>
+                      {stockInAvailableSizes.map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      3. Rolls to Add <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      ref={stockInRollsInputRef}
+                      type="number"
+                      min="1"
+                      step="1"
+                      required
+                      placeholder="e.g. 5"
+                      value={stockInRolls}
+                      onChange={(e) => {
+                        setStockInRolls(e.target.value);
+                        setStockInError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          stockInVerificationInputRef.current?.focus();
+                        }
+                      }}
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Optional Secondary Variant (Thickness for sheets) */}
+                {stockInAvailableSecondaries.length > 0 && (
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      Secondary Variant (Thickness) <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockInSecondary}
+                      onChange={(e) => {
+                        setStockInSecondary(e.target.value);
+                        setStockInBarcodeCode('');
+                        setStockInVerificationStatus('IDLE');
+                        setStockInError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    >
+                      <option value="">-- Select Thickness --</option>
+                      {stockInAvailableSecondaries.map((sec) => (
+                        <option key={sec} value={sec}>
+                          {sec}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* 4. Date in 3rd Row (Full Width) */}
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">4. Date</label>
+                  <input
+                    type="date"
+                    value={stockInDate}
+                    onChange={(e) => setStockInDate(e.target.value)}
+                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                  />
+                </div>
+
+                {/* 5. STOCK CALCULATION PREVIEW */}
+                {matchedStockInItem && (
                   (() => {
-                    const sel = materialsWithStock.find((m) => m.id === stockInMaterialId);
-                    if (!sel) return null;
-                    const addQty = parseFloat(stockInQty) || 0;
-                    const newTotal = round2(sel.currentStock + addQty);
+                    const current = matchedStockInItem.currentStock;
+                    const rollsIn = parseInt(stockInRolls, 10) || 0;
+                    const afterStock = current + rollsIn;
+
                     return (
-                      <div className="p-3 bg-emerald-50/70 rounded-lg border border-emerald-200 flex items-center justify-between">
-                        <div>
-                          <div className="font-semibold text-emerald-950">
-                            {sel.name} - {sel.size}
+                      <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
+                        <div className="text-[11px] font-bold text-emerald-900 uppercase tracking-wider flex items-center justify-between">
+                          <span>Stock Calculation Preview</span>
+                          <span className="font-mono text-slate-500 normal-case">
+                            Expected Barcode: {matchedStockInItem.barcode}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 pt-1 text-center font-mono">
+                          <div className="bg-white p-2.5 rounded-xl border border-emerald-100">
+                            <span className="text-[10px] text-slate-500 block uppercase font-sans font-semibold">
+                              Current Stock
+                            </span>
+                            <span className="text-lg font-bold text-slate-800">
+                              {current} {matchedStockInItem.unit}
+                            </span>
                           </div>
-                          <div className="text-emerald-700 text-[11px]">
-                            Current Stock: <strong>{sel.currentStock} {sel.unit}</strong> • SKU: {sel.itemCode}
+
+                          <div className="bg-emerald-600 text-white p-2.5 rounded-xl shadow-xs">
+                            <span className="text-[10px] text-emerald-100 block uppercase font-sans font-semibold">
+                              After Stock IN
+                            </span>
+                            <span className="text-lg font-black text-white">
+                              {afterStock} {matchedStockInItem.unit}
+                            </span>
                           </div>
                         </div>
-                        {addQty > 0 && (
-                          <div className="text-right">
-                            <span className="text-[10px] uppercase text-emerald-700 font-bold block">
-                              New Stock After IN:
-                            </span>
-                            <span className="text-sm font-bold text-emerald-900 font-mono">
-                              {newTotal} {sel.unit}
-                            </span>
-                          </div>
-                        )}
                       </div>
                     );
                   })()
                 )}
 
-                {/* Quantity & Date */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">
-                      Quantity to Add (Metres) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      ref={stockInQtyRef}
-                      type="number"
-                      step="any"
-                      min="0.01"
-                      required
-                      placeholder="e.g. 50 or 12.5"
-                      value={stockInQty}
-                      onChange={(e) => {
-                        setStockInQty(e.target.value);
-                        setStockInError('');
+                {/* 6. BARCODE VERIFICATION SECTION (Directly BELOW Calculation) */}
+                <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center space-x-1.5">
+                        <BarcodeIcon className="w-4 h-4 text-indigo-600" />
+                        <span>Barcode Verification</span>
+                      </label>
+                      <p className="text-[11px] text-slate-500">
+                        Scan or enter barcode for {matchedStockInItem ? `${matchedStockInItem.materialName} (${matchedStockInItem.variantSize})` : 'selected item'}.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCameraScannerTarget('stock-in');
+                        setCameraScannerOpen(true);
                       }}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                    />
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg text-slate-700 font-bold text-xs flex items-center space-x-1 shadow-xs"
+                      title="Open phone camera scanner"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Camera</span>
+                    </button>
                   </div>
 
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Date</label>
+                  {/* Barcode input with auto-verify on Enter / rapid scanner typing */}
+                  <div className="relative">
                     <input
-                      type="date"
-                      value={stockInDate}
-                      onChange={(e) => setStockInDate(e.target.value)}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                      ref={stockInVerificationInputRef}
+                      type="text"
+                      disabled={!matchedStockInItem}
+                      placeholder={
+                        matchedStockInItem
+                          ? `Scan barcode (e.g. ${matchedStockInItem.barcode})...`
+                          : 'Select Material & Size first'
+                      }
+                      value={stockInBarcodeCode}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStockInBarcodeCode(val);
+                        if (val.trim()) {
+                          validateStockInBarcode(val);
+                        } else {
+                          setStockInVerificationStatus('IDLE');
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          validateStockInBarcode(stockInBarcodeCode);
+                        }
+                      }}
+                      className={`w-full p-3 bg-white border-2 rounded-xl text-slate-900 font-mono text-sm font-bold placeholder:font-sans placeholder:font-normal focus:outline-hidden transition-colors ${
+                        stockInVerificationStatus === 'VERIFIED'
+                          ? 'border-emerald-500 ring-2 ring-emerald-200'
+                          : stockInVerificationStatus === 'MISMATCH'
+                          ? 'border-red-500 ring-2 ring-red-200'
+                          : 'border-slate-300 focus:border-indigo-500'
+                      }`}
                     />
+
+                    {stockInBarcodeCode && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStockInBarcodeCode('');
+                          setStockInVerificationStatus('IDLE');
+                          stockInVerificationInputRef.current?.focus();
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
+
+                  {/* Verification Status Feedback */}
+                  {stockInVerificationStatus === 'VERIFIED' && matchedStockInItem && (
+                    <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-bold flex items-center space-x-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>
+                        ✓ Barcode Verified: {matchedStockInItem.materialName} — {matchedStockInItem.variantSize}
+                      </span>
+                    </div>
+                  )}
+
+                  {stockInVerificationStatus === 'MISMATCH' && (
+                    <div className="p-3 bg-red-100/80 border border-red-300 rounded-xl text-xs text-red-900 font-bold flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
+                      <span>✕ Barcode does not match selected material and size.</span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Reference / Note */}
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Reference / PO Note (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. PO-8835 / Star Media Delivery"
-                    value={stockInRef}
-                    onChange={(e) => setStockInRef(e.target.value)}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                  />
-                </div>
-
-                {/* Submit Button */}
+                {/* 7. SAVE BUTTON (Disabled until verification succeeds) */}
                 <div className="pt-2">
                   <button
                     type="submit"
-                    className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg shadow-sm transition-colors text-xs flex items-center justify-center space-x-1.5"
+                    disabled={
+                      !matchedStockInItem ||
+                      stockInVerificationStatus !== 'VERIFIED' ||
+                      !stockInRolls ||
+                      parseInt(stockInRolls, 10) <= 0
+                    }
+                    className={`w-full py-3.5 px-4 font-bold rounded-xl shadow-sm transition-all text-sm flex items-center justify-center space-x-2 ${
+                      stockInVerificationStatus === 'VERIFIED' && matchedStockInItem && parseInt(stockInRolls, 10) > 0
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-98'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-75'
+                    }`}
                   >
                     <ArrowDownToLine className="w-4 h-4" />
-                    <span>Save Stock IN</span>
+                    <span>
+                      {stockInVerificationStatus === 'VERIFIED'
+                        ? 'Save Stock IN'
+                        : 'Scan Barcode to Enable Save'}
+                    </span>
                   </button>
                 </div>
               </form>
@@ -1239,97 +1729,203 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 4: STOCK OUT */}
+        {/* TAB 4: STOCK OUT (With Barcode Verification AFTER Calculation) */}
         {/* ========================================================= */}
         {activeTab === 'stock-out' && (
-          <div className="max-w-2xl mx-auto space-y-5">
-            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs space-y-5">
-              <div className="flex items-center space-x-2 border-b border-slate-100 pb-3">
-                <div className="p-2 rounded-lg bg-amber-50 text-amber-700">
-                  <ArrowUpFromLine className="w-5 h-5" />
+          <div className="max-w-xl mx-auto space-y-5">
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+              <div className="flex items-center space-x-3 border-b border-slate-100 pb-4">
+                <div className="p-2.5 rounded-xl bg-amber-50 text-amber-700">
+                  <ArrowUpFromLine className="w-6 h-6 stroke-[2.5]" />
                 </div>
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">Stock OUT — Material Consumption</h2>
+                  <h2 className="text-lg font-black text-slate-900 tracking-tight">Stock OUT</h2>
                   <p className="text-xs text-slate-500">
-                    Record material consumption. Stock cannot fall below zero.
+                    Remove rolls from inventory. Barcode verification required before saving.
                   </p>
                 </div>
               </div>
 
               {stockOutError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center space-x-2 font-medium">
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center space-x-2 font-medium">
                   <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
                   <span>{stockOutError}</span>
                 </div>
               )}
 
               <form onSubmit={handleStockOutSubmit} className="space-y-4 text-xs">
-                {/* Select Material */}
+                {/* 1. Material Dropdown (Displays ONLY material names) */}
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Select Material <span className="text-red-500">*</span>
+                  <label className="block text-slate-700 font-bold mb-1">
+                    1. Material <span className="text-red-500">*</span>
                   </label>
                   <select
-                    value={stockOutMaterialId}
+                    value={stockOutMaterial}
                     onChange={(e) => {
-                      setStockOutMaterialId(e.target.value);
+                      setStockOutMaterial(e.target.value);
+                      setStockOutVariantSize('');
+                      setStockOutSecondary('');
+                      setStockOutBarcodeCode('');
+                      setStockOutVerificationStatus('IDLE');
                       setStockOutError('');
                     }}
                     required
-                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
                   >
-                    <option value="">-- Choose Material &amp; Size --</option>
-                    {materialsWithStock
-                      .filter((m) => m.active)
-                      .map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name} — {m.size} [SKU: {m.itemCode}] (Available: {m.currentStock} {m.unit})
-                        </option>
-                      ))}
+                    <option value="">-- Select Material --</option>
+                    {uniqueMaterialNames.map((mat) => (
+                      <option key={mat} value={mat}>
+                        {mat}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
-                {/* Available Stock Warning Card */}
-                {stockOutMaterialId && (
+                {/* 2 & 3. Size and Rolls to Remove in ONE ROW */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      2. Size <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockOutVariantSize}
+                      disabled={!stockOutMaterial}
+                      onChange={(e) => {
+                        setStockOutVariantSize(e.target.value);
+                        setStockOutSecondary('');
+                        setStockOutBarcodeCode('');
+                        setStockOutVerificationStatus('IDLE');
+                        setStockOutError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      <option value="">
+                        {stockOutMaterial ? '-- Select Size --' : '-- Choose Material First --'}
+                      </option>
+                      {stockOutAvailableSizes.map((size) => (
+                        <option key={size} value={size}>
+                          {size}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      3. Rolls to Remove <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      ref={stockOutRollsInputRef}
+                      type="number"
+                      min="1"
+                      step="1"
+                      required
+                      placeholder="e.g. 2"
+                      value={stockOutRolls}
+                      onChange={(e) => {
+                        setStockOutRolls(e.target.value);
+                        setStockOutError('');
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          stockOutVerificationInputRef.current?.focus();
+                        }
+                      }}
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                    />
+                  </div>
+                </div>
+
+                {/* Optional Secondary Variant (Thickness for sheets) */}
+                {stockOutAvailableSecondaries.length > 0 && (
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      Secondary Variant (Thickness) <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockOutSecondary}
+                      onChange={(e) => {
+                        setStockOutSecondary(e.target.value);
+                        setStockOutBarcodeCode('');
+                        setStockOutVerificationStatus('IDLE');
+                        setStockOutError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                    >
+                      <option value="">-- Select Thickness --</option>
+                      {stockOutAvailableSecondaries.map((sec) => (
+                        <option key={sec} value={sec}>
+                          {sec}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {/* 4. Date in 3rd Row (Full Width) */}
+                <div>
+                  <label className="block text-slate-700 font-bold mb-1">4. Date</label>
+                  <input
+                    type="date"
+                    value={stockOutDate}
+                    onChange={(e) => setStockOutDate(e.target.value)}
+                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                  />
+                </div>
+
+                {/* 5. STOCK CALCULATION PREVIEW */}
+                {matchedStockOutItem && (
                   (() => {
-                    const sel = materialsWithStock.find((m) => m.id === stockOutMaterialId);
-                    if (!sel) return null;
-                    const outQty = parseFloat(stockOutQty) || 0;
-                    const newTotal = round2(sel.currentStock - outQty);
-                    const isExceeded = outQty > sel.currentStock;
+                    const current = matchedStockOutItem.currentStock;
+                    const rollsOut = parseInt(stockOutRolls, 10) || 0;
+                    const isExceeded = rollsOut > current;
+                    const afterStock = Math.max(0, current - rollsOut);
 
                     return (
                       <div
-                        className={`p-3 rounded-lg border flex items-center justify-between ${
-                          isExceeded
-                            ? 'bg-red-50 border-red-200'
-                            : 'bg-amber-50/60 border-amber-200'
+                        className={`p-4 rounded-2xl border space-y-2 ${
+                          isExceeded ? 'bg-red-50 border-red-200' : 'bg-amber-50/80 border-amber-200'
                         }`}
                       >
-                        <div>
-                          <div className="font-semibold text-slate-900">
-                            {sel.name} - {sel.size}
+                        <div className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+                          <span>Stock Calculation Preview</span>
+                          <span className="font-mono text-slate-500 normal-case">
+                            Expected Barcode: {matchedStockOutItem.barcode}
+                          </span>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-3 pt-1 text-center font-mono">
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                            <span className="text-[10px] text-slate-500 block uppercase font-sans font-semibold">
+                              Current Stock
+                            </span>
+                            <span className="text-lg font-bold text-slate-900">
+                              {current} {matchedStockOutItem.unit}
+                            </span>
                           </div>
-                          <div className="text-[11px] text-slate-600">
-                            Available Stock:{' '}
-                            <strong className="font-mono text-slate-900">
-                              {sel.currentStock} {sel.unit}
-                            </strong>{' '}
-                            • SKU: {sel.itemCode}
+
+                          <div
+                            className={`p-2.5 rounded-xl shadow-xs text-white ${
+                              isExceeded ? 'bg-red-600' : 'bg-slate-900'
+                            }`}
+                          >
+                            <span className="text-[10px] text-slate-300 block uppercase font-sans font-semibold">
+                              After Stock OUT
+                            </span>
+                            <span className="text-lg font-black text-white">
+                              {afterStock} {matchedStockOutItem.unit}
+                            </span>
                           </div>
                         </div>
 
-                        {outQty > 0 && (
-                          <div className="text-right">
-                            <span className="text-[10px] uppercase font-bold block text-slate-500">
-                              Remaining After OUT:
-                            </span>
-                            <span
-                              className={`text-sm font-bold font-mono ${
-                                isExceeded ? 'text-red-600' : 'text-slate-900'
-                              }`}
-                            >
-                              {newTotal} {sel.unit}
+                        {isExceeded && (
+                          <div className="text-xs text-red-700 font-bold flex items-center space-x-1.5 pt-1">
+                            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                            <span>
+                              Requested rolls ({rollsOut}) exceeds available stock ({current} {matchedStockOutItem.unit}).
                             </span>
                           </div>
                         )}
@@ -1338,61 +1934,128 @@ export default function App() {
                   })()
                 )}
 
-                {/* Quantity & Date */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">
-                      Quantity to Issue (Metres) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      ref={stockOutQtyRef}
-                      type="number"
-                      step="any"
-                      min="0.01"
-                      required
-                      placeholder="e.g. 20 or 2.5"
-                      value={stockOutQty}
-                      onChange={(e) => {
-                        setStockOutQty(e.target.value);
-                        setStockOutError('');
+                {/* 6. BARCODE VERIFICATION SECTION (Directly BELOW Calculation) */}
+                <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center space-x-1.5">
+                        <BarcodeIcon className="w-4 h-4 text-amber-600" />
+                        <span>Barcode Verification</span>
+                      </label>
+                      <p className="text-[11px] text-slate-500">
+                        Scan or enter barcode for {matchedStockOutItem ? `${matchedStockOutItem.materialName} (${matchedStockOutItem.variantSize})` : 'selected item'}.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCameraScannerTarget('stock-out');
+                        setCameraScannerOpen(true);
                       }}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-sm focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                    />
+                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg text-slate-700 font-bold text-xs flex items-center space-x-1 shadow-xs"
+                      title="Open phone camera scanner"
+                    >
+                      <Camera className="w-3.5 h-3.5 text-amber-600" />
+                      <span>Camera</span>
+                    </button>
                   </div>
 
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Date</label>
+                  {/* Barcode input with auto-verify on Enter / rapid scanner typing */}
+                  <div className="relative">
                     <input
-                      type="date"
-                      value={stockOutDate}
-                      onChange={(e) => setStockOutDate(e.target.value)}
-                      className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                      ref={stockOutVerificationInputRef}
+                      type="text"
+                      disabled={!matchedStockOutItem}
+                      placeholder={
+                        matchedStockOutItem
+                          ? `Scan barcode (e.g. ${matchedStockOutItem.barcode})...`
+                          : 'Select Material & Size first'
+                      }
+                      value={stockOutBarcodeCode}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setStockOutBarcodeCode(val);
+                        if (val.trim()) {
+                          validateStockOutBarcode(val);
+                        } else {
+                          setStockOutVerificationStatus('IDLE');
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          validateStockOutBarcode(stockOutBarcodeCode);
+                        }
+                      }}
+                      className={`w-full p-3 bg-white border-2 rounded-xl text-slate-900 font-mono text-sm font-bold placeholder:font-sans placeholder:font-normal focus:outline-hidden transition-colors ${
+                        stockOutVerificationStatus === 'VERIFIED'
+                          ? 'border-emerald-500 ring-2 ring-emerald-200'
+                          : stockOutVerificationStatus === 'MISMATCH'
+                          ? 'border-red-500 ring-2 ring-red-200'
+                          : 'border-slate-300 focus:border-amber-500'
+                      }`}
                     />
+
+                    {stockOutBarcodeCode && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStockOutBarcodeCode('');
+                          setStockOutVerificationStatus('IDLE');
+                          stockOutVerificationInputRef.current?.focus();
+                        }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
+
+                  {/* Verification Status Feedback */}
+                  {stockOutVerificationStatus === 'VERIFIED' && matchedStockOutItem && (
+                    <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-bold flex items-center space-x-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                      <span>
+                        ✓ Barcode Verified: {matchedStockOutItem.materialName} — {matchedStockOutItem.variantSize}
+                      </span>
+                    </div>
+                  )}
+
+                  {stockOutVerificationStatus === 'MISMATCH' && (
+                    <div className="p-3 bg-red-100/80 border border-red-300 rounded-xl text-xs text-red-900 font-bold flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
+                      <span>✕ Barcode does not match selected material and size.</span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Reference / Note */}
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Job / Project Reference (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Job #401 - City Billboard Banner"
-                    value={stockOutRef}
-                    onChange={(e) => setStockOutRef(e.target.value)}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                  />
-                </div>
-
-                {/* Submit Button */}
+                {/* 7. SAVE BUTTON (Disabled until verification succeeds) */}
                 <div className="pt-2">
                   <button
                     type="submit"
-                    className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg shadow-sm transition-colors text-xs flex items-center justify-center space-x-1.5"
+                    disabled={
+                      !matchedStockOutItem ||
+                      stockOutVerificationStatus !== 'VERIFIED' ||
+                      !stockOutRolls ||
+                      parseInt(stockOutRolls, 10) <= 0 ||
+                      (parseInt(stockOutRolls, 10) || 0) > (matchedStockOutItem?.currentStock || 0)
+                    }
+                    className={`w-full py-3.5 px-4 font-bold rounded-xl shadow-sm transition-all text-sm flex items-center justify-center space-x-2 ${
+                      stockOutVerificationStatus === 'VERIFIED' &&
+                      matchedStockOutItem &&
+                      parseInt(stockOutRolls, 10) > 0 &&
+                      (parseInt(stockOutRolls, 10) || 0) <= matchedStockOutItem.currentStock
+                        ? 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-75'
+                    }`}
                   >
                     <ArrowUpFromLine className="w-4 h-4" />
-                    <span>Save Stock OUT</span>
+                    <span>
+                      {stockOutVerificationStatus === 'VERIFIED'
+                        ? 'Save Stock OUT'
+                        : 'Scan Barcode to Enable Save'}
+                    </span>
                   </button>
                 </div>
               </form>
@@ -1401,7 +2064,7 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 5: TRANSACTION HISTORY */}
+        {/* TAB 5: TRANSACTIONS (Simplified History) */}
         {/* ========================================================= */}
         {activeTab === 'transactions' && (
           <div className="space-y-4">
@@ -1409,39 +2072,46 @@ export default function App() {
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Transaction History</h2>
                 <p className="text-xs text-slate-500">
-                  Full auditable record of all Stock IN and Stock OUT movements.
+                  Audit trail of all Stock IN and Stock OUT roll movements.
                 </p>
               </div>
 
-              <div className="flex items-center space-x-2">
-                <select
-                  value={txnTypeFilter}
-                  onChange={(e) => setTxnTypeFilter(e.target.value)}
-                  className="py-1.5 px-3 text-xs bg-white border border-slate-300 rounded-lg text-slate-700 focus:outline-hidden shadow-xs"
-                >
-                  <option value="ALL">All Types (IN &amp; OUT)</option>
-                  <option value="IN">Only Stock IN</option>
-                  <option value="OUT">Only Stock OUT</option>
-                </select>
-
+              {/* Filter Pills */}
+              <div className="inline-flex rounded-lg bg-slate-200/80 p-0.5 border border-slate-300">
                 <button
-                  onClick={exportTransactionsCSV}
-                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors border border-slate-300 shadow-xs"
-                  title="Export Transactions as CSV"
+                  onClick={() => setTxnTypeFilter('ALL')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors ${
+                    txnTypeFilter === 'ALL' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600'
+                  }`}
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export CSV</span>
+                  All ({transactions.length})
+                </button>
+                <button
+                  onClick={() => setTxnTypeFilter('IN')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors ${
+                    txnTypeFilter === 'IN' ? 'bg-emerald-600 text-white shadow-xs' : 'text-emerald-700'
+                  }`}
+                >
+                  Stock IN
+                </button>
+                <button
+                  onClick={() => setTxnTypeFilter('OUT')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-colors ${
+                    txnTypeFilter === 'OUT' ? 'bg-amber-600 text-white shadow-xs' : 'text-amber-700'
+                  }`}
+                >
+                  Stock OUT
                 </button>
               </div>
             </div>
 
-            {/* Filter Bar */}
+            {/* Search Input */}
             <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
               <div className="relative">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Filter by material name, size, SKU, or reference..."
+                  placeholder="Filter transactions by material, size, or barcode..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
@@ -1458,67 +2128,61 @@ export default function App() {
                       <th className="py-3 px-4">Date / Time</th>
                       <th className="py-3 px-4">Material</th>
                       <th className="py-3 px-4">Size</th>
-                      <th className="py-3 px-4">Item Code / SKU</th>
+                      <th className="py-3 px-4">Barcode</th>
                       <th className="py-3 px-4 text-center">Type</th>
-                      <th className="py-3 px-4 text-right">Quantity</th>
-                      <th className="py-3 px-4 text-right">Stock Before</th>
-                      <th className="py-3 px-4 text-right">Stock After</th>
-                      <th className="py-3 px-4">Reference / Note</th>
+                      <th className="py-3 px-4 text-right">Roll Count</th>
+                      <th className="py-3 px-4 text-right font-mono">Before</th>
+                      <th className="py-3 px-4 text-right font-mono">After</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredTransactions.length === 0 ? (
                       <tr>
-                        <td colSpan={9} className="py-8 text-center text-slate-400">
+                        <td colSpan={8} className="py-8 text-center text-slate-400">
                           No transactions found.
                         </td>
                       </tr>
                     ) : (
-                      filteredTransactions.map((t) => (
-                        <tr key={t.id} className="hover:bg-slate-50 transition-colors">
-                          <td className="py-3 px-4 font-mono text-slate-600">
-                            <div>{t.date}</div>
-                            {t.createdAt && (
-                              <div className="text-[10px] text-slate-400">
-                                {new Date(t.createdAt).toLocaleTimeString([], {
-                                  hour: '2-digit',
-                                  minute: '2-digit'
-                                })}
-                              </div>
-                            )}
+                      filteredTransactions.map((tx) => (
+                        <tr key={tx.id} className="hover:bg-slate-50 transition-colors">
+                          <td className="py-3 px-4 text-slate-600 font-medium">
+                            {tx.date}
+                            <span className="block text-[10px] text-slate-400">
+                              {new Date(tx.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </span>
                           </td>
-                          <td className="py-3 px-4 font-semibold text-slate-900">{t.materialName}</td>
-                          <td className="py-3 px-4 font-medium text-slate-700">{t.size}</td>
-                          <td className="py-3 px-4 font-mono font-semibold text-indigo-700">
-                            {t.itemCode}
+                          <td className="py-3 px-4 font-bold text-slate-900">{tx.materialName}</td>
+                          <td className="py-3 px-4 font-mono font-medium text-slate-800">
+                            {tx.variantSize}
+                            {tx.secondaryVariant ? ` (${tx.secondaryVariant})` : ''}
+                          </td>
+                          <td className="py-3 px-4 font-mono text-slate-500 text-[11px] font-semibold">
+                            {tx.barcode}
                           </td>
                           <td className="py-3 px-4 text-center">
                             <span
-                              className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold ${
-                                t.type === 'IN'
-                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                  : 'bg-amber-50 text-amber-700 border border-amber-200'
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                tx.type === 'IN'
+                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                  : 'bg-amber-100 text-amber-800 border border-amber-200'
                               }`}
                             >
-                              {t.type}
+                              {tx.type}
                             </span>
                           </td>
                           <td
-                            className={`py-3 px-4 text-right font-mono font-bold ${
-                              t.type === 'IN' ? 'text-emerald-600' : 'text-amber-600'
+                            className={`py-3 px-4 text-right font-mono font-black text-sm ${
+                              tx.type === 'IN' ? 'text-emerald-700' : 'text-amber-700'
                             }`}
                           >
-                            {t.type === 'IN' ? '+' : '-'}
-                            {t.quantity} {t.unit}
+                            {tx.type === 'IN' ? '+' : '-'}
+                            {tx.quantity} {tx.unit}
                           </td>
-                          <td className="py-3 px-4 text-right font-mono text-slate-500">
-                            {t.stockBefore} {t.unit}
+                          <td className="py-3 px-4 text-right font-mono text-slate-500 font-semibold">
+                            {tx.stockBefore}
                           </td>
-                          <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
-                            {t.stockAfter} {t.unit}
-                          </td>
-                          <td className="py-3 px-4 text-slate-500 max-w-xs truncate">
-                            {t.reference || '-'}
+                          <td className="py-3 px-4 text-right font-mono text-slate-900 font-black">
+                            {tx.stockAfter}
                           </td>
                         </tr>
                       ))
@@ -1531,267 +2195,179 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 6: BARCODES */}
+        {/* TAB 6: QR LABELS */}
         {/* ========================================================= */}
-        {activeTab === 'barcodes' && (
-          <div className="space-y-6">
-            <div className="no-print flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        {activeTab === 'qr-labels' && (
+          <div className="space-y-5">
+            {/* Header & Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">
-                  CODE128 Barcodes &amp; Scanner
-                </h2>
+                <h2 className="text-lg font-bold text-slate-900">QR Labels</h2>
                 <p className="text-xs text-slate-500">
-                  Every unique SKU has one permanent machine-readable CODE128 barcode.
+                  Scan any QR code with a phone's normal camera to directly view and update roll stock.
                 </p>
               </div>
 
-              <button
-                onClick={() => window.print()}
-                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold flex items-center space-x-1.5 shadow-xs transition-colors self-start"
-              >
-                <Printer className="w-4 h-4" />
-                <span>Print All Barcodes</span>
-              </button>
-            </div>
-
-            {/* Quick Barcode Scanner Box */}
-            <div className="no-print bg-white p-5 rounded-xl border border-indigo-200 shadow-sm space-y-3">
-              <div className="flex items-center space-x-2 text-indigo-900 font-bold text-sm">
-                <QrCode className="w-5 h-5 text-indigo-600" />
-                <span>USB / Bluetooth Barcode Scanner</span>
-              </div>
-              <p className="text-xs text-slate-500">
-                Position your scanner cursor in the input box below. Scanning a barcode automatically
-                resolves the item on <span className="font-semibold text-slate-700">Enter</span> without requiring any manual button click.
-              </p>
-
-              {/* Scanner Form */}
-              <div className="flex flex-col sm:flex-row items-center gap-2">
-                <div className="relative w-full sm:w-96">
-                  <input
-                    ref={scannerInputRef}
-                    type="text"
-                    placeholder="Scan or type barcode (e.g. PVC-FLEX-3FT)..."
-                    value={scannerQuery}
-                    onChange={(e) => {
-                      setScannerQuery(e.target.value);
-                      performBarcodeLookup(e.target.value);
-                    }}
-                    onKeyDown={handleScannerKeyDown}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
-                  {scannerQuery && (
-                    <button
-                      onClick={() => {
-                        setScannerQuery('');
-                        setScannedMaterial(null);
-                        setScanStatusMessage('');
-                      }}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={printSelectedLabels}
+                  disabled={selectedLabelIds.length === 0}
+                  className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print Selected ({selectedLabelIds.length})</span>
+                </button>
 
                 <button
-                  onClick={() => performBarcodeLookup(scannerQuery)}
-                  className="w-full sm:w-auto px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold"
+                  onClick={printAllLabels}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors"
                 >
-                  Lookup
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Print All Labels</span>
                 </button>
               </div>
-
-              {scanStatusMessage && !scannedMaterial && (
-                <div className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded-lg border border-amber-200">
-                  {scanStatusMessage}
-                </div>
-              )}
-
-              {/* Scanned Material Found Result */}
-              {scannedMaterial && (
-                <div className="mt-3 p-4 bg-indigo-50/70 border border-indigo-200 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-sm font-bold text-slate-900">
-                        {scannedMaterial.name} ({scannedMaterial.size})
-                      </span>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-200 text-indigo-900 font-bold">
-                        {scannedMaterial.itemCode}
-                      </span>
-                    </div>
-                    <div className="text-xs text-slate-600">
-                      Available Stock: <strong className="text-slate-900 font-mono text-sm">{scannedMaterial.currentStock} {scannedMaterial.unit}</strong> • Category: {scannedMaterial.category}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => quickStockInFromScanner(scannedMaterial)}
-                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-lg shadow-xs flex items-center space-x-1.5 transition-colors"
-                    >
-                      <ArrowDownToLine className="w-3.5 h-3.5" />
-                      <span>Stock IN</span>
-                    </button>
-                    <button
-                      onClick={() => quickStockOutFromScanner(scannedMaterial)}
-                      className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-xs rounded-lg shadow-xs flex items-center space-x-1.5 transition-colors"
-                    >
-                      <ArrowUpFromLine className="w-3.5 h-3.5" />
-                      <span>Stock OUT</span>
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
 
-            {/* Printable CODE128 Barcodes Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 print-grid">
-              {materialsWithStock
-                .filter((m) => m.active)
-                .map((mat) => (
-                  <div
-                    key={mat.id}
-                    className="bg-white border-2 border-slate-300 rounded-xl p-4 flex flex-col justify-between space-y-3 shadow-xs hover:border-indigo-400 transition-colors"
-                  >
-                    <div className="border-b border-slate-100 pb-2">
-                      <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
-                        {mat.category}
-                      </div>
-                      <div className="text-sm font-bold text-slate-900 leading-tight">
-                        {mat.name}
-                      </div>
-                      <div className="text-xs text-slate-600 font-medium">Size: {mat.size}</div>
-                    </div>
+            {/* Search and Select All Bar */}
+            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search labels by material, size, or barcode..."
+                  value={labelSearch}
+                  onChange={(e) => setLabelSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
 
-                    {/* Machine Readable CODE128 Barcode via JsBarcode */}
-                    <BarcodeDisplay
-                      value={mat.barcode}
-                      format="CODE128"
-                      width={1.6}
-                      height={46}
-                      fontSize={11}
-                      displayValue={true}
-                    />
+              <div className="flex items-center space-x-2 text-xs">
+                <button
+                  onClick={toggleSelectAllLabels}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold"
+                >
+                  {selectedLabelIds.length === filteredLabelItems.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+            </div>
 
-                    <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1 border-t border-slate-100">
-                      <span>
-                        Current:{' '}
-                        <strong className="text-slate-800 font-mono">
-                          {mat.currentStock} {mat.unit}
-                        </strong>
-                      </span>
-                      <button
-                        onClick={() => {
-                          setScannerQuery(mat.barcode);
-                          performBarcodeLookup(mat.barcode);
-                          window.scrollTo({ top: 0, behavior: 'smooth' });
-                        }}
-                        className="no-print text-indigo-600 font-semibold hover:underline"
-                      >
-                        Test Scan
-                      </button>
-                    </div>
-                  </div>
-                ))}
+            {/* Labels Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+              {filteredLabelItems.map((item) => (
+                <QRCodeLabel
+                  key={item.id}
+                  item={item}
+                  itemUrl={getItemWebUrl(item.id)}
+                  selectable={true}
+                  isSelected={selectedLabelIds.includes(item.id)}
+                  onToggleSelect={toggleSelectLabel}
+                  onPrintSingle={printSingleLabel}
+                  onOpenMobileView={openMobileItemPage}
+                />
+              ))}
             </div>
           </div>
         )}
       </main>
 
-      {/* Add / Edit Material Modal */}
-      {isMaterialModalOpen && (
-        <div className="no-print fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4">
+      {/* Item Modal (Add / Edit Material) */}
+      {isItemModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-md w-full p-6 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-base font-bold text-slate-900">
-                {editingMaterialId ? 'Edit Material SKU' : 'Add New Material SKU'}
+              <h3 className="text-sm font-bold text-slate-900">
+                {editingItem ? 'Edit Material Item' : 'Add New Material Item'}
               </h3>
               <button
-                onClick={() => setIsMaterialModalOpen(false)}
+                onClick={() => setIsItemModalOpen(false)}
                 className="text-slate-400 hover:text-slate-600"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSaveMaterial} className="space-y-3 text-xs">
+            {itemFormError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700">
+                {itemFormError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveItemModal} className="space-y-3 text-xs">
               <div>
-                <label className="block text-slate-700 font-semibold mb-1">
-                  Material Name <span className="text-red-500">*</span>
-                </label>
+                <label className="block text-slate-700 font-semibold mb-1">Material Name *</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Active Flex N or PVC Flex"
-                  value={matFormName}
-                  onChange={(e) => setMatFormName(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                  placeholder="e.g. Backlit Sunlex"
+                  value={itemFormMaterial}
+                  onChange={(e) => setItemFormMaterial(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Category</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Flex Media"
-                    value={matFormCategory}
-                    onChange={(e) => setMatFormCategory(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
+                  <label className="block text-slate-700 font-semibold mb-1">Category *</label>
+                  <select
+                    value={itemFormCategory}
+                    onChange={(e) => setItemFormCategory(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                  >
+                    <option value="Backlit">Backlit</option>
+                    <option value="Frontlit Flex">Frontlit Flex</option>
+                    <option value="Self Adhesive Vinyl">Self Adhesive Vinyl</option>
+                    <option value="Lamination Film">Lamination Film</option>
+                    <option value="Rigid Sheet">Rigid Sheet</option>
+                  </select>
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Size / Width <span className="text-red-500">*</span>
-                  </label>
+                  <label className="block text-slate-700 font-semibold mb-1">Size / Width *</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 3 FT or 4 FT"
-                    value={matFormSize}
-                    onChange={(e) => setMatFormSize(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    placeholder="e.g. 1.63 or 8×4"
+                    value={itemFormSize}
+                    onChange={(e) => setItemFormSize(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Unique Item Code (SKU)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. AFN-3FT (Auto if empty)"
-                    value={matFormItemCode}
-                    onChange={(e) => setMatFormItemCode(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Standard Roll (M)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder="e.g. 50 or 70"
-                    value={matFormRollLength}
-                    onChange={(e) => setMatFormRollLength(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                  />
-                </div>
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Secondary Variant (Thickness - optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 2mm or 3mm (for rigid sheets)"
+                  value={itemFormSecondary}
+                  onChange={(e) => setItemFormSecondary(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
+                />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Unit</label>
+                  <select
+                    value={itemFormUnit}
+                    onChange={(e) => setItemFormUnit(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                  >
+                    <option value="Rolls">Rolls</option>
+                    <option value="Sheets">Sheets</option>
+                  </select>
+                </div>
+
                 <div>
                   <label className="block text-slate-700 font-semibold mb-1">Opening Stock</label>
                   <input
                     type="number"
-                    step="any"
-                    placeholder="0"
-                    value={matFormOpening}
-                    onChange={(e) => setMatFormOpening(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    min="0"
+                    value={itemFormOpeningStock}
+                    onChange={(e) => setItemFormOpeningStock(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
                   />
                 </div>
 
@@ -1799,28 +2375,27 @@ export default function App() {
                   <label className="block text-slate-700 font-semibold mb-1">Min Stock Alert</label>
                   <input
                     type="number"
-                    step="any"
-                    placeholder="50"
-                    value={matFormMinStock}
-                    onChange={(e) => setMatFormMinStock(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    min="0"
+                    value={itemFormMinStock}
+                    onChange={(e) => setItemFormMinStock(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
                   />
                 </div>
               </div>
 
-              <div className="pt-3 flex items-center justify-end space-x-2 border-t border-slate-100">
+              <div className="pt-3 flex items-center justify-end space-x-2">
                 <button
                   type="button"
-                  onClick={() => setIsMaterialModalOpen(false)}
-                  className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800"
+                  onClick={() => setIsItemModalOpen(false)}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg text-xs"
+                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold"
                 >
-                  {editingMaterialId ? 'Save Changes' : 'Create SKU'}
+                  Save Item
                 </button>
               </div>
             </form>
@@ -1828,16 +2403,19 @@ export default function App() {
         </div>
       )}
 
-      {/* Footer */}
-      <footer className="no-print bg-white border-t border-slate-200 py-3 px-6 text-xs text-slate-400 text-center flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>RollPrint IMS — Printing Material &amp; Roll Inventory</span>
-        <button
-          onClick={handleResetData}
-          className="text-slate-400 hover:text-slate-600 text-[11px] underline flex items-center space-x-1"
-        >
-          <RefreshCw className="w-3 h-3" />
-          <span>Reset Sample Data</span>
-        </button>
+      {/* App Footer */}
+      <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500 print:hidden">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
+          <span>
+            RollPrint IMS &copy; 2026 &mdash; Built for Large Format Printing Inventory
+          </span>
+          <button
+            onClick={handleResetSampleData}
+            className="text-[11px] text-slate-400 hover:text-indigo-600 font-medium underline"
+          >
+            Reset Client Excel Sample Data
+          </button>
+        </div>
       </footer>
     </div>
   );
