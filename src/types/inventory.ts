@@ -1,19 +1,21 @@
 /**
- * Matrix-Based Inventory System Data Types
- * Model: Material + Variant/Size (+ Optional Secondary Variant) = Inventory Item
- * Reflects the client's Excel Stock Matrix
+ * Roll-Based Inventory System Data Types
+ * Blueprint: Material Name + Category + Size/Width (M) + Roll Length (M) = Full Roll Inventory Variant
+ * Primary Stock: Full Roll Count
+ * Informational: Area per roll = Width × Length (m²), Total Area = Rolls × Area per roll (m²)
  */
 
 export interface MatrixInventoryItem {
   id: string;
-  materialName: string; // e.g. "Backlit Sunlex", "Premium M 9", "PVC Foam Sheet"
-  category: string; // "Backlit", "Frontlit Flex", "Self Adhesive Vinyl", "Lamination Film", "Rigid Sheet"
-  variantSize: string; // e.g. "1.02", "1.32", "1.63", "8×4"
-  secondaryVariant?: string; // e.g. "2mm", "3mm", "5mm" (thickness for sheets)
-  unit: string; // "Rolls" or "Sheets"
-  barcode: string; // unique stable identifier e.g. "BACKLIT-SUNLEX-1.63", "PVC-8X4-3MM"
-  openingStock: number; // current quantity from the Excel sheet
-  minStock: number; // minimum stock alert threshold
+  materialName: string; // e.g. "Active", "Backlit Sunlex", "Premium M 9"
+  category: string; // e.g. "Flex PVC", "Backlit", "Frontlit Flex", "Self Adhesive Vinyl", "Lamination Film"
+  variantSize: string; // Width in metres, e.g. "1.02", "1.32", "1.63", "1.93", "2.54", "3.20"
+  rollLengthMtr: number; // Length per roll in metres, e.g. 50, 70
+  secondaryVariant?: string; // Optional thickness/finish if applicable
+  unit: string; // Always "Rolls" for roll inventory
+  barcode: string; // Unique barcode identifying Material + Width + Roll Length, e.g. "ACTIVE-1.02-70M"
+  openingStock: number; // Number of full rolls in opening inventory
+  minStock: number; // Low stock alert threshold in rolls
   active: boolean;
   createdAt: string;
 }
@@ -22,14 +24,17 @@ export interface MatrixStockTransaction {
   id: string;
   itemId: string;
   materialName: string;
-  variantSize: string;
+  category: string;
+  variantSize: string; // Width (M)
+  rollLengthMtr: number; // Roll length (M)
   secondaryVariant?: string;
   barcode: string;
   type: 'IN' | 'OUT';
-  quantity: number; // number of rolls / sheets / units
-  stockBefore: number;
-  stockAfter: number;
-  unit: string;
+  quantity: number; // Number of rolls
+  areaMtr2: number; // Total area = Rolls × Width × Length (m²)
+  stockBefore: number; // Rolls before
+  stockAfter: number; // Rolls after
+  unit: string; // "Rolls"
   date: string;
   createdAt: string;
 }
@@ -37,7 +42,9 @@ export interface MatrixStockTransaction {
 export interface MatrixItemWithStock extends MatrixInventoryItem {
   totalIn: number;
   totalOut: number;
-  currentStock: number;
+  currentStock: number; // In-hand full rolls = Opening + In - Out
+  areaPerRoll: number; // Width × Length (m²)
+  totalAreaMtr2: number; // currentStock × areaPerRoll (m²)
   status: 'IN_STOCK' | 'LOW_STOCK' | 'OUT_OF_STOCK';
 }
 
@@ -46,6 +53,9 @@ export interface MatrixDashboardMetrics {
   totalStockIn: number;
   totalStockOut: number;
   currentStock: number;
+  totalAreaMtr2: number;
+  totalInAreaMtr2: number;
+  totalOutAreaMtr2: number;
   lowStockCount: number;
   outOfStockCount: number;
 }

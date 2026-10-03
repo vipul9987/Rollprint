@@ -63,21 +63,28 @@ export const QRCodeLabel: React.FC<QRCodeLabelProps> = ({
       </div>
 
       {/* Label Content Header */}
-      <div className="w-full pt-1 pb-2">
-        <h3 className="font-extrabold text-base text-slate-900 leading-snug line-clamp-1">
+      <div className="w-full pt-1 pb-1">
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">
+          {item.category}
+        </span>
+        <h3 className="font-black text-base text-slate-900 leading-snug line-clamp-1">
           {item.materialName}
         </h3>
-        <p className="font-mono font-bold text-sm text-indigo-700 mt-0.5">
-          Size: {item.variantSize}
-          {item.secondaryVariant ? ` (${item.secondaryVariant})` : ''}
+        <div className="mt-1 flex items-center justify-center gap-1.5 text-xs font-mono font-bold text-indigo-700">
+          <span>Width: {item.variantSize}M</span>
+          <span>&bull;</span>
+          <span>Length: {item.rollLengthMtr || 70}M</span>
+        </div>
+        <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+          Area: {item.areaPerRoll} m² / roll
         </p>
       </div>
 
       {/* Real QR Code encoding the direct HTTPS URL */}
-      <div className="p-3 bg-white border border-slate-100 rounded-xl my-2 shadow-inner">
+      <div className="p-2.5 bg-white border border-slate-100 rounded-xl my-2 shadow-inner">
         <QRCodeSVG
           value={itemUrl}
-          size={140}
+          size={135}
           level="M"
           includeMargin={true}
           fgColor="#0f172a"
@@ -87,10 +94,10 @@ export const QRCodeLabel: React.FC<QRCodeLabelProps> = ({
 
       {/* Bottom Label Instruction */}
       <div className="w-full pt-1 pb-1">
-        <p className="text-[11px] font-bold text-slate-600 tracking-wide uppercase">
+        <p className="text-[11px] font-bold text-slate-700 tracking-wide uppercase">
           Scan to View / Update Stock
         </p>
-        <p className="text-[10px] text-slate-500 font-mono font-bold tracking-wider mt-0.5">
+        <p className="text-[10px] text-slate-600 font-mono font-bold tracking-wider mt-0.5 bg-slate-50 py-0.5 px-2 rounded-md inline-block border border-slate-200">
           {item.barcode}
         </p>
       </div>

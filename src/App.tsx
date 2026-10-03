@@ -19,13 +19,10 @@ import {
   Box,
   Eye,
   EyeOff,
-  Check,
   Grid,
   Table as TableIcon,
   Camera,
-  Barcode as BarcodeIcon,
-  ShieldCheck,
-  ShieldAlert
+  Barcode as BarcodeIcon
 } from 'lucide-react';
 import {
   getStoredMatrixItems,
@@ -59,7 +56,7 @@ export default function App() {
   // Show inactive materials toggle in Material Master
   const [showInactive, setShowInactive] = useState<boolean>(false);
 
-  // Synchronize derived stock values
+  // Synchronize derived stock values & areas
   const itemsWithStock: MatrixItemWithStock[] = useMemo(() => {
     return calculateMatrixWithStock(items, transactions);
   }, [items, transactions]);
@@ -76,7 +73,7 @@ export default function App() {
     setNotification({ message, type });
     setTimeout(() => {
       setNotification(null);
-    }, 4000);
+    }, 4500);
   };
 
   // Distinct Material Names (displays ONLY material names in dropdowns)
@@ -100,7 +97,6 @@ export default function App() {
     return null;
   });
 
-  // Listen for browser navigation (back/forward)
   useEffect(() => {
     const handlePopState = () => {
       const match = window.location.pathname.match(/\/item\/([^/?#]+)/);
@@ -151,13 +147,13 @@ export default function App() {
     const cleanBarcode = targetItem.barcode.toUpperCase();
     const cleanId = targetItem.id.toUpperCase();
 
-    // 1. Direct match with permanent barcode (e.g. BACKLIT-SUNLEX-1.32)
+    // 1. Direct match with permanent barcode (e.g. ACTIVE-1.02-70M)
     if (cleanCode === cleanBarcode) return true;
 
-    // 2. Direct match with item ID (e.g. bs-132)
+    // 2. Direct match with item ID (e.g. act-102-70)
     if (cleanCode === cleanId) return true;
 
-    // 3. Match from scanned QR URL (e.g. https://domain.com/item/bs-132)
+    // 3. Match from scanned QR URL (e.g. https://domain.com/item/act-102-70)
     if (cleanCode.includes(`/ITEM/${cleanId}`)) return true;
 
     // 4. Normalized match (without hyphens or whitespace)
@@ -169,22 +165,36 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // STOCK IN FORM STATE
-  // Flow: Material -> Size -> Rolls -> Date -> Calculation -> Barcode Verification -> Save
+  // STOCK IN FORM STATE (Exact Blueprint Order)
+  // 1. Material Name
+  // 2. Category (auto-populated)
+  // 3. Size / Width
+  // 4. Roll Length / Meter
+  // 5. Roll Quantity
+  // 6. Date
+  // 7. Calculation / Stock Preview
+  // 8. Barcode Scan / Verification
+  // 9. Save
   // -------------------------------------------------------------
   const [stockInMaterial, setStockInMaterial] = useState<string>('');
   const [stockInVariantSize, setStockInVariantSize] = useState<string>('');
-  const [stockInSecondary, setStockInSecondary] = useState<string>('');
+  const [stockInRollLength, setStockInRollLength] = useState<string>('70');
   const [stockInRolls, setStockInRolls] = useState<string>('');
   const [stockInDate, setStockInDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [stockInError, setStockInError] = useState<string>('');
 
-  // Barcode Verification State for Stock IN
   const [stockInBarcodeCode, setStockInBarcodeCode] = useState<string>('');
   const [stockInVerificationStatus, setStockInVerificationStatus] = useState<VerificationStatus>('IDLE');
 
   const stockInRollsInputRef = useRef<HTMLInputElement | null>(null);
   const stockInVerificationInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-populated Category for selected Material
+  const stockInAutoCategory = useMemo(() => {
+    if (!stockInMaterial) return '';
+    const found = items.find((i) => i.materialName === stockInMaterial);
+    return found?.category || 'Flex PVC';
+  }, [items, stockInMaterial]);
 
   // Available Sizes for selected Stock IN material
   const stockInAvailableSizes = useMemo(() => {
@@ -196,37 +206,34 @@ export default function App() {
     return Array.from(set);
   }, [items, stockInMaterial]);
 
-  // Available Secondary Variants for selected material + size
-  const stockInAvailableSecondaries = useMemo(() => {
-    if (!stockInMaterial || !stockInVariantSize) return [];
-    const set = new Set<string>();
+  // Available Roll Lengths for selected Material + Size
+  const stockInAvailableLengths = useMemo(() => {
+    if (!stockInMaterial || !stockInVariantSize) return [50, 70];
+    const set = new Set<number>();
     items
       .filter(
         (i) =>
           i.active &&
           i.materialName === stockInMaterial &&
-          i.variantSize === stockInVariantSize &&
-          i.secondaryVariant
+          i.variantSize === stockInVariantSize
       )
-      .forEach((i) => {
-        if (i.secondaryVariant) set.add(i.secondaryVariant);
-      });
-    return Array.from(set);
+      .forEach((i) => set.add(i.rollLengthMtr || 70));
+    return Array.from(set).sort((a, b) => a - b);
   }, [items, stockInMaterial, stockInVariantSize]);
 
   // Find exact inventory item matching Stock IN inputs
   const matchedStockInItem: MatrixItemWithStock | undefined = useMemo(() => {
     if (!stockInMaterial || !stockInVariantSize) return undefined;
+    const len = parseInt(stockInRollLength, 10) || 70;
     return itemsWithStock.find(
       (i) =>
         i.active &&
         i.materialName === stockInMaterial &&
         i.variantSize === stockInVariantSize &&
-        (stockInAvailableSecondaries.length === 0 || i.secondaryVariant === stockInSecondary)
+        (i.rollLengthMtr === len || stockInAvailableLengths.length === 1)
     );
-  }, [itemsWithStock, stockInMaterial, stockInVariantSize, stockInSecondary, stockInAvailableSecondaries]);
+  }, [itemsWithStock, stockInMaterial, stockInVariantSize, stockInRollLength, stockInAvailableLengths]);
 
-  // Validate Stock IN Barcode
   const validateStockInBarcode = (code: string) => {
     const trimmed = code.trim();
     if (!trimmed) {
@@ -242,22 +249,36 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // STOCK OUT FORM STATE
-  // Flow: Material -> Size -> Rolls -> Date -> Calculation -> Barcode Verification -> Save
+  // STOCK OUT FORM STATE (Exact Blueprint Order)
+  // 1. Material Name
+  // 2. Category (auto-populated)
+  // 3. Size / Width
+  // 4. Roll Length / Meter
+  // 5. Roll Quantity OUT
+  // 6. Date
+  // 7. Calculation / Stock Preview
+  // 8. Barcode Verification
+  // 9. Save Stock OUT
   // -------------------------------------------------------------
   const [stockOutMaterial, setStockOutMaterial] = useState<string>('');
   const [stockOutVariantSize, setStockOutVariantSize] = useState<string>('');
-  const [stockOutSecondary, setStockOutSecondary] = useState<string>('');
+  const [stockOutRollLength, setStockOutRollLength] = useState<string>('70');
   const [stockOutRolls, setStockOutRolls] = useState<string>('');
   const [stockOutDate, setStockOutDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [stockOutError, setStockOutError] = useState<string>('');
 
-  // Barcode Verification State for Stock OUT
   const [stockOutBarcodeCode, setStockOutBarcodeCode] = useState<string>('');
   const [stockOutVerificationStatus, setStockOutVerificationStatus] = useState<VerificationStatus>('IDLE');
 
   const stockOutRollsInputRef = useRef<HTMLInputElement | null>(null);
   const stockOutVerificationInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Auto-populated Category for selected Material
+  const stockOutAutoCategory = useMemo(() => {
+    if (!stockOutMaterial) return '';
+    const found = items.find((i) => i.materialName === stockOutMaterial);
+    return found?.category || 'Flex PVC';
+  }, [items, stockOutMaterial]);
 
   // Available Sizes for selected Stock OUT material
   const stockOutAvailableSizes = useMemo(() => {
@@ -269,37 +290,34 @@ export default function App() {
     return Array.from(set);
   }, [items, stockOutMaterial]);
 
-  // Available Secondary Variants for selected material + size
-  const stockOutAvailableSecondaries = useMemo(() => {
-    if (!stockOutMaterial || !stockOutVariantSize) return [];
-    const set = new Set<string>();
+  // Available Roll Lengths for selected Material + Size
+  const stockOutAvailableLengths = useMemo(() => {
+    if (!stockOutMaterial || !stockOutVariantSize) return [50, 70];
+    const set = new Set<number>();
     items
       .filter(
         (i) =>
           i.active &&
           i.materialName === stockOutMaterial &&
-          i.variantSize === stockOutVariantSize &&
-          i.secondaryVariant
+          i.variantSize === stockOutVariantSize
       )
-      .forEach((i) => {
-        if (i.secondaryVariant) set.add(i.secondaryVariant);
-      });
-    return Array.from(set);
+      .forEach((i) => set.add(i.rollLengthMtr || 70));
+    return Array.from(set).sort((a, b) => a - b);
   }, [items, stockOutMaterial, stockOutVariantSize]);
 
   // Find exact inventory item matching Stock OUT inputs
   const matchedStockOutItem: MatrixItemWithStock | undefined = useMemo(() => {
     if (!stockOutMaterial || !stockOutVariantSize) return undefined;
+    const len = parseInt(stockOutRollLength, 10) || 70;
     return itemsWithStock.find(
       (i) =>
         i.active &&
         i.materialName === stockOutMaterial &&
         i.variantSize === stockOutVariantSize &&
-        (stockOutAvailableSecondaries.length === 0 || i.secondaryVariant === stockOutSecondary)
+        (i.rollLengthMtr === len || stockOutAvailableLengths.length === 1)
     );
-  }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutSecondary, stockOutAvailableSecondaries]);
+  }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutRollLength, stockOutAvailableLengths]);
 
-  // Validate Stock OUT Barcode
   const validateStockOutBarcode = (code: string) => {
     const trimmed = code.trim();
     if (!trimmed) {
@@ -342,7 +360,7 @@ export default function App() {
 
     if (type === 'OUT' && quantity > targetItem.currentStock) {
       showNotification(
-        `Cannot remove ${quantity} ${targetItem.unit}. Only ${targetItem.currentStock} available.`,
+        `Cannot remove ${quantity} rolls. Only ${targetItem.currentStock} rolls available in stock.`,
         'error'
       );
       return false;
@@ -352,15 +370,22 @@ export default function App() {
     const stockAfter = type === 'IN' ? stockBefore + quantity : stockBefore - quantity;
     const transactionDate = dateStr || new Date().toISOString().split('T')[0];
 
+    const widthNum = parseFloat(targetItem.variantSize) || 1.0;
+    const lengthNum = targetItem.rollLengthMtr || 70;
+    const areaMtr2 = Number((quantity * widthNum * lengthNum).toFixed(2));
+
     const newTxn: MatrixStockTransaction = {
       id: `tx-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       itemId: targetItem.id,
       materialName: targetItem.materialName,
+      category: targetItem.category,
       variantSize: targetItem.variantSize,
+      rollLengthMtr: lengthNum,
       secondaryVariant: targetItem.secondaryVariant,
       barcode: targetItem.barcode,
       type,
       quantity,
+      areaMtr2,
       stockBefore,
       stockAfter,
       unit: targetItem.unit,
@@ -373,7 +398,7 @@ export default function App() {
     saveStoredMatrixTransactions(updatedTxns);
 
     showNotification(
-      `${type === 'IN' ? 'Stock IN' : 'Stock OUT'} confirmed: ${quantity} ${targetItem.unit} for ${targetItem.materialName} (${targetItem.variantSize}). New stock: ${stockAfter} ${targetItem.unit}.`,
+      `${type === 'IN' ? 'Stock IN' : 'Stock OUT'} confirmed: ${quantity} Rolls (${areaMtr2} m²) for ${targetItem.materialName} (${targetItem.variantSize}M × ${lengthNum}M). New balance: ${stockAfter} Rolls.`,
       'success'
     );
     return true;
@@ -385,7 +410,7 @@ export default function App() {
     setStockInError('');
 
     if (!matchedStockInItem) {
-      setStockInError('Please select a valid material and size.');
+      setStockInError('Please select a valid material, size, and length configuration.');
       return;
     }
 
@@ -421,7 +446,7 @@ export default function App() {
     setStockOutError('');
 
     if (!matchedStockOutItem) {
-      setStockOutError('Please select a valid material and size.');
+      setStockOutError('Please select a valid material, size, and length configuration.');
       return;
     }
 
@@ -464,10 +489,9 @@ export default function App() {
   const [isItemModalOpen, setIsItemModalOpen] = useState<boolean>(false);
   const [editingItem, setEditingItem] = useState<MatrixInventoryItem | null>(null);
   const [itemFormMaterial, setItemFormMaterial] = useState<string>('');
-  const [itemFormCategory, setItemFormCategory] = useState<string>('Frontlit Flex');
+  const [itemFormCategory, setItemFormCategory] = useState<string>('Flex PVC');
   const [itemFormSize, setItemFormSize] = useState<string>('');
-  const [itemFormSecondary, setItemFormSecondary] = useState<string>('');
-  const [itemFormUnit, setItemFormUnit] = useState<string>('Rolls');
+  const [itemFormRollLength, setItemFormRollLength] = useState<string>('70');
   const [itemFormOpeningStock, setItemFormOpeningStock] = useState<string>('0');
   const [itemFormMinStock, setItemFormMinStock] = useState<string>('2');
   const [itemFormError, setItemFormError] = useState<string>('');
@@ -475,10 +499,9 @@ export default function App() {
   const openAddModal = () => {
     setEditingItem(null);
     setItemFormMaterial('');
-    setItemFormCategory('Frontlit Flex');
+    setItemFormCategory('Flex PVC');
     setItemFormSize('');
-    setItemFormSecondary('');
-    setItemFormUnit('Rolls');
+    setItemFormRollLength('70');
     setItemFormOpeningStock('0');
     setItemFormMinStock('2');
     setItemFormError('');
@@ -490,8 +513,7 @@ export default function App() {
     setItemFormMaterial(item.materialName);
     setItemFormCategory(item.category);
     setItemFormSize(item.variantSize);
-    setItemFormSecondary(item.secondaryVariant || '');
-    setItemFormUnit(item.unit);
+    setItemFormRollLength((item.rollLengthMtr || 70).toString());
     setItemFormOpeningStock(item.openingStock.toString());
     setItemFormMinStock(item.minStock.toString());
     setItemFormError('');
@@ -504,10 +526,10 @@ export default function App() {
 
     const trimMaterial = itemFormMaterial.trim();
     const trimSize = itemFormSize.trim();
-    const trimSecondary = itemFormSecondary.trim();
+    const lenVal = parseInt(itemFormRollLength, 10) || 70;
 
     if (!trimMaterial || !trimSize) {
-      setItemFormError('Material name and size/width are required.');
+      setItemFormError('Material name and width/size are required.');
       return;
     }
 
@@ -524,18 +546,18 @@ export default function App() {
       return;
     }
 
-    const barcode = generateMatrixBarcode(trimMaterial, trimSize, trimSecondary || undefined);
+    const barcode = generateMatrixBarcode(trimMaterial, trimSize, lenVal);
 
     const duplicate = items.find(
       (i) =>
         i.id !== editingItem?.id &&
         i.materialName.toLowerCase() === trimMaterial.toLowerCase() &&
         i.variantSize.toLowerCase() === trimSize.toLowerCase() &&
-        (i.secondaryVariant || '').toLowerCase() === trimSecondary.toLowerCase()
+        (i.rollLengthMtr || 70) === lenVal
     );
 
     if (duplicate) {
-      setItemFormError(`Item combination "${trimMaterial} - ${trimSize}" already exists.`);
+      setItemFormError(`Combination "${trimMaterial} - ${trimSize}M (${lenVal}M)" already exists.`);
       return;
     }
 
@@ -547,8 +569,7 @@ export default function App() {
               materialName: trimMaterial,
               category: itemFormCategory,
               variantSize: trimSize,
-              secondaryVariant: trimSecondary || undefined,
-              unit: itemFormUnit,
+              rollLengthMtr: lenVal,
               openingStock: openingVal,
               minStock: minVal,
               barcode
@@ -557,15 +578,15 @@ export default function App() {
       );
       setItems(updated);
       saveStoredMatrixItems(updated);
-      showNotification(`Updated item "${trimMaterial} (${trimSize})".`);
+      showNotification(`Updated item "${trimMaterial} (${trimSize}M - ${lenVal}M)".`);
     } else {
       const newItem: MatrixInventoryItem = {
         id: `item-${Date.now()}`,
         materialName: trimMaterial,
         category: itemFormCategory,
         variantSize: trimSize,
-        secondaryVariant: trimSecondary || undefined,
-        unit: itemFormUnit,
+        rollLengthMtr: lenVal,
+        unit: 'Rolls',
         barcode,
         openingStock: openingVal,
         minStock: minVal,
@@ -575,7 +596,7 @@ export default function App() {
       const updated = [newItem, ...items];
       setItems(updated);
       saveStoredMatrixItems(updated);
-      showNotification(`Added new item "${trimMaterial} (${trimSize})".`);
+      showNotification(`Added new item "${trimMaterial} (${trimSize}M - ${lenVal}M)".`);
     }
 
     setIsItemModalOpen(false);
@@ -606,7 +627,7 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // QR LABELS PAGE STATE & PRINTING
+  // BARCODE LABELS PAGE STATE & PRINTING
   // -------------------------------------------------------------
   const [labelSearch, setLabelSearch] = useState<string>('');
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
@@ -618,8 +639,8 @@ export default function App() {
       if (!q) return true;
       return (
         i.materialName.toLowerCase().includes(q) ||
+        i.category.toLowerCase().includes(q) ||
         i.variantSize.toLowerCase().includes(q) ||
-        (i.secondaryVariant && i.secondaryVariant.toLowerCase().includes(q)) ||
         i.barcode.toLowerCase().includes(q)
       );
     });
@@ -679,8 +700,8 @@ export default function App() {
 
       const matchesSearch =
         i.materialName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        i.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
         i.variantSize.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (i.secondaryVariant && i.secondaryVariant.toLowerCase().includes(searchQuery.toLowerCase())) ||
         i.barcode.toLowerCase().includes(searchQuery.toLowerCase());
 
       const matchesCategory = categoryFilter === 'ALL' || i.category === categoryFilter;
@@ -693,68 +714,63 @@ export default function App() {
       const matchesType = txnTypeFilter === 'ALL' || t.type === txnTypeFilter;
       const matchesSearch =
         t.materialName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        t.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
         t.variantSize.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (t.secondaryVariant && t.secondaryVariant.toLowerCase().includes(searchQuery.toLowerCase())) ||
         t.barcode.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesType && matchesSearch;
     });
   }, [transactions, txnTypeFilter, searchQuery]);
 
   // -------------------------------------------------------------
-  // CLIENT EXCEL MATRIX VIEW DATA COMPUTATION
+  // CLIENT HANDWRITTEN BLUEPRINT MATRIX COMPUTATION
+  // Rows: Material Names
+  // Columns: Size / Width values
+  // Cells: Current FULL ROLLS in hand
+  // Calculated Columns: Total Rolls, Total Area (m²)
   // -------------------------------------------------------------
   const matrixData = useMemo(() => {
-    // 1. Group roll materials (Width columns)
-    const rollItems = itemsWithStock.filter((i) => i.active && i.unit === 'Rolls');
-    const rollSizes = Array.from(new Set(rollItems.map((i) => i.variantSize))).sort((a, b) => {
+    const activeItems = itemsWithStock.filter((i) => i.active);
+
+    // Standard width columns in ascending order
+    const rollSizes = Array.from(new Set(activeItems.map((i) => i.variantSize))).sort((a, b) => {
       const numA = parseFloat(a);
       const numB = parseFloat(b);
       if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
       return a.localeCompare(b);
     });
 
-    const rollMaterials = Array.from(new Set(rollItems.map((i) => i.materialName))).sort();
+    const rollMaterials = Array.from(new Set(activeItems.map((i) => i.materialName))).sort();
+
     const rollMatrixRows = rollMaterials.map((matName) => {
-      const matItems = rollItems.filter((i) => i.materialName === matName);
-      const rowTotals = matItems.reduce((sum, i) => sum + i.currentStock, 0);
+      const matItems = activeItems.filter((i) => i.materialName === matName);
+      const rowRollTotal = matItems.reduce((sum, i) => sum + i.currentStock, 0);
+      const rowAreaTotal = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
       const cells: { [size: string]: MatrixItemWithStock | undefined } = {};
       matItems.forEach((i) => {
         cells[i.variantSize] = i;
       });
       return {
         materialName: matName,
-        category: matItems[0]?.category || 'Roll Material',
+        category: matItems[0]?.category || 'Flex PVC',
         cells,
-        total: rowTotals
-      };
-    });
-
-    // 2. Group sheet materials (e.g. PVC Foam Sheet with Size x Thickness)
-    const sheetItems = itemsWithStock.filter((i) => i.active && i.unit !== 'Rolls');
-    const sheetRows = Array.from(new Set(sheetItems.map((i) => i.materialName))).map((matName) => {
-      const matItems = sheetItems.filter((i) => i.materialName === matName);
-      return {
-        materialName: matName,
-        items: matItems,
-        total: matItems.reduce((sum, i) => sum + i.currentStock, 0)
+        totalRolls: rowRollTotal,
+        totalAreaMtr2: rowAreaTotal
       };
     });
 
     return {
       rollSizes,
-      rollMatrixRows,
-      sheetRows
+      rollMatrixRows
     };
   }, [itemsWithStock]);
 
-  // Reset sample dataset helper
   const handleResetSampleData = () => {
-    if (window.confirm('Reset inventory and transaction history to the baseline client Excel sheet data?')) {
+    if (window.confirm('Reset inventory and transaction history to the baseline client blueprint dataset?')) {
       setItems(INITIAL_MATRIX_ITEMS);
       setTransactions(INITIAL_MATRIX_TRANSACTIONS);
       saveStoredMatrixItems(INITIAL_MATRIX_ITEMS);
       saveStoredMatrixTransactions(INITIAL_MATRIX_TRANSACTIONS);
-      showNotification('Restored baseline Excel sheet dataset.');
+      showNotification('Restored baseline blueprint dataset.');
     }
   };
 
@@ -793,7 +809,7 @@ export default function App() {
   }
 
   // -------------------------------------------------------------
-  // DESKTOP / MAIN APPLICATION VIEW
+  // MAIN VIEW
   // -------------------------------------------------------------
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
@@ -825,7 +841,7 @@ export default function App() {
         isOpen={cameraScannerOpen}
         onClose={() => setCameraScannerOpen(false)}
         onScanSuccess={handleCameraScanSuccess}
-        title={cameraScannerTarget === 'stock-in' ? 'Scan Code for Stock IN' : 'Scan Code for Stock OUT'}
+        title={cameraScannerTarget === 'stock-in' ? 'Scan Barcode for Stock IN' : 'Scan Barcode for Stock OUT'}
       />
 
       {/* Quick Stock Update Modal from Matrix Click */}
@@ -852,7 +868,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Printable Area for QR Labels (@media print) */}
+      {/* Printable Area for Barcode / QR Labels (@media print) */}
       <div className="hidden print:block print-label-grid">
         {(selectedLabelIds.length > 0
           ? itemsWithStock.filter((i) => selectedLabelIds.includes(i.id))
@@ -879,11 +895,11 @@ export default function App() {
                     RollPrint <span className="text-indigo-400 font-medium">IMS</span>
                   </h1>
                   <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-950 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded-full">
-                    Excel Roll Tracker
+                    Blueprint Verified
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-400">
-                  Digital Inventory & Roll-Count Matrix
+                  Full-Roll Inventory & Material Area Tracker
                 </p>
               </div>
             </div>
@@ -899,7 +915,7 @@ export default function App() {
                 }`}
               >
                 <LayoutDashboard className="w-3.5 h-3.5" />
-                <span>Dashboard</span>
+                <span>Dashboard / Summary</span>
               </button>
 
               <button
@@ -965,7 +981,7 @@ export default function App() {
                 }`}
               >
                 <QrCode className="w-3.5 h-3.5" />
-                <span>QR Labels</span>
+                <span>Barcode Labels</span>
               </button>
             </nav>
           </div>
@@ -975,11 +991,11 @@ export default function App() {
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6 print:hidden">
         {/* ========================================================= */}
-        {/* TAB 1: DASHBOARD */}
+        {/* TAB 1: DASHBOARD / SUMMARY (Client Handwritten Matrix) */}
         {/* ========================================================= */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
-            {/* KPI Summary Cards */}
+            {/* KPI Summary Cards: Rolls & Area */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
               <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
                 <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
@@ -995,13 +1011,18 @@ export default function App() {
 
               <div className="bg-white p-4 rounded-2xl border border-indigo-100 shadow-xs bg-gradient-to-br from-white to-indigo-50/40">
                 <span className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block">
-                  Current Stock Available
+                  Current Stock in Hand
                 </span>
                 <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-2xl sm:text-3xl font-black text-indigo-900 font-mono">
-                    {dashboardMetrics.currentStock}
+                  <div>
+                    <span className="text-2xl sm:text-3xl font-black text-indigo-900 font-mono">
+                      {dashboardMetrics.currentStock}
+                    </span>
+                    <span className="ml-1 text-xs font-bold text-indigo-700">Rolls</span>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-indigo-600">
+                    {dashboardMetrics.totalAreaMtr2.toLocaleString()} m²
                   </span>
-                  <span className="text-xs font-bold text-indigo-700">Total Rolls</span>
                 </div>
               </div>
 
@@ -1011,10 +1032,15 @@ export default function App() {
                   <span>Total Stock IN</span>
                 </span>
                 <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-2xl sm:text-3xl font-black text-emerald-700 font-mono">
-                    +{dashboardMetrics.totalStockIn}
+                  <div>
+                    <span className="text-2xl sm:text-3xl font-black text-emerald-700 font-mono">
+                      +{dashboardMetrics.totalStockIn}
+                    </span>
+                    <span className="ml-1 text-xs font-semibold text-emerald-600">Rolls</span>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-emerald-600">
+                    +{dashboardMetrics.totalInAreaMtr2.toLocaleString()} m²
                   </span>
-                  <span className="text-xs font-semibold text-emerald-600">Rolls</span>
                 </div>
               </div>
 
@@ -1024,28 +1050,33 @@ export default function App() {
                   <span>Total Stock OUT</span>
                 </span>
                 <div className="mt-2 flex items-baseline justify-between">
-                  <span className="text-2xl sm:text-3xl font-black text-amber-700 font-mono">
-                    -{dashboardMetrics.totalStockOut}
+                  <div>
+                    <span className="text-2xl sm:text-3xl font-black text-amber-700 font-mono">
+                      -{dashboardMetrics.totalStockOut}
+                    </span>
+                    <span className="ml-1 text-xs font-semibold text-amber-600">Rolls</span>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-amber-600">
+                    -{dashboardMetrics.totalOutAreaMtr2.toLocaleString()} m²
                   </span>
-                  <span className="text-xs font-semibold text-amber-600">Rolls</span>
                 </div>
               </div>
             </div>
 
-            {/* Matrix Header & Controls */}
+            {/* Matrix Card */}
             <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <div className="flex items-center space-x-2">
                     <h2 className="text-base font-extrabold text-slate-900 tracking-tight">
-                      Inventory Stock Matrix
+                      Client Stock Summary Matrix
                     </h2>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                       Click any cell to update stock
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Excel-style roll matrix. Rows = Materials, Columns = Sizes, Cells = Current Number of Rolls.
+                    Rows: Material Names | Columns: Size / Width values | Cell: Current full rolls in hand. Total Rolls and Area (m²) calculated automatically.
                   </p>
                 </div>
 
@@ -1087,130 +1118,93 @@ export default function App() {
 
               {/* VIEW 1: EXCEL MATRIX VIEW */}
               {dashboardViewMode === 'matrix' && (
-                <div className="space-y-6 pt-2">
-                  {/* Roll Materials Matrix Table */}
-                  <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
-                    <div className="overflow-x-auto">
-                      <table className="w-full border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-slate-900 text-white font-bold text-center">
-                            <th className="py-3 px-4 text-left font-black tracking-wide text-xs w-48 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
-                              Material Name
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs pt-1">
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-900 text-white font-bold text-center">
+                          <th className="py-3 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
+                            Material Name
+                          </th>
+                          {matrixData.rollSizes.map((size) => (
+                            <th
+                              key={size}
+                              className="py-3 px-3 min-w-[70px] border-r border-slate-800 font-mono text-indigo-200"
+                            >
+                              {size} M
                             </th>
-                            {matrixData.rollSizes.map((size) => (
-                              <th
-                                key={size}
-                                className="py-3 px-3 min-w-[70px] border-r border-slate-800 font-mono text-indigo-200"
-                              >
-                                {size} M
-                              </th>
-                            ))}
-                            <th className="py-3 px-4 bg-slate-950 font-black text-white min-w-[80px]">
-                              Total
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          {matrixData.rollMatrixRows.map((row) => (
-                            <tr key={row.materialName} className="hover:bg-indigo-50/40 transition-colors">
-                              {/* Row Header (Material Name) */}
-                              <td className="py-3 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
-                                <div className="leading-tight">
-                                  <span>{row.materialName}</span>
-                                  <span className="block text-[10px] text-slate-400 font-normal">
-                                    {row.category}
-                                  </span>
-                                </div>
-                              </td>
+                          ))}
+                          <th className="py-3 px-4 bg-slate-950 font-black text-white min-w-[90px] border-r border-slate-800">
+                            Total Rolls
+                          </th>
+                          <th className="py-3 px-4 bg-indigo-950 font-black text-indigo-200 min-w-[100px]">
+                            Total Area (m²)
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {matrixData.rollMatrixRows.map((row) => (
+                          <tr key={row.materialName} className="hover:bg-indigo-50/40 transition-colors">
+                            {/* Row Header (Material Name + Category) */}
+                            <td className="py-3 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
+                              <div className="leading-tight">
+                                <span className="text-sm font-extrabold">{row.materialName}</span>
+                                <span className="block text-[10px] text-slate-400 font-normal">
+                                  {row.category}
+                                </span>
+                              </div>
+                            </td>
 
-                              {/* Size Columns */}
-                              {matrixData.rollSizes.map((size) => {
-                                const item = row.cells[size];
-                                if (!item) {
-                                  return (
-                                    <td
-                                      key={size}
-                                      className="py-3 px-3 text-center text-slate-300 border-r border-slate-100 font-mono bg-slate-50/50"
-                                    >
-                                      —
-                                    </td>
-                                  );
-                                }
-
-                                const qty = item.currentStock;
-                                const isOutOfStock = qty <= 0;
-                                const isLowStock = qty > 0 && qty <= item.minStock;
-
+                            {/* Size Columns */}
+                            {matrixData.rollSizes.map((size) => {
+                              const item = row.cells[size];
+                              if (!item) {
                                 return (
                                   <td
                                     key={size}
-                                    onClick={() => setModalItem(item)}
-                                    className={`py-3 px-3 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
-                                      isOutOfStock
-                                        ? 'bg-red-50 text-red-600 hover:bg-red-100'
-                                        : isLowStock
-                                        ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                        : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
-                                    }`}
-                                    title={`Click to update ${item.materialName} (${item.variantSize}) - Current: ${qty} Rolls`}
+                                    className="py-3 px-3 text-center text-slate-300 border-r border-slate-100 font-mono bg-slate-50/50"
                                   >
-                                    <span className="text-sm">{qty}</span>
+                                    —
                                   </td>
                                 );
-                              })}
+                              }
 
-                              {/* Row Total */}
-                              <td className="py-3 px-4 text-center font-mono font-black text-slate-900 bg-slate-50">
-                                {row.total}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
+                              const qty = item.currentStock;
+                              const isOutOfStock = qty <= 0;
+                              const isLowStock = qty > 0 && qty <= item.minStock;
 
-                  {/* Secondary Sheet Materials (e.g. PVC Foam Sheets) */}
-                  {matrixData.sheetRows.length > 0 && (
-                    <div className="space-y-2 pt-2">
-                      <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                        Rigid Sheet Substrates (Thickness Variants)
-                      </h3>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                        {matrixData.sheetRows.map((group) => (
-                          <div
-                            key={group.materialName}
-                            className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-bold text-xs text-slate-900">
-                                {group.materialName}
-                              </span>
-                              <span className="font-mono text-xs font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded">
-                                Total: {group.total}
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-2 gap-1.5">
-                              {group.items.map((item) => (
-                                <div
-                                  key={item.id}
+                              return (
+                                <td
+                                  key={size}
                                   onClick={() => setModalItem(item)}
-                                  className="p-2 bg-white rounded-lg border border-slate-200 text-center cursor-pointer hover:border-indigo-500 hover:bg-indigo-50/30 transition-all"
+                                  className={`py-3 px-3 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
+                                    isOutOfStock
+                                      ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                      : isLowStock
+                                      ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                      : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
+                                  }`}
+                                  title={`Click to update ${item.materialName} (${item.variantSize}M × ${item.rollLengthMtr}M) - Current: ${qty} Rolls (${item.totalAreaMtr2} m²)`}
                                 >
-                                  <span className="text-[10px] text-slate-500 block font-mono">
-                                    {item.variantSize} - {item.secondaryVariant}
-                                  </span>
-                                  <span className="font-mono font-bold text-sm text-slate-900">
-                                    {item.currentStock} {item.unit}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
+                                  <span className="text-sm">{qty}</span>
+                                </td>
+                              );
+                            })}
+
+                            {/* Calculated Total Rolls Column */}
+                            <td className="py-3 px-4 text-center font-mono font-black text-slate-900 bg-slate-50 border-r border-slate-200">
+                              {row.totalRolls}
+                            </td>
+
+                            {/* Calculated Total Area (m²) Column */}
+                            <td className="py-3 px-4 text-center font-mono font-black text-indigo-700 bg-indigo-50/50">
+                              {row.totalAreaMtr2.toLocaleString()}
+                            </td>
+                          </tr>
                         ))}
-                      </div>
-                    </div>
-                  )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
 
@@ -1223,10 +1217,13 @@ export default function App() {
                         <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
                           <th className="py-3 px-4">Material Name</th>
                           <th className="py-3 px-4">Category</th>
-                          <th className="py-3 px-4">Size / Width</th>
+                          <th className="py-3 px-4">Width (M)</th>
+                          <th className="py-3 px-4">Roll Length (M)</th>
+                          <th className="py-3 px-4 text-right">Area / Roll</th>
                           <th className="py-3 px-4 text-right">Current Stock</th>
+                          <th className="py-3 px-4 text-right">Total Area (m²)</th>
                           <th className="py-3 px-4 text-center">Status</th>
-                          <th className="py-3 px-4 text-center">Quick Action</th>
+                          <th className="py-3 px-4 text-center">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -1234,12 +1231,14 @@ export default function App() {
                           <tr key={item.id} className="hover:bg-slate-50 transition-colors">
                             <td className="py-3 px-4 font-bold text-slate-900">{item.materialName}</td>
                             <td className="py-3 px-4 text-slate-600">{item.category}</td>
-                            <td className="py-3 px-4 font-mono font-medium text-slate-800">
-                              {item.variantSize}
-                              {item.secondaryVariant ? ` (${item.secondaryVariant})` : ''}
-                            </td>
+                            <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.variantSize} M</td>
+                            <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.rollLengthMtr} M</td>
+                            <td className="py-3 px-4 text-right font-mono text-slate-600">{item.areaPerRoll} m²</td>
                             <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
-                              {item.currentStock} {item.unit}
+                              {item.currentStock} Rolls
+                            </td>
+                            <td className="py-3 px-4 text-right font-mono font-bold text-indigo-700">
+                              {item.totalAreaMtr2.toLocaleString()} m²
                             </td>
                             <td className="py-3 px-4 text-center">
                               {item.status === 'IN_STOCK' && (
@@ -1286,7 +1285,7 @@ export default function App() {
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Materials Master</h2>
                 <p className="text-xs text-slate-500">
-                  Manage inventory materials, size variants, and barcodes.
+                  Manage inventory materials, dimensions (Width × Length), barcodes, and opening stock.
                 </p>
               </div>
 
@@ -1319,7 +1318,7 @@ export default function App() {
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search by Material Name, Size, or Barcode..."
+                  placeholder="Search by Material Name, Category, Size, or Barcode..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
@@ -1335,7 +1334,9 @@ export default function App() {
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
                       <th className="py-3 px-4">Material Name</th>
                       <th className="py-3 px-4">Category</th>
-                      <th className="py-3 px-4">Size / Width</th>
+                      <th className="py-3 px-4">Width (M)</th>
+                      <th className="py-3 px-4">Roll Length (M)</th>
+                      <th className="py-3 px-4">Area / Roll</th>
                       <th className="py-3 px-4">Unique Barcode</th>
                       <th className="py-3 px-4 text-right">Current Stock</th>
                       <th className="py-3 px-4 text-right">Min Stock</th>
@@ -1360,18 +1361,15 @@ export default function App() {
                           )}
                         </td>
                         <td className="py-3 px-4 text-slate-600">{item.category}</td>
-                        <td className="py-3 px-4 font-mono font-medium text-slate-800">
-                          {item.variantSize}
-                          {item.secondaryVariant ? ` (${item.secondaryVariant})` : ''}
-                        </td>
-                        <td className="py-3 px-4 font-mono font-bold text-indigo-700">
-                          {item.barcode}
-                        </td>
+                        <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.variantSize} M</td>
+                        <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.rollLengthMtr} M</td>
+                        <td className="py-3 px-4 font-mono text-slate-600">{item.areaPerRoll} m²</td>
+                        <td className="py-3 px-4 font-mono font-bold text-indigo-700">{item.barcode}</td>
                         <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
-                          {item.currentStock} {item.unit}
+                          {item.currentStock} Rolls
                         </td>
                         <td className="py-3 px-4 text-right font-mono text-slate-500">
-                          {item.minStock} {item.unit}
+                          {item.minStock} Rolls
                         </td>
                         <td className="py-3 px-4 text-center">
                           {item.active ? (
@@ -1393,7 +1391,7 @@ export default function App() {
                               onClick={() =>
                                 handleToggleItemStatus(
                                   item.id,
-                                  `${item.materialName} (${item.variantSize})`,
+                                  `${item.materialName} (${item.variantSize}M - ${item.rollLengthMtr}M)`,
                                   item.active
                                 )
                               }
@@ -1416,7 +1414,16 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 3: STOCK IN (With Barcode Verification AFTER Calculation) */}
+        {/* TAB 3: STOCK IN (Exact Blueprint Order) */}
+        {/* 1. Material Name */}
+        {/* 2. Category (auto-populated) */}
+        {/* 3. Size / Width */}
+        {/* 4. Roll Length / Meter */}
+        {/* 5. Roll Quantity */}
+        {/* 6. Date */}
+        {/* 7. Calculation / Stock Preview */}
+        {/* 8. Barcode Scan / Verification */}
+        {/* 9. Save */}
         {/* ========================================================= */}
         {activeTab === 'stock-in' && (
           <div className="max-w-xl mx-auto space-y-5">
@@ -1428,7 +1435,7 @@ export default function App() {
                 <div>
                   <h2 className="text-lg font-black text-slate-900 tracking-tight">Stock IN</h2>
                   <p className="text-xs text-slate-500">
-                    Add rolls into inventory. Barcode verification required before saving.
+                    Add full rolls into inventory balance according to blueprint.
                   </p>
                 </div>
               </div>
@@ -1441,45 +1448,59 @@ export default function App() {
               )}
 
               <form onSubmit={handleStockInSubmit} className="space-y-4 text-xs">
-                {/* 1. Material Dropdown (Displays ONLY material names) */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">
-                    1. Material <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={stockInMaterial}
-                    onChange={(e) => {
-                      setStockInMaterial(e.target.value);
-                      setStockInVariantSize('');
-                      setStockInSecondary('');
-                      setStockInBarcodeCode('');
-                      setStockInVerificationStatus('IDLE');
-                      setStockInError('');
-                    }}
-                    required
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                  >
-                    <option value="">-- Select Material --</option>
-                    {uniqueMaterialNames.map((mat) => (
-                      <option key={mat} value={mat}>
-                        {mat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 2 & 3. Size and Rolls to Add in ONE ROW */}
+                {/* 1 & 2: Material Name & Auto-Populated Category */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-slate-700 font-bold mb-1">
-                      2. Size <span className="text-red-500">*</span>
+                      1. Material Name <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockInMaterial}
+                      onChange={(e) => {
+                        setStockInMaterial(e.target.value);
+                        setStockInVariantSize('');
+                        setStockInBarcodeCode('');
+                        setStockInVerificationStatus('IDLE');
+                        setStockInError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    >
+                      <option value="">-- Select Material --</option>
+                      {uniqueMaterialNames.map((mat) => (
+                        <option key={mat} value={mat}>
+                          {mat}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      2. Category
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      disabled
+                      value={stockInAutoCategory || '—'}
+                      placeholder="Auto-populated"
+                      className="w-full p-3 bg-slate-100 border border-slate-300 rounded-xl text-slate-700 text-sm font-medium cursor-not-allowed"
+                    />
+                  </div>
+                </div>
+
+                {/* 3 & 4: Size / Width & Roll Length / Meter */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      3. Size / Width <span className="text-red-500">*</span>
                     </label>
                     <select
                       value={stockInVariantSize}
                       disabled={!stockInMaterial}
                       onChange={(e) => {
                         setStockInVariantSize(e.target.value);
-                        setStockInSecondary('');
                         setStockInBarcodeCode('');
                         setStockInVerificationStatus('IDLE');
                         setStockInError('');
@@ -1488,11 +1509,11 @@ export default function App() {
                       className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       <option value="">
-                        {stockInMaterial ? '-- Select Size --' : '-- Choose Material First --'}
+                        {stockInMaterial ? '-- Select Width --' : '-- Choose Material First --'}
                       </option>
                       {stockInAvailableSizes.map((size) => (
                         <option key={size} value={size}>
-                          {size}
+                          {size} M
                         </option>
                       ))}
                     </select>
@@ -1500,7 +1521,34 @@ export default function App() {
 
                   <div>
                     <label className="block text-slate-700 font-bold mb-1">
-                      3. Rolls to Add <span className="text-red-500">*</span>
+                      4. Roll Length / Meter <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockInRollLength}
+                      disabled={!stockInVariantSize}
+                      onChange={(e) => {
+                        setStockInRollLength(e.target.value);
+                        setStockInBarcodeCode('');
+                        setStockInVerificationStatus('IDLE');
+                        setStockInError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      {stockInAvailableLengths.map((len) => (
+                        <option key={len} value={len}>
+                          {len} M
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* 5 & 6: Roll Quantity & Date */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      5. Roll Quantity <span className="text-red-500">*</span>
                     </label>
                     <input
                       ref={stockInRollsInputRef}
@@ -1523,69 +1571,55 @@ export default function App() {
                       className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                     />
                   </div>
-                </div>
 
-                {/* Optional Secondary Variant (Thickness for sheets) */}
-                {stockInAvailableSecondaries.length > 0 && (
                   <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      Secondary Variant (Thickness) <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={stockInSecondary}
-                      onChange={(e) => {
-                        setStockInSecondary(e.target.value);
-                        setStockInBarcodeCode('');
-                        setStockInVerificationStatus('IDLE');
-                        setStockInError('');
-                      }}
-                      required
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                    >
-                      <option value="">-- Select Thickness --</option>
-                      {stockInAvailableSecondaries.map((sec) => (
-                        <option key={sec} value={sec}>
-                          {sec}
-                        </option>
-                      ))}
-                    </select>
+                    <label className="block text-slate-700 font-bold mb-1">6. Date</label>
+                    <input
+                      type="date"
+                      value={stockInDate}
+                      onChange={(e) => setStockInDate(e.target.value)}
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                    />
                   </div>
-                )}
-
-                {/* 4. Date in 3rd Row (Full Width) */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">4. Date</label>
-                  <input
-                    type="date"
-                    value={stockInDate}
-                    onChange={(e) => setStockInDate(e.target.value)}
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                  />
                 </div>
 
-                {/* 5. STOCK CALCULATION PREVIEW */}
+                {/* 7. CALCULATION / STOCK PREVIEW */}
                 {matchedStockInItem && (
                   (() => {
                     const current = matchedStockInItem.currentStock;
                     const rollsIn = parseInt(stockInRolls, 10) || 0;
                     const afterStock = current + rollsIn;
+                    const widthNum = parseFloat(matchedStockInItem.variantSize) || 1.0;
+                    const lengthNum = matchedStockInItem.rollLengthMtr || 70;
+                    const areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
+                    const totalAreaAdded = Number((areaPerRoll * rollsIn).toFixed(2));
 
                     return (
-                      <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
+                      <div className="p-4 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-3">
                         <div className="text-[11px] font-bold text-emerald-900 uppercase tracking-wider flex items-center justify-between">
-                          <span>Stock Calculation Preview</span>
-                          <span className="font-mono text-slate-500 normal-case">
-                            Expected Barcode: {matchedStockInItem.barcode}
+                          <span>7. Calculation / Stock Preview</span>
+                          <span className="font-mono text-slate-600 normal-case text-xs">
+                            Expected: <strong>{matchedStockInItem.barcode}</strong>
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3 pt-1 text-center font-mono">
+                        {/* Roll Counts */}
+                        <div className="grid grid-cols-3 gap-2 text-center font-mono">
                           <div className="bg-white p-2.5 rounded-xl border border-emerald-100">
                             <span className="text-[10px] text-slate-500 block uppercase font-sans font-semibold">
                               Current Stock
                             </span>
-                            <span className="text-lg font-bold text-slate-800">
-                              {current} {matchedStockInItem.unit}
+                            <span className="text-base font-bold text-slate-800">
+                              {current} Rolls
+                            </span>
+                          </div>
+
+                          <div className="bg-white p-2.5 rounded-xl border border-emerald-100">
+                            <span className="text-[10px] text-emerald-700 block uppercase font-sans font-semibold">
+                              Rolls IN
+                            </span>
+                            <span className="text-base font-bold text-emerald-700">
+                              +{rollsIn} Rolls
                             </span>
                           </div>
 
@@ -1593,9 +1627,21 @@ export default function App() {
                             <span className="text-[10px] text-emerald-100 block uppercase font-sans font-semibold">
                               After Stock IN
                             </span>
-                            <span className="text-lg font-black text-white">
-                              {afterStock} {matchedStockInItem.unit}
+                            <span className="text-base font-black text-white">
+                              {afterStock} Rolls
                             </span>
+                          </div>
+                        </div>
+
+                        {/* Area Calculations as per blueprint: WIDTH × ROLL LENGTH */}
+                        <div className="bg-white/80 p-3 rounded-xl border border-emerald-200 font-mono text-xs space-y-1">
+                          <div className="flex items-center justify-between text-slate-700">
+                            <span>Area Per Roll:</span>
+                            <strong>{widthNum} M × {lengthNum} M = {areaPerRoll} m²</strong>
+                          </div>
+                          <div className="flex items-center justify-between text-emerald-800 border-t border-emerald-100 pt-1 font-bold">
+                            <span>Total Area Added:</span>
+                            <span>{areaPerRoll} × {rollsIn} = {totalAreaAdded} m²</span>
                           </div>
                         </div>
                       </div>
@@ -1603,16 +1649,16 @@ export default function App() {
                   })()
                 )}
 
-                {/* 6. BARCODE VERIFICATION SECTION (Directly BELOW Calculation) */}
+                {/* 8. BARCODE SCAN / VERIFICATION */}
                 <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <label className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center space-x-1.5">
                         <BarcodeIcon className="w-4 h-4 text-indigo-600" />
-                        <span>Barcode Verification</span>
+                        <span>8. Barcode Verification</span>
                       </label>
                       <p className="text-[11px] text-slate-500">
-                        Scan or enter barcode for {matchedStockInItem ? `${matchedStockInItem.materialName} (${matchedStockInItem.variantSize})` : 'selected item'}.
+                        Scan or enter barcode for {matchedStockInItem ? `${matchedStockInItem.materialName} / ${matchedStockInItem.variantSize}M / ${matchedStockInItem.rollLengthMtr}M` : 'selected item'}.
                       </p>
                     </div>
 
@@ -1630,7 +1676,7 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Barcode input with auto-verify on Enter / rapid scanner typing */}
+                  {/* Input with auto-validation on Enter / rapid scanner typing */}
                   <div className="relative">
                     <input
                       ref={stockInVerificationInputRef}
@@ -1638,8 +1684,8 @@ export default function App() {
                       disabled={!matchedStockInItem}
                       placeholder={
                         matchedStockInItem
-                          ? `Scan barcode (e.g. ${matchedStockInItem.barcode})...`
-                          : 'Select Material & Size first'
+                          ? `Scan or enter barcode (e.g. ${matchedStockInItem.barcode})...`
+                          : 'Select Material, Size & Length first'
                       }
                       value={stockInBarcodeCode}
                       onChange={(e) => {
@@ -1686,7 +1732,7 @@ export default function App() {
                     <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-bold flex items-center space-x-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
                       <span>
-                        ✓ Barcode Verified: {matchedStockInItem.materialName} — {matchedStockInItem.variantSize}
+                        ✓ Barcode Verified: {matchedStockInItem.materialName} — {matchedStockInItem.variantSize}M ({matchedStockInItem.rollLengthMtr}M)
                       </span>
                     </div>
                   )}
@@ -1694,12 +1740,12 @@ export default function App() {
                   {stockInVerificationStatus === 'MISMATCH' && (
                     <div className="p-3 bg-red-100/80 border border-red-300 rounded-xl text-xs text-red-900 font-bold flex items-center space-x-2">
                       <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
-                      <span>✕ Barcode does not match selected material and size.</span>
+                      <span>✕ Barcode does not match the selected material configuration.</span>
                     </div>
                   )}
                 </div>
 
-                {/* 7. SAVE BUTTON (Disabled until verification succeeds) */}
+                {/* 9. SAVE STOCK IN (Enabled only when verified) */}
                 <div className="pt-2">
                   <button
                     type="submit"
@@ -1718,7 +1764,7 @@ export default function App() {
                     <ArrowDownToLine className="w-4 h-4" />
                     <span>
                       {stockInVerificationStatus === 'VERIFIED'
-                        ? 'Save Stock IN'
+                        ? '9. Save Stock IN'
                         : 'Scan Barcode to Enable Save'}
                     </span>
                   </button>
@@ -1729,7 +1775,7 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 4: STOCK OUT (With Barcode Verification AFTER Calculation) */}
+        {/* TAB 4: STOCK OUT (Exact Blueprint Order) */}
         {/* ========================================================= */}
         {activeTab === 'stock-out' && (
           <div className="max-w-xl mx-auto space-y-5">
@@ -1741,7 +1787,7 @@ export default function App() {
                 <div>
                   <h2 className="text-lg font-black text-slate-900 tracking-tight">Stock OUT</h2>
                   <p className="text-xs text-slate-500">
-                    Remove rolls from inventory. Barcode verification required before saving.
+                    Remove rolls from inventory balance according to blueprint.
                   </p>
                 </div>
               </div>
@@ -1754,45 +1800,59 @@ export default function App() {
               )}
 
               <form onSubmit={handleStockOutSubmit} className="space-y-4 text-xs">
-                {/* 1. Material Dropdown (Displays ONLY material names) */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">
-                    1. Material <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={stockOutMaterial}
-                    onChange={(e) => {
-                      setStockOutMaterial(e.target.value);
-                      setStockOutVariantSize('');
-                      setStockOutSecondary('');
-                      setStockOutBarcodeCode('');
-                      setStockOutVerificationStatus('IDLE');
-                      setStockOutError('');
-                    }}
-                    required
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                  >
-                    <option value="">-- Select Material --</option>
-                    {uniqueMaterialNames.map((mat) => (
-                      <option key={mat} value={mat}>
-                        {mat}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* 2 & 3. Size and Rolls to Remove in ONE ROW */}
+                {/* 1 & 2: Material Name & Auto-Populated Category */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-slate-700 font-bold mb-1">
-                      2. Size <span className="text-red-500">*</span>
+                      1. Material Name <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockOutMaterial}
+                      onChange={(e) => {
+                        setStockOutMaterial(e.target.value);
+                        setStockOutVariantSize('');
+                        setStockOutBarcodeCode('');
+                        setStockOutVerificationStatus('IDLE');
+                        setStockOutError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                    >
+                      <option value="">-- Select Material --</option>
+                      {uniqueMaterialNames.map((mat) => (
+                        <option key={mat} value={mat}>
+                          {mat}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      2. Category
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      disabled
+                      value={stockOutAutoCategory || '—'}
+                      placeholder="Auto-populated"
+                      className="w-full p-3 bg-slate-100 border border-slate-300 rounded-xl text-slate-700 text-sm font-medium cursor-not-allowed"
+                    />
+                  </div>
+                </div>
+
+                {/* 3 & 4: Size / Width & Roll Length / Meter */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      3. Size / Width <span className="text-red-500">*</span>
                     </label>
                     <select
                       value={stockOutVariantSize}
                       disabled={!stockOutMaterial}
                       onChange={(e) => {
                         setStockOutVariantSize(e.target.value);
-                        setStockOutSecondary('');
                         setStockOutBarcodeCode('');
                         setStockOutVerificationStatus('IDLE');
                         setStockOutError('');
@@ -1801,11 +1861,11 @@ export default function App() {
                       className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
                     >
                       <option value="">
-                        {stockOutMaterial ? '-- Select Size --' : '-- Choose Material First --'}
+                        {stockOutMaterial ? '-- Select Width --' : '-- Choose Material First --'}
                       </option>
                       {stockOutAvailableSizes.map((size) => (
                         <option key={size} value={size}>
-                          {size}
+                          {size} M
                         </option>
                       ))}
                     </select>
@@ -1813,7 +1873,34 @@ export default function App() {
 
                   <div>
                     <label className="block text-slate-700 font-bold mb-1">
-                      3. Rolls to Remove <span className="text-red-500">*</span>
+                      4. Roll Length / Meter <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={stockOutRollLength}
+                      disabled={!stockOutVariantSize}
+                      onChange={(e) => {
+                        setStockOutRollLength(e.target.value);
+                        setStockOutBarcodeCode('');
+                        setStockOutVerificationStatus('IDLE');
+                        setStockOutError('');
+                      }}
+                      required
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100 disabled:text-slate-400"
+                    >
+                      {stockOutAvailableLengths.map((len) => (
+                        <option key={len} value={len}>
+                          {len} M
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* 5 & 6: Roll Quantity OUT & Date */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-slate-700 font-bold mb-1">
+                      5. Roll Quantity OUT <span className="text-red-500">*</span>
                     </label>
                     <input
                       ref={stockOutRollsInputRef}
@@ -1836,74 +1923,60 @@ export default function App() {
                       className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
                     />
                   </div>
-                </div>
 
-                {/* Optional Secondary Variant (Thickness for sheets) */}
-                {stockOutAvailableSecondaries.length > 0 && (
                   <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      Secondary Variant (Thickness) <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={stockOutSecondary}
-                      onChange={(e) => {
-                        setStockOutSecondary(e.target.value);
-                        setStockOutBarcodeCode('');
-                        setStockOutVerificationStatus('IDLE');
-                        setStockOutError('');
-                      }}
-                      required
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                    >
-                      <option value="">-- Select Thickness --</option>
-                      {stockOutAvailableSecondaries.map((sec) => (
-                        <option key={sec} value={sec}>
-                          {sec}
-                        </option>
-                      ))}
-                    </select>
+                    <label className="block text-slate-700 font-bold mb-1">6. Date</label>
+                    <input
+                      type="date"
+                      value={stockOutDate}
+                      onChange={(e) => setStockOutDate(e.target.value)}
+                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
+                    />
                   </div>
-                )}
-
-                {/* 4. Date in 3rd Row (Full Width) */}
-                <div>
-                  <label className="block text-slate-700 font-bold mb-1">4. Date</label>
-                  <input
-                    type="date"
-                    value={stockOutDate}
-                    onChange={(e) => setStockOutDate(e.target.value)}
-                    className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                  />
                 </div>
 
-                {/* 5. STOCK CALCULATION PREVIEW */}
+                {/* 7. CALCULATION / STOCK PREVIEW */}
                 {matchedStockOutItem && (
                   (() => {
                     const current = matchedStockOutItem.currentStock;
                     const rollsOut = parseInt(stockOutRolls, 10) || 0;
                     const isExceeded = rollsOut > current;
                     const afterStock = Math.max(0, current - rollsOut);
+                    const widthNum = parseFloat(matchedStockOutItem.variantSize) || 1.0;
+                    const lengthNum = matchedStockOutItem.rollLengthMtr || 70;
+                    const areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
+                    const totalAreaOut = Number((areaPerRoll * rollsOut).toFixed(2));
 
                     return (
                       <div
-                        className={`p-4 rounded-2xl border space-y-2 ${
-                          isExceeded ? 'bg-red-50 border-red-200' : 'bg-amber-50/80 border-amber-200'
+                        className={`p-4 rounded-2xl border space-y-3 ${
+                          isExceeded ? 'bg-red-50 border-red-200' : 'bg-amber-50/70 border-amber-200'
                         }`}
                       >
                         <div className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                          <span>Stock Calculation Preview</span>
-                          <span className="font-mono text-slate-500 normal-case">
-                            Expected Barcode: {matchedStockOutItem.barcode}
+                          <span>7. Calculation / Stock Preview</span>
+                          <span className="font-mono text-slate-600 normal-case text-xs">
+                            Expected: <strong>{matchedStockOutItem.barcode}</strong>
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3 pt-1 text-center font-mono">
+                        {/* Roll Counts */}
+                        <div className="grid grid-cols-3 gap-2 text-center font-mono">
                           <div className="bg-white p-2.5 rounded-xl border border-slate-200">
                             <span className="text-[10px] text-slate-500 block uppercase font-sans font-semibold">
                               Current Stock
                             </span>
-                            <span className="text-lg font-bold text-slate-900">
-                              {current} {matchedStockOutItem.unit}
+                            <span className="text-base font-bold text-slate-900">
+                              {current} Rolls
+                            </span>
+                          </div>
+
+                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
+                            <span className="text-[10px] text-amber-700 block uppercase font-sans font-semibold">
+                              Rolls OUT
+                            </span>
+                            <span className="text-base font-bold text-amber-700">
+                              -{rollsOut} Rolls
                             </span>
                           </div>
 
@@ -1915,9 +1988,21 @@ export default function App() {
                             <span className="text-[10px] text-slate-300 block uppercase font-sans font-semibold">
                               After Stock OUT
                             </span>
-                            <span className="text-lg font-black text-white">
-                              {afterStock} {matchedStockOutItem.unit}
+                            <span className="text-base font-black text-white">
+                              {afterStock} Rolls
                             </span>
+                          </div>
+                        </div>
+
+                        {/* Area Calculations as per blueprint */}
+                        <div className="bg-white/80 p-3 rounded-xl border border-slate-200 font-mono text-xs space-y-1">
+                          <div className="flex items-center justify-between text-slate-700">
+                            <span>Area Per Roll:</span>
+                            <strong>{widthNum} M × {lengthNum} M = {areaPerRoll} m²</strong>
+                          </div>
+                          <div className="flex items-center justify-between text-amber-800 border-t border-slate-100 pt-1 font-bold">
+                            <span>Total Area OUT:</span>
+                            <span>{areaPerRoll} × {rollsOut} = {totalAreaOut} m²</span>
                           </div>
                         </div>
 
@@ -1925,7 +2010,7 @@ export default function App() {
                           <div className="text-xs text-red-700 font-bold flex items-center space-x-1.5 pt-1">
                             <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
                             <span>
-                              Requested rolls ({rollsOut}) exceeds available stock ({current} {matchedStockOutItem.unit}).
+                              Requested rolls ({rollsOut}) exceeds current in-hand stock ({current} rolls).
                             </span>
                           </div>
                         )}
@@ -1934,16 +2019,16 @@ export default function App() {
                   })()
                 )}
 
-                {/* 6. BARCODE VERIFICATION SECTION (Directly BELOW Calculation) */}
+                {/* 8. BARCODE SCAN / VERIFICATION */}
                 <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <label className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center space-x-1.5">
                         <BarcodeIcon className="w-4 h-4 text-amber-600" />
-                        <span>Barcode Verification</span>
+                        <span>8. Barcode Verification</span>
                       </label>
                       <p className="text-[11px] text-slate-500">
-                        Scan or enter barcode for {matchedStockOutItem ? `${matchedStockOutItem.materialName} (${matchedStockOutItem.variantSize})` : 'selected item'}.
+                        Scan or enter barcode for {matchedStockOutItem ? `${matchedStockOutItem.materialName} / ${matchedStockOutItem.variantSize}M / ${matchedStockOutItem.rollLengthMtr}M` : 'selected item'}.
                       </p>
                     </div>
 
@@ -1961,7 +2046,7 @@ export default function App() {
                     </button>
                   </div>
 
-                  {/* Barcode input with auto-verify on Enter / rapid scanner typing */}
+                  {/* Input with auto-validation on Enter / rapid scanner typing */}
                   <div className="relative">
                     <input
                       ref={stockOutVerificationInputRef}
@@ -1969,8 +2054,8 @@ export default function App() {
                       disabled={!matchedStockOutItem}
                       placeholder={
                         matchedStockOutItem
-                          ? `Scan barcode (e.g. ${matchedStockOutItem.barcode})...`
-                          : 'Select Material & Size first'
+                          ? `Scan or enter barcode (e.g. ${matchedStockOutItem.barcode})...`
+                          : 'Select Material, Size & Length first'
                       }
                       value={stockOutBarcodeCode}
                       onChange={(e) => {
@@ -2017,7 +2102,7 @@ export default function App() {
                     <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-bold flex items-center space-x-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
                       <span>
-                        ✓ Barcode Verified: {matchedStockOutItem.materialName} — {matchedStockOutItem.variantSize}
+                        ✓ Barcode Verified: {matchedStockOutItem.materialName} — {matchedStockOutItem.variantSize}M ({matchedStockOutItem.rollLengthMtr}M)
                       </span>
                     </div>
                   )}
@@ -2025,12 +2110,12 @@ export default function App() {
                   {stockOutVerificationStatus === 'MISMATCH' && (
                     <div className="p-3 bg-red-100/80 border border-red-300 rounded-xl text-xs text-red-900 font-bold flex items-center space-x-2">
                       <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
-                      <span>✕ Barcode does not match selected material and size.</span>
+                      <span>✕ Barcode does not match the selected material configuration.</span>
                     </div>
                   )}
                 </div>
 
-                {/* 7. SAVE BUTTON (Disabled until verification succeeds) */}
+                {/* 9. SAVE STOCK OUT (Enabled only when verified & rolls <= current) */}
                 <div className="pt-2">
                   <button
                     type="submit"
@@ -2053,7 +2138,7 @@ export default function App() {
                     <ArrowUpFromLine className="w-4 h-4" />
                     <span>
                       {stockOutVerificationStatus === 'VERIFIED'
-                        ? 'Save Stock OUT'
+                        ? '9. Save Stock OUT'
                         : 'Scan Barcode to Enable Save'}
                     </span>
                   </button>
@@ -2064,7 +2149,7 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 5: TRANSACTIONS (Simplified History) */}
+        {/* TAB 5: TRANSACTIONS (Blueprint Spec) */}
         {/* ========================================================= */}
         {activeTab === 'transactions' && (
           <div className="space-y-4">
@@ -2072,7 +2157,7 @@ export default function App() {
               <div>
                 <h2 className="text-lg font-bold text-slate-900">Transaction History</h2>
                 <p className="text-xs text-slate-500">
-                  Audit trail of all Stock IN and Stock OUT roll movements.
+                  Full audit trail: Date, Material, Category, Width, Length, Type, Quantity, Area (m²), and Balance.
                 </p>
               </div>
 
@@ -2111,7 +2196,7 @@ export default function App() {
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Filter transactions by material, size, or barcode..."
+                  placeholder="Filter transactions by material, category, width, or barcode..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
@@ -2127,10 +2212,12 @@ export default function App() {
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
                       <th className="py-3 px-4">Date / Time</th>
                       <th className="py-3 px-4">Material</th>
-                      <th className="py-3 px-4">Size</th>
-                      <th className="py-3 px-4">Barcode</th>
+                      <th className="py-3 px-4">Category</th>
+                      <th className="py-3 px-4">Width</th>
+                      <th className="py-3 px-4">Length</th>
                       <th className="py-3 px-4 text-center">Type</th>
-                      <th className="py-3 px-4 text-right">Roll Count</th>
+                      <th className="py-3 px-4 text-right">Roll Quantity</th>
+                      <th className="py-3 px-4 text-right">Area (m²)</th>
                       <th className="py-3 px-4 text-right font-mono">Before</th>
                       <th className="py-3 px-4 text-right font-mono">After</th>
                     </tr>
@@ -2138,7 +2225,7 @@ export default function App() {
                   <tbody className="divide-y divide-slate-100">
                     {filteredTransactions.length === 0 ? (
                       <tr>
-                        <td colSpan={8} className="py-8 text-center text-slate-400">
+                        <td colSpan={10} className="py-8 text-center text-slate-400">
                           No transactions found.
                         </td>
                       </tr>
@@ -2152,13 +2239,9 @@ export default function App() {
                             </span>
                           </td>
                           <td className="py-3 px-4 font-bold text-slate-900">{tx.materialName}</td>
-                          <td className="py-3 px-4 font-mono font-medium text-slate-800">
-                            {tx.variantSize}
-                            {tx.secondaryVariant ? ` (${tx.secondaryVariant})` : ''}
-                          </td>
-                          <td className="py-3 px-4 font-mono text-slate-500 text-[11px] font-semibold">
-                            {tx.barcode}
-                          </td>
+                          <td className="py-3 px-4 text-slate-600">{tx.category}</td>
+                          <td className="py-3 px-4 font-mono font-medium text-slate-800">{tx.variantSize} M</td>
+                          <td className="py-3 px-4 font-mono font-medium text-slate-800">{tx.rollLengthMtr} M</td>
                           <td className="py-3 px-4 text-center">
                             <span
                               className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
@@ -2176,7 +2259,10 @@ export default function App() {
                             }`}
                           >
                             {tx.type === 'IN' ? '+' : '-'}
-                            {tx.quantity} {tx.unit}
+                            {tx.quantity} Rolls
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono font-bold text-indigo-700">
+                            {tx.areaMtr2} m²
                           </td>
                           <td className="py-3 px-4 text-right font-mono text-slate-500 font-semibold">
                             {tx.stockBefore}
@@ -2195,16 +2281,16 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 6: QR LABELS */}
+        {/* TAB 6: BARCODE LABELS */}
         {/* ========================================================= */}
         {activeTab === 'qr-labels' && (
           <div className="space-y-5">
             {/* Header & Controls */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="text-lg font-bold text-slate-900">QR Labels</h2>
+                <h2 className="text-lg font-bold text-slate-900">Barcode Labels</h2>
                 <p className="text-xs text-slate-500">
-                  Scan any QR code with a phone's normal camera to directly view and update roll stock.
+                  Each label encodes Material + Width + Roll Length. Scan with normal phone camera or USB/Bluetooth scanner.
                 </p>
               </div>
 
@@ -2234,7 +2320,7 @@ export default function App() {
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search labels by material, size, or barcode..."
+                  placeholder="Search labels by material, category, width, or barcode..."
                   value={labelSearch}
                   onChange={(e) => setLabelSearch(e.target.value)}
                   className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
@@ -2298,70 +2384,58 @@ export default function App() {
                 <input
                   type="text"
                   required
-                  placeholder="e.g. Backlit Sunlex"
+                  placeholder="e.g. Active"
                   value={itemFormMaterial}
                   onChange={(e) => setItemFormMaterial(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
                 />
               </div>
 
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Category *</label>
+                <select
+                  value={itemFormCategory}
+                  onChange={(e) => setItemFormCategory(e.target.value)}
+                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                >
+                  <option value="Flex PVC">Flex PVC</option>
+                  <option value="Backlit">Backlit</option>
+                  <option value="Frontlit Flex">Frontlit Flex</option>
+                  <option value="Self Adhesive Vinyl">Self Adhesive Vinyl</option>
+                  <option value="Lamination Film">Lamination Film</option>
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Category *</label>
-                  <select
-                    value={itemFormCategory}
-                    onChange={(e) => setItemFormCategory(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
-                  >
-                    <option value="Backlit">Backlit</option>
-                    <option value="Frontlit Flex">Frontlit Flex</option>
-                    <option value="Self Adhesive Vinyl">Self Adhesive Vinyl</option>
-                    <option value="Lamination Film">Lamination Film</option>
-                    <option value="Rigid Sheet">Rigid Sheet</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Size / Width *</label>
+                  <label className="block text-slate-700 font-semibold mb-1">Size / Width (M) *</label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. 1.63 or 8×4"
+                    placeholder="e.g. 1.02"
                     value={itemFormSize}
                     onChange={(e) => setItemFormSize(e.target.value)}
                     className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
                   />
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-slate-700 font-semibold mb-1">
-                  Secondary Variant (Thickness - optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. 2mm or 3mm (for rigid sheets)"
-                  value={itemFormSecondary}
-                  onChange={(e) => setItemFormSecondary(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Unit</label>
+                  <label className="block text-slate-700 font-semibold mb-1">Roll Length (M) *</label>
                   <select
-                    value={itemFormUnit}
-                    onChange={(e) => setItemFormUnit(e.target.value)}
-                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
+                    value={itemFormRollLength}
+                    onChange={(e) => setItemFormRollLength(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono"
                   >
-                    <option value="Rolls">Rolls</option>
-                    <option value="Sheets">Sheets</option>
+                    <option value="50">50 M</option>
+                    <option value="70">70 M</option>
+                    <option value="100">100 M</option>
                   </select>
                 </div>
+              </div>
 
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Opening Stock</label>
+                  <label className="block text-slate-700 font-semibold mb-1">Opening Stock (Rolls)</label>
                   <input
                     type="number"
                     min="0"
@@ -2407,13 +2481,13 @@ export default function App() {
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500 print:hidden">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>
-            RollPrint IMS &copy; 2026 &mdash; Built for Large Format Printing Inventory
+            RollPrint IMS &copy; 2026 &mdash; Built to Client Handwritten Blueprint
           </span>
           <button
             onClick={handleResetSampleData}
             className="text-[11px] text-slate-400 hover:text-indigo-600 font-medium underline"
           >
-            Reset Client Excel Sample Data
+            Reset Client Blueprint Sample Data
           </button>
         </div>
       </footer>
