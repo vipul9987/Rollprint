@@ -1433,8 +1433,8 @@ export default function App() {
       {/* Main App Header */}
       <header className="bg-[#0A0A0C] text-white border-b border-zinc-800/80 sticky top-0 z-40 print:hidden backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row md:items-center justify-between min-h-[4.75rem] py-2.5 md:py-1 gap-3">
-            {/* Logo & Title (Decora Sales circular gold medallion) */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between min-h-[5.25rem] py-2 md:py-1 gap-3">
+            {/* Logo & Title */}
             <AppLogo />
 
             {/* Navigation Tabs - Pill design inspired by Airbnb with Decora Sales Gold Palette */}

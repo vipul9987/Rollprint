@@ -4,21 +4,21 @@ export function AppLogo() {
   const [imgError, setImgError] = useState(false);
 
   return (
-    <div className="flex items-center space-x-3.5 select-none py-1">
+    <div className="flex items-center select-none py-1">
       <div className="relative flex items-center justify-center shrink-0">
         {!imgError ? (
-          /* Official Decora Sales Logo from public folder */
+          /* Official Decora Sales Logo from public folder (Prominent & enlarged) */
           <img
             src="/logo.png"
-            alt="Decora Sales Logo"
+            alt="Decora Sales"
             onError={() => setImgError(true)}
             style={{ objectFit: 'contain' }}
-            className="h-14 sm:h-16 w-auto max-w-[220px] drop-shadow-md transition-transform hover:scale-[1.02] duration-200"
+            className="h-16 sm:h-20 w-auto max-w-[260px] drop-shadow-md transition-transform hover:scale-[1.02] duration-200"
           />
         ) : (
           /* Fallback Decora Sales Circular Gold Medallion */
           <svg
-            className="w-12 h-12 sm:w-14 sm:h-14 drop-shadow-sm transition-transform hover:scale-105 duration-200"
+            className="w-16 h-16 sm:w-20 sm:h-20 drop-shadow-sm transition-transform hover:scale-105 duration-200"
             viewBox="0 0 100 100"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
@@ -41,22 +41,6 @@ export function AppLogo() {
             </g>
           </svg>
         )}
-      </div>
-
-      {/* Company Name & Tagline */}
-      <div className="flex flex-col justify-center">
-        <div className="flex items-center space-x-2">
-          <h1 className="text-base sm:text-lg font-bold tracking-tight text-white flex items-center space-x-1 leading-none">
-            <span>Decora</span>
-            <span className="text-[#D4A84B] font-extrabold">Sales</span>
-          </h1>
-          <span className="text-[10px] font-semibold uppercase tracking-wider bg-[#C59B3F]/20 text-[#D4A84B] border border-[#C59B3F]/40 px-2.5 py-0.5 rounded-full">
-            Verified
-          </span>
-        </div>
-        <p className="text-[11px] text-zinc-400 font-medium tracking-wide mt-1.5 leading-none">
-          Roll &amp; Batch Inventory System
-        </p>
       </div>
     </div>
   );
