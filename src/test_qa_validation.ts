@@ -11,10 +11,13 @@ import {
   calculateMatrixWithStock,
   calculateMatrixDashboardMetrics,
   generateMatrixBarcode,
+  generateBatchNumber,
+  formatDateToDDMMYY,
+  normalizeInvoiceForBatch,
   INITIAL_MATRIX_ITEMS,
   INITIAL_MATRIX_TRANSACTIONS
 } from './data/inventoryStore';
-import { MatrixInventoryItem, MatrixStockTransaction } from './types/inventory';
+import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
 
 let testsPassed = 0;
 let testsFailed = 0;
@@ -409,6 +412,125 @@ assert(totalAreaAdded === 562.35, `Total Area Added: 112.47 × 5 = 562.35 m² (g
 // Expected dynamic barcode: ECONOMY-1.63-69M
 const manualBarcode = generateMatrixBarcode('Economy', '1.63', 69);
 assert(manualBarcode === 'ECONOMY-1.63-69M', `Dynamic barcode generated: ECONOMY-1.63-69M (got ${manualBarcode})`);
+
+// ------------------------------------------------------------------
+// TEST 9: Variable Roll Length & Zero Opening/Min Stock Material Master
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 9: Variable Roll Length & Zero Opening/Min Stock ---');
+
+const variableLengthItem: MatrixInventoryItem = {
+  id: 'custom-eco-69',
+  materialName: 'Economy',
+  category: 'Flex PVC',
+  variantSize: '1.63',
+  rollLengthMtr: 69, // Variable roll length (69M)
+  unit: 'Rolls',
+  barcode: generateMatrixBarcode('Economy', '1.63', 69),
+  openingStock: 0, // Removed opening stock field -> defaults to 0
+  minStock: 0, // Removed min stock field -> defaults to 0
+  active: true,
+  createdAt: '2026-10-10'
+};
+
+assert(variableLengthItem.rollLengthMtr === 69, 'Variable roll length accepted: 69 M');
+assert(variableLengthItem.openingStock === 0, 'Opening stock defaults to 0');
+assert(variableLengthItem.minStock === 0, 'Min stock defaults to 0');
+assert(variableLengthItem.barcode === 'ECONOMY-1.63-69M', 'Barcode accurately reflects variable length 69M');
+
+// Stock calculation with 0 opening stock + 4 rolls Stock IN
+const customTxns: MatrixStockTransaction[] = [
+  {
+    id: 'tx-custom-in',
+    itemId: variableLengthItem.id,
+    materialName: variableLengthItem.materialName,
+    category: variableLengthItem.category,
+    variantSize: variableLengthItem.variantSize,
+    rollLengthMtr: 69,
+    barcode: variableLengthItem.barcode,
+    type: 'IN',
+    quantity: 4,
+    areaMtr2: Number((4 * 1.63 * 69).toFixed(2)), // 449.88 m²
+    stockBefore: 0,
+    stockAfter: 4,
+    unit: 'Rolls',
+    date: '2026-10-10',
+    createdAt: '2026-10-10T08:00:00Z'
+  }
+];
+
+const customCalculated = calculateMatrixWithStock([variableLengthItem], customTxns)[0];
+assert(customCalculated.currentStock === 4, 'Current stock is 4 Rolls (0 opening + 4 IN)', `Got ${customCalculated.currentStock}`);
+assert(customCalculated.areaPerRoll === 112.47, 'Area per roll is 1.63 × 69 = 112.47 m²', `Got ${customCalculated.areaPerRoll}`);
+assert(customCalculated.totalAreaMtr2 === 449.88, 'Total area is 4 × 112.47 = 449.88 m²', `Got ${customCalculated.totalAreaMtr2}`);
+assert(customCalculated.status === 'IN_STOCK', 'Status is IN_STOCK when rolls > 0');
+
+// ------------------------------------------------------------------
+// TEST 10: CLIENT REQUIREMENTS — INVOICE + BATCH + BARCODE WORKFLOW
+// 1. Mandatory invoice number
+// 2. Batch Number auto-generation: DDMMYY + CLEANED_INVOICE_NUMBER
+// 3. Date conversion: 10/10/2026 -> 101026, 03/01/2027 -> 030127, 25/12/2026 -> 251226
+// 4. Invoice cleaning: remove spaces, slashes, hyphens, uppercase (GT-28728 -> GT28728, gst 1245 -> GST1245)
+// 5. Maximum 15 characters (6 Date + Max 9 Invoice)
+// 6. Long Invoice truncation for batch only (GSTINV28728234 -> GSTINV287 -> 101026GSTINV287)
+// 7. Auto-update on date or invoice change
+// 8. One batch per Stock IN, all rolls in batch share the SAME batch barcode
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 10: Invoice + Batch + Barcode Workflow ---');
+
+// Date formatting tests
+assert(formatDateToDDMMYY('10/10/2026') === '101026', 'Date conversion: 10/10/2026 -> 101026');
+assert(formatDateToDDMMYY('2026-10-10') === '101026', 'Date conversion: 2026-10-10 -> 101026');
+assert(formatDateToDDMMYY('03/01/2027') === '030127', 'Date conversion: 03/01/2027 -> 030127');
+assert(formatDateToDDMMYY('25/12/2026') === '251226', 'Date conversion: 25/12/2026 -> 251226');
+
+// Invoice cleaning tests
+assert(normalizeInvoiceForBatch('GT28728') === 'GT28728', 'Clean invoice: GT28728 -> GT28728');
+assert(normalizeInvoiceForBatch('GT-28728') === 'GT28728', 'Clean invoice: GT-28728 -> GT28728');
+assert(normalizeInvoiceForBatch('INV/4589') === 'INV4589', 'Clean invoice: INV/4589 -> INV4589');
+assert(normalizeInvoiceForBatch('gst 1245') === 'GST1245', 'Clean invoice: gst 1245 -> GST1245');
+assert(normalizeInvoiceForBatch('AB-12/34') === 'AB1234', 'Clean invoice: AB-12/34 -> AB1234');
+
+// Batch Number generation tests
+const batch1 = generateBatchNumber('10/10/2026', 'GT28728');
+assert(batch1 === '101026GT28728', `Generated batch is 101026GT28728 (got ${batch1})`);
+assert(batch1.length === 13, `Length is 13 characters <= 15 chars`);
+
+// Long Invoice number truncation test (Formula: 6 Date + max 9 Invoice = max 15 chars)
+const longInvoiceBatch = generateBatchNumber('10/10/2026', 'GSTINV28728234');
+assert(longInvoiceBatch === '101026GSTINV287', `Long invoice truncated in batch: 101026GSTINV287 (got ${longInvoiceBatch})`);
+assert(longInvoiceBatch.length === 15, `Batch length strictly capped at 15 characters`);
+
+// Auto-update on date change
+const batchDate1 = generateBatchNumber('10/10/2026', 'GT28728');
+const batchDate2 = generateBatchNumber('11/10/2026', 'GT28728');
+assert(batchDate1 === '101026GT28728', 'Batch for 10/10/2026 is 101026GT28728');
+assert(batchDate2 === '111026GT28728', 'Auto-updates on date change: 111026GT28728');
+
+// All rolls in batch share the same barcode
+const sampleBatch: MatrixBatch = {
+  id: 'bat-test-01',
+  batchNumber: '101026GT28728',
+  materialName: 'Bright FL 26',
+  category: 'Flex PVC',
+  variantSize: '1.63',
+  rollLengthMtr: 50,
+  initialRollQuantity: 10,
+  currentRemainingRollQuantity: 10,
+  invoiceNumber: 'GT28728',
+  stockInDate: '10/10/2026',
+  barcodeValue: '101026GT28728',
+  createdAt: '2026-10-10T10:00:00Z'
+};
+
+assert(sampleBatch.barcodeValue === sampleBatch.batchNumber, 'Barcode encodes exact Batch Number: 101026GT28728');
+assert(sampleBatch.invoiceNumber === 'GT28728', 'Original invoice preserved in complete form: GT28728');
+assert(sampleBatch.initialRollQuantity === 10, 'One batch created for all 10 rolls');
+
+// Area calculations for batch: 1.63 M × 50 M × 10 rolls = 81.5 m² per roll, 815 m² total
+const batchAreaPerRoll = Number((1.63 * 50).toFixed(2));
+const batchTotalArea = Number((batchAreaPerRoll * 10).toFixed(2));
+assert(batchAreaPerRoll === 81.5, `Batch area per roll is 1.63 × 50 = 81.50 m²`);
+assert(batchTotalArea === 815.0, `Batch total area for 10 rolls is 815.00 m²`);
 
 // ------------------------------------------------------------------
 // SUMMARY

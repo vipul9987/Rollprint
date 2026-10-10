@@ -23,6 +23,21 @@ export interface MatrixInventoryItem {
   createdAt: string;
 }
 
+export interface MatrixBatch {
+  id: string; // Internal unique ID / UUID
+  batchNumber: string; // e.g. 101026GT28728 (DDMMYY + 9-char cleaned invoice, max 15 chars)
+  materialName: string;
+  category: string;
+  variantSize: string; // e.g. "1.63"
+  rollLengthMtr: number; // e.g. 50
+  initialRollQuantity: number; // Initial received rolls in this batch
+  currentRemainingRollQuantity: number; // Remaining rolls in this batch
+  invoiceNumber: string; // Original, complete invoice number as entered
+  stockInDate: string; // Date received (YYYY-MM-DD or display date)
+  barcodeValue: string; // Exactly equal to batchNumber (e.g. 101026GT28728)
+  createdAt: string;
+}
+
 export interface MatrixStockTransaction {
   id: string;
   itemId: string;
@@ -39,6 +54,9 @@ export interface MatrixStockTransaction {
   stockAfter: number;
   unit: string;
   date: string;
+  invoiceNumber?: string; // Original complete invoice number
+  batchNumber?: string; // Generated batch number / barcode
+  batchId?: string; // Reference to batch
   createdAt: string;
 }
 

@@ -3,11 +3,13 @@ import {
   MatrixStockTransaction,
   MatrixItemWithStock,
   MatrixDashboardMetrics,
-  InventorySummaryGroup
+  InventorySummaryGroup,
+  MatrixBatch
 } from '../types/inventory';
 
 const STORAGE_KEY_ITEMS = 'rollprint_client_excel_matrix_v8';
 const STORAGE_KEY_TRANSACTIONS = 'rollprint_client_excel_txns_v8';
+const STORAGE_KEY_BATCHES = 'rollprint_client_batches_v1';
 
 /**
  * Standard Width Columns for Client Summary Tables
@@ -93,6 +95,105 @@ export function generateMatrixBarcode(
     : '';
 
   return `${cleanMat}-${cleanSize}${cleanLength}${cleanSec}`;
+}
+
+/**
+ * Normalizes Invoice Number for Batch Code Generation only:
+ * - Convert invoice letters to uppercase
+ * - Remove spaces, hyphens, slashes, special characters
+ * - Keep only A-Z and 0-9
+ * - Truncate to maximum 9 characters
+ *
+ * NOTE: Original invoice number is stored separately without truncation!
+ */
+export function normalizeInvoiceForBatch(rawInvoice: string): string {
+  if (!rawInvoice) return '';
+  const cleaned = rawInvoice
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  return cleaned.slice(0, 9);
+}
+
+/**
+ * Formats a date into DDMMYY format (exactly 6 characters):
+ * Supports "YYYY-MM-DD", "DD/MM/YYYY", "DD-MM-YYYY", or ISO date strings.
+ * Example: "2026-10-10" or "10/10/2026" -> "101026"
+ */
+export function formatDateToDDMMYY(dateStr: string): string {
+  if (!dateStr || !dateStr.trim()) return '';
+
+  const trimmed = dateStr.trim();
+
+  // If already in DD/MM/YYYY or DD-MM-YYYY format
+  const slashOrHyphenMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{2,4})$/);
+  if (slashOrHyphenMatch) {
+    const day = slashOrHyphenMatch[1].padStart(2, '0');
+    const month = slashOrHyphenMatch[2].padStart(2, '0');
+    let year = slashOrHyphenMatch[3];
+    if (year.length === 4) year = year.slice(2);
+    return `${day}${month}${year}`;
+  }
+
+  // If in YYYY-MM-DD or standard HTML date input format
+  const ymdMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (ymdMatch) {
+    const year = ymdMatch[1].slice(2);
+    const month = ymdMatch[2].padStart(2, '0');
+    const day = ymdMatch[3].padStart(2, '0');
+    return `${day}${month}${year}`;
+  }
+
+  // Fallback to Date parser
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    const day = parsed.getDate().toString().padStart(2, '0');
+    const month = (parsed.getMonth() + 1).toString().padStart(2, '0');
+    const year = parsed.getFullYear().toString().slice(2);
+    return `${day}${month}${year}`;
+  }
+
+  return '';
+}
+
+/**
+ * Generates Batch Number automatically:
+ * Formula: DDMMYY (6 chars) + CLEANED_INVOICE_NUMBER (max 9 chars) = Max 15 chars
+ *
+ * Example:
+ * Date: 10/10/2026
+ * Invoice: GT28728
+ * Batch: 101026GT28728 (13 characters)
+ *
+ * Long invoice example:
+ * Date: 10/10/2026
+ * Invoice: GSTINV28728234
+ * Normalized (first 9): GSTINV287
+ * Batch: 101026GSTINV287 (15 characters)
+ */
+export function generateBatchNumber(dateStr: string, rawInvoice: string): string {
+  const datePart = formatDateToDDMMYY(dateStr);
+  const invoicePart = normalizeInvoiceForBatch(rawInvoice);
+  if (!datePart && !invoicePart) return '';
+  const batch = `${datePart}${invoicePart}`;
+  return batch.slice(0, 15);
+}
+
+export function getStoredMatrixBatches(): MatrixBatch[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_BATCHES);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredMatrixBatches(batches: MatrixBatch[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_BATCHES, JSON.stringify(batches));
+  } catch (e) {
+    console.error('Failed to save batches', e);
+  }
 }
 
 export const INITIAL_MATRIX_ITEMS: MatrixInventoryItem[] = [
