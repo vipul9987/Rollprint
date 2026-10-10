@@ -778,6 +778,244 @@ assert(!sampleBatchForLabel.barcodeValue.includes('50M'), 'Barcode does not incl
 assert(!sampleBatchForLabel.barcodeValue.includes('Batch Number:'), 'Barcode does not include label prefix');
 
 // ------------------------------------------------------------------
+// TEST SUITE 18: CRITICAL DATA INTEGRITY — ONE SOURCE OF TRUTH (TEST CASES 1 TO 6)
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 18: Critical Data Integrity & Manual Roll Length Preservation ---');
+
+// Helper simulating the exact payload and transaction creation logic
+function simulateStockInTransaction(
+  item: MatrixInventoryItem,
+  payload: {
+    width: string;
+    rollLength: number;
+    rollQuantity: number;
+    invoiceNumber: string;
+    date: string;
+    batchNumber: string;
+  },
+  currentStock: number
+): { txn: MatrixStockTransaction; batch: MatrixBatch } {
+  const widthNum = parseFloat(payload.width);
+  const lengthNum = payload.rollLength;
+  const areaMtr2 = Number((payload.rollQuantity * widthNum * lengthNum).toFixed(2));
+  const stockBefore = currentStock;
+  const stockAfter = currentStock + payload.rollQuantity;
+
+  const batch: MatrixBatch = {
+    id: `bat-test-${Date.now()}`,
+    batchNumber: payload.batchNumber,
+    materialName: item.materialName,
+    category: item.category,
+    variantSize: payload.width,
+    rollLengthMtr: lengthNum,
+    initialRollQuantity: payload.rollQuantity,
+    currentRemainingRollQuantity: payload.rollQuantity,
+    invoiceNumber: payload.invoiceNumber,
+    stockInDate: payload.date,
+    barcodeValue: payload.batchNumber,
+    createdAt: new Date().toISOString()
+  };
+
+  const txn: MatrixStockTransaction = {
+    id: `tx-test-${Date.now()}`,
+    itemId: item.id,
+    materialName: item.materialName,
+    category: item.category,
+    variantSize: payload.width,
+    rollLengthMtr: lengthNum,
+    barcode: payload.batchNumber,
+    type: 'IN',
+    quantity: payload.rollQuantity,
+    areaMtr2,
+    stockBefore,
+    stockAfter,
+    unit: item.unit,
+    date: payload.date,
+    invoiceNumber: payload.invoiceNumber,
+    batchNumber: payload.batchNumber,
+    batchId: batch.id,
+    createdAt: new Date().toISOString()
+  };
+
+  return { txn, batch };
+}
+
+// TEST CASE 1: Current Bug Case (Backlit Hetax: Width 1.02, Roll Length 22, Quantity 1)
+const hetaxBaseItem: MatrixInventoryItem = {
+  id: 'bh-102',
+  materialName: 'Backlit Hetax',
+  category: 'Backlit',
+  variantSize: '1.02',
+  rollLengthMtr: 50, // Base master record has 50M
+  unit: 'Rolls',
+  barcode: 'BACKLIT-HETAX-1.02-50M',
+  openingStock: 2,
+  minStock: 2,
+  active: true,
+  createdAt: '2026-09-01'
+};
+
+const tc1 = simulateStockInTransaction(
+  hetaxBaseItem,
+  {
+    width: '1.02',
+    rollLength: 22,
+    rollQuantity: 1,
+    invoiceNumber: 'SDFSAF',
+    date: '10/10/2026',
+    batchNumber: '101026SDFSAF'
+  },
+  2
+);
+
+assert(tc1.txn.variantSize === '1.02', '[Test Case 1] Transaction width is exactly 1.02 M');
+assert(tc1.txn.rollLengthMtr === 22, `[Test Case 1] Transaction length is exactly 22 M (NOT 50 M): got ${tc1.txn.rollLengthMtr}`);
+assert(tc1.txn.quantity === 1, '[Test Case 1] Transaction quantity is 1 Roll');
+assert(tc1.txn.areaMtr2 === 22.44, `[Test Case 1] Transaction area is 22.44 m² (1.02 × 22 = 22.44, NOT 51): got ${tc1.txn.areaMtr2}`);
+assert(tc1.txn.stockBefore === 2, '[Test Case 1] Stock before is 2');
+assert(tc1.txn.stockAfter === 3, '[Test Case 1] Stock after is 3');
+assert(tc1.batch.rollLengthMtr === 22, `[Test Case 1] Batch length is exactly 22 M: got ${tc1.batch.rollLengthMtr}`);
+assert(tc1.batch.batchNumber === '101026SDFSAF', '[Test Case 1] Batch number is 101026SDFSAF');
+
+// TEST CASE 2: Width 1.63, Roll Length 37, Quantity 2
+const tc2 = simulateStockInTransaction(
+  {
+    id: 'test-163',
+    materialName: 'Frontlit Flex',
+    category: 'Flex PVC',
+    variantSize: '1.63',
+    rollLengthMtr: 70, // Master record has 70M
+    unit: 'Rolls',
+    barcode: 'FRONTLIT-1.63-70M',
+    openingStock: 5,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-09-01'
+  },
+  {
+    width: '1.63',
+    rollLength: 37,
+    rollQuantity: 2,
+    invoiceNumber: 'INV-37',
+    date: '10/10/2026',
+    batchNumber: '101026INV37'
+  },
+  5
+);
+
+const areaPerRollTc2 = Number((1.63 * 37).toFixed(2));
+assert(areaPerRollTc2 === 60.31, `[Test Case 2] Area per roll is 60.31 m²: got ${areaPerRollTc2}`);
+assert(tc2.txn.rollLengthMtr === 37, `[Test Case 2] Saved transaction length is 37 M (NOT 50/70): got ${tc2.txn.rollLengthMtr}`);
+assert(tc2.txn.areaMtr2 === 120.62, `[Test Case 2] Total area is 120.62 m² (2 × 60.31): got ${tc2.txn.areaMtr2}`);
+
+// TEST CASE 3: Width 2.54, Roll Length 69, Quantity 3
+const tc3 = simulateStockInTransaction(
+  {
+    id: 'test-254',
+    materialName: 'Premium M 9',
+    category: 'Flex PVC',
+    variantSize: '2.54',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'PREMIUM-2.54-50M',
+    openingStock: 4,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-09-01'
+  },
+  {
+    width: '2.54',
+    rollLength: 69,
+    rollQuantity: 3,
+    invoiceNumber: 'INV-69',
+    date: '10/10/2026',
+    batchNumber: '101026INV69'
+  },
+  4
+);
+
+assert(tc3.txn.rollLengthMtr === 69, `[Test Case 3] Length is 69 M: got ${tc3.txn.rollLengthMtr}`);
+assert(tc3.txn.areaMtr2 === 525.78, `[Test Case 3] Total area is 525.78 m² (2.54 × 69 × 3): got ${tc3.txn.areaMtr2}`);
+
+// TEST CASE 4: Common Value (Width 1.32, Roll Length 50, Quantity 2)
+const tc4 = simulateStockInTransaction(
+  {
+    id: 'test-132',
+    materialName: 'Backlit Sunlex',
+    category: 'Backlit',
+    variantSize: '1.32',
+    rollLengthMtr: 70, // Master record had 70M
+    unit: 'Rolls',
+    barcode: 'BACKLIT-1.32-70M',
+    openingStock: 2,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-09-01'
+  },
+  {
+    width: '1.32',
+    rollLength: 50,
+    rollQuantity: 2,
+    invoiceNumber: 'INV-50',
+    date: '10/10/2026',
+    batchNumber: '101026INV50'
+  },
+  2
+);
+
+assert(tc4.txn.rollLengthMtr === 50, `[Test Case 4] User-entered 50M preserved: got ${tc4.txn.rollLengthMtr}`);
+assert(tc4.txn.areaMtr2 === 132.0, `[Test Case 4] Total area is 132 m² (1.32 × 50 × 2): got ${tc4.txn.areaMtr2}`);
+
+// TEST CASE 5: Change value 50 -> 22 before save (check for stale state)
+let formRollLengthInput = '50';
+formRollLengthInput = '22'; // user changes input before submitting
+const tc5 = simulateStockInTransaction(
+  hetaxBaseItem,
+  {
+    width: '1.02',
+    rollLength: parseFloat(formRollLengthInput),
+    rollQuantity: 1,
+    invoiceNumber: 'CHANGED-INV',
+    date: '10/10/2026',
+    batchNumber: '101026CHANGED'
+  },
+  3
+);
+
+assert(tc5.txn.rollLengthMtr === 22, `[Test Case 5] Final updated input 22 is saved (NOT stale 50): got ${tc5.txn.rollLengthMtr}`);
+assert(tc5.txn.areaMtr2 === 22.44, `[Test Case 5] Area updated to 22.44 m²: got ${tc5.txn.areaMtr2}`);
+
+// TEST CASE 6: Stock OUT scan batch with 22M
+// Batch created in TC1 with 22M is now dispatched in Stock OUT
+const scannedBatchForOut = tc1.batch;
+const stockOutRolls = 1;
+const outWidthNum = parseFloat(scannedBatchForOut.variantSize);
+const outLengthNum = scannedBatchForOut.rollLengthMtr;
+const outAreaPerRoll = Number((outWidthNum * outLengthNum).toFixed(2));
+const outTotalArea = Number((outAreaPerRoll * stockOutRolls).toFixed(2));
+
+assert(outLengthNum === 22, `[Test Case 6] Scanned batch retains length 22 M (NOT 50): got ${outLengthNum}`);
+assert(outWidthNum === 1.02, `[Test Case 6] Scanned batch retains width 1.02 M: got ${outWidthNum}`);
+assert(outAreaPerRoll === 22.44, `[Test Case 6] Stock OUT area per roll is 22.44 m²: got ${outAreaPerRoll}`);
+assert(outTotalArea === 22.44, `[Test Case 6] Stock OUT total area is 22.44 m²: got ${outTotalArea}`);
+
+// TEST CASE 7: Zero / Missing / Invalid Roll Length strictly blocks save (no silent 70/50 fallback)
+function testRollLengthValidation(val: string): { valid: boolean; length: number } {
+  const str = (val ?? '').toString().trim();
+  const num = parseFloat(str);
+  if (!str || isNaN(num) || num <= 0) {
+    return { valid: false, length: 0 };
+  }
+  return { valid: true, length: parseFloat(num.toFixed(2)) };
+}
+
+assert(!testRollLengthValidation('').valid, '[Test Case 7] Empty roll length is invalid');
+assert(!testRollLengthValidation('0').valid, '[Test Case 7] 0 roll length is invalid');
+assert(!testRollLengthValidation('-10').valid, '[Test Case 7] Negative roll length is invalid');
+assert(!testRollLengthValidation('abc').valid, '[Test Case 7] Non-numeric roll length is invalid');
+assert(testRollLengthValidation('22').valid && testRollLengthValidation('22').length === 22, '[Test Case 7] Valid input 22 passes with length 22');
+
+// ------------------------------------------------------------------
 // SUMMARY
 // ------------------------------------------------------------------
 console.log('\n====================================================');

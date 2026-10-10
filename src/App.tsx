@@ -194,15 +194,16 @@ export default function App() {
     const str = (val ?? '').toString().trim();
     if (!str) return '';
     const num = parseFloat(str);
-    if (isNaN(num) || num <= 0) return str;
+    if (isNaN(num) || num <= 0) return '';
     // Format up to 3 decimals without trailing zeroes
     return parseFloat(num.toFixed(3)).toString();
   };
 
   const normalizeNumericLength = (val: string | number): number => {
     const str = (val ?? '').toString().trim();
+    if (!str) return 0;
     const num = parseFloat(str);
-    if (isNaN(num) || num <= 0) return 70;
+    if (isNaN(num) || num <= 0) return 0;
     return parseFloat(num.toFixed(2));
   };
 
@@ -528,15 +529,23 @@ export default function App() {
     );
     if (exact) return exact;
 
-    // 2. Base item of same material & normalized size (if length differs, check if that item exists)
+    // 2. Base item of same material & normalized size
     const baseItem = itemsWithStock.find(
       (i) =>
         i.active &&
         i.materialName.toLowerCase() === stockOutMaterial.toLowerCase() &&
         normalizeNumericSize(i.variantSize) === normSize
     );
-    if (baseItem && baseItem.rollLengthMtr === normLength) {
-      return baseItem;
+    if (baseItem) {
+      const areaPerRoll = Number((parsedWidth * normLength).toFixed(2));
+      return {
+        ...baseItem,
+        variantSize: normSize,
+        rollLengthMtr: normLength,
+        areaPerRoll,
+        totalAreaMtr2: Number((baseItem.currentStock * areaPerRoll).toFixed(2)),
+        barcode: generateMatrixBarcode(baseItem.materialName, normSize, normLength)
+      };
     }
     return undefined;
   }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutRollLength]);
@@ -690,6 +699,10 @@ export default function App() {
       invoiceNumber?: string;
       batchNumber?: string;
       batchId?: string;
+      width?: string;
+      rollLength?: number;
+      materialName?: string;
+      category?: string;
     }
   ): { success: boolean; batch?: MatrixBatch } => {
     let targetItem = itemsWithStock.find((i) => i.id === itemId);
@@ -749,8 +762,26 @@ export default function App() {
     const stockAfter = type === 'IN' ? stockBefore + quantity : stockBefore - quantity;
     const transactionDate = dateStr || new Date().toISOString().split('T')[0];
 
-    const widthNum = parseFloat(targetItem.variantSize) || 1.0;
-    const lengthNum = targetItem.rollLengthMtr || 70;
+    // ONE SOURCE OF TRUTH: If explicit width or rollLength is passed from form payload or batch, USE IT DIRECTLY!
+    const effectiveWidthStr = extraMeta?.width ? normalizeNumericSize(extraMeta.width) : targetItem.variantSize;
+    const widthNum = parseFloat(effectiveWidthStr);
+    if (isNaN(widthNum) || widthNum <= 0) {
+      showNotification('Invalid Size / Width value for transaction.', 'error');
+      return { success: false };
+    }
+
+    const lengthNum = (extraMeta?.rollLength !== undefined && extraMeta.rollLength > 0)
+      ? extraMeta.rollLength
+      : targetItem.rollLengthMtr;
+
+    if (!lengthNum || lengthNum <= 0) {
+      showNotification('Invalid Roll Length for transaction. Please enter a valid positive number.', 'error');
+      return { success: false };
+    }
+
+    const effectiveMaterialName = extraMeta?.materialName || targetItem.materialName;
+    const effectiveCategory = extraMeta?.category || targetItem.category;
+
     const areaMtr2 = Number((quantity * widthNum * lengthNum).toFixed(2));
 
     // Client Requirement: Every Stock IN creates ONE batch record with its own batch number
@@ -765,9 +796,9 @@ export default function App() {
       createdBatch = {
         id: batchId,
         batchNumber: generatedBatchNum,
-        materialName: targetItem.materialName,
-        category: targetItem.category,
-        variantSize: targetItem.variantSize,
+        materialName: effectiveMaterialName,
+        category: effectiveCategory,
+        variantSize: effectiveWidthStr,
         rollLengthMtr: lengthNum,
         initialRollQuantity: quantity,
         currentRemainingRollQuantity: quantity,
@@ -799,9 +830,9 @@ export default function App() {
     const newTxn: MatrixStockTransaction = {
       id: `tx-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       itemId: targetItem.id,
-      materialName: targetItem.materialName,
-      category: targetItem.category,
-      variantSize: targetItem.variantSize,
+      materialName: effectiveMaterialName,
+      category: effectiveCategory,
+      variantSize: effectiveWidthStr,
       rollLengthMtr: lengthNum,
       secondaryVariant: targetItem.secondaryVariant,
       barcode: batchNumber || targetItem.barcode,
@@ -823,7 +854,7 @@ export default function App() {
     saveStoredMatrixTransactions(updatedTxns);
 
     showNotification(
-      `${type === 'IN' ? 'Stock IN' : 'Stock OUT'} confirmed: ${quantity} Rolls (${areaMtr2} m²) for ${targetItem.materialName} (${targetItem.variantSize}M × ${lengthNum}M).${batchNumber ? ` Batch: ${batchNumber}.` : ''} New balance: ${stockAfter} Rolls.`,
+      `${type === 'IN' ? 'Stock IN' : 'Stock OUT'} confirmed: ${quantity} Rolls (${areaMtr2} m²) for ${effectiveMaterialName} (${effectiveWidthStr}M × ${lengthNum}M).${batchNumber ? ` Batch: ${batchNumber}.` : ''} New balance: ${stockAfter} Rolls.`,
       'success'
     );
     return { success: true, batch: createdBatch };
@@ -836,6 +867,19 @@ export default function App() {
 
     if (!matchedStockInItem) {
       setStockInError('Please select a valid material, size, and length configuration.');
+      return;
+    }
+
+    const normalizedWidth = normalizeNumericSize(stockInVariantSize);
+    const parsedWidth = parseFloat(normalizedWidth);
+    if (!normalizedWidth || isNaN(parsedWidth) || parsedWidth <= 0) {
+      setStockInError('Please enter a valid Size / Width (> 0).');
+      return;
+    }
+
+    const normalizedRollLength = normalizeNumericLength(stockInRollLength);
+    if (normalizedRollLength <= 0) {
+      setStockInError('Please enter a valid Roll Length (> 0).');
       return;
     }
 
@@ -862,15 +906,32 @@ export default function App() {
     }
 
     const rollsToAdd = stockInRollValidation.count;
+
+    // ONE SOURCE OF TRUTH: Captured Payload directly from manual input
+    const stockInPayload = {
+      materialName: stockInMaterial.trim(),
+      category: matchedStockInItem.category,
+      width: normalizedWidth,
+      rollLength: normalizedRollLength,
+      rollQuantity: rollsToAdd,
+      invoiceNumber: rawInvoice,
+      date: stockInDate,
+      batchNumber: stockInGeneratedBatchNumber
+    };
+
     const result = executeStockTransaction(
       matchedStockInItem.id,
       'IN',
-      rollsToAdd,
-      stockInDate,
+      stockInPayload.rollQuantity,
+      stockInPayload.date,
       matchedStockInItem,
       {
-        invoiceNumber: rawInvoice,
-        batchNumber: stockInGeneratedBatchNumber
+        invoiceNumber: stockInPayload.invoiceNumber,
+        batchNumber: stockInPayload.batchNumber,
+        width: stockInPayload.width,
+        rollLength: stockInPayload.rollLength,
+        materialName: stockInPayload.materialName,
+        category: stockInPayload.category
       }
     );
 
@@ -927,6 +988,9 @@ export default function App() {
       return;
     }
 
+    const normalizedWidth = normalizeNumericSize(stockOutVariantSize);
+    const normalizedRollLength = normalizeNumericLength(stockOutRollLength);
+
     const result = executeStockTransaction(
       matchedStockOutItem.id,
       'OUT',
@@ -937,9 +1001,18 @@ export default function App() {
         ? {
             batchId: selectedStockOutBatch.id,
             batchNumber: selectedStockOutBatch.batchNumber,
-            invoiceNumber: selectedStockOutBatch.invoiceNumber
+            invoiceNumber: selectedStockOutBatch.invoiceNumber,
+            width: selectedStockOutBatch.variantSize,
+            rollLength: selectedStockOutBatch.rollLengthMtr,
+            materialName: selectedStockOutBatch.materialName,
+            category: selectedStockOutBatch.category
           }
-        : undefined
+        : {
+            width: normalizedWidth,
+            rollLength: normalizedRollLength,
+            materialName: stockOutMaterial,
+            category: stockOutAutoCategory
+          }
     );
 
     if (result.success) {
@@ -3045,8 +3118,12 @@ export default function App() {
                     const rollsOut = stockOutRollValidation.valid ? stockOutRollValidation.count : 0;
                     const isExceeded = stockOutRollValidation.valid && rollsOut > current;
                     const afterStock = Math.max(0, current - rollsOut);
-                    const widthNum = parseFloat(matchedStockOutItem.variantSize) || 1.0;
-                    const lengthNum = matchedStockOutItem.rollLengthMtr || 70;
+                    const widthNum = selectedStockOutBatch
+                      ? parseFloat(selectedStockOutBatch.variantSize) || parseFloat(matchedStockOutItem.variantSize) || 1.0
+                      : parseFloat(matchedStockOutItem.variantSize) || 1.0;
+                    const lengthNum = selectedStockOutBatch
+                      ? selectedStockOutBatch.rollLengthMtr
+                      : (normalizeNumericLength(stockOutRollLength) || matchedStockOutItem.rollLengthMtr);
                     const areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
                     const totalAreaOut = Number((areaPerRoll * rollsOut).toFixed(2));
 

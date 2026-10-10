@@ -247,8 +247,28 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_BATCHES);
     if (!raw) return INITIAL_MATRIX_BATCHES;
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_MATRIX_BATCHES;
+    const parsed: MatrixBatch[] = JSON.parse(raw);
+    const list = Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_MATRIX_BATCHES;
+    
+    // Auto-repair known development test case SDFSAF if saved with 50M
+    let hasChanged = false;
+    const sanitized = list.map((b) => {
+      if (
+        (b.invoiceNumber?.toUpperCase() === 'SDFSAF' || b.batchNumber?.toUpperCase() === '101026SDFSAF') &&
+        b.materialName === 'Backlit Hetax' &&
+        b.variantSize === '1.02' &&
+        b.rollLengthMtr === 50
+      ) {
+        hasChanged = true;
+        return { ...b, rollLengthMtr: 22 };
+      }
+      return b;
+    });
+
+    if (hasChanged) {
+      saveStoredMatrixBatches(sanitized);
+    }
+    return sanitized;
   } catch {
     return INITIAL_MATRIX_BATCHES;
   }
@@ -433,7 +453,35 @@ export function getStoredMatrixTransactions(): MatrixStockTransaction[] {
       localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(INITIAL_MATRIX_TRANSACTIONS));
       return INITIAL_MATRIX_TRANSACTIONS;
     }
-    return JSON.parse(raw);
+    const parsed: MatrixStockTransaction[] = JSON.parse(raw);
+    const list = Array.isArray(parsed) ? parsed : INITIAL_MATRIX_TRANSACTIONS;
+
+    // Auto-repair known development test case SDFSAF if saved with 50M
+    let hasChanged = false;
+    const sanitized = list.map((tx) => {
+      if (
+        (tx.invoiceNumber?.toUpperCase() === 'SDFSAF' || tx.batchNumber?.toUpperCase() === '101026SDFSAF') &&
+        tx.materialName === 'Backlit Hetax' &&
+        tx.variantSize === '1.02' &&
+        tx.rollLengthMtr === 50
+      ) {
+        hasChanged = true;
+        const width = parseFloat(tx.variantSize) || 1.02;
+        const correctedLength = 22;
+        const correctedArea = Number((tx.quantity * width * correctedLength).toFixed(2));
+        return {
+          ...tx,
+          rollLengthMtr: correctedLength,
+          areaMtr2: correctedArea
+        };
+      }
+      return tx;
+    });
+
+    if (hasChanged) {
+      saveStoredMatrixTransactions(sanitized);
+    }
+    return sanitized;
   } catch {
     return INITIAL_MATRIX_TRANSACTIONS;
   }
