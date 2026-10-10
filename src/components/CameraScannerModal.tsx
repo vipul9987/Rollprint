@@ -13,7 +13,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
   isOpen,
   onClose,
   onScanSuccess,
-  title = 'Scan Inventory Code'
+  title = 'Scan Batch Barcode'
 }) => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
@@ -41,7 +41,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
             { facingMode: 'environment' },
             {
               fps: 10,
-              qrbox: { width: 250, height: 250 },
+              qrbox: { width: 280, height: 140 },
               aspectRatio: 1.0
             },
             (decodedText) => {
@@ -103,7 +103,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
       onScanSuccess(decoded);
       onClose();
     } catch (err: any) {
-      setErrorMessage('Could not detect a clear QR or barcode in that photo. Please try again.');
+      setErrorMessage('Could not detect a clear barcode in that photo. Please try again.');
     }
   };
 
@@ -115,7 +115,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
         {/* Header */}
         <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
           <div className="flex items-center space-x-2 text-slate-900 font-bold text-sm">
-            <Camera className="w-5 h-5 text-indigo-600" />
+            <Camera className="w-5 h-5 text-amber-600" />
             <span>{title}</span>
           </div>
           <button
@@ -136,19 +136,19 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
           <div className="relative bg-slate-950 rounded-xl overflow-hidden min-h-[280px] flex items-center justify-center border border-slate-800">
             <div id={elementId} className="w-full h-full text-white" />
 
-            {/* Target reticle guide */}
+            {/* Target reticle guide - Horizontal for linear CODE128 barcode */}
             <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-              <div className="w-48 h-48 border-2 border-indigo-400/80 rounded-xl relative shadow-lg">
-                <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-indigo-300"></div>
-                <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-indigo-300"></div>
-                <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-indigo-300"></div>
-                <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-indigo-300"></div>
+              <div className="w-64 h-32 border-2 border-amber-400/80 rounded-xl relative shadow-lg">
+                <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-amber-300"></div>
+                <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-amber-300"></div>
+                <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-amber-300"></div>
+                <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-amber-300"></div>
               </div>
             </div>
           </div>
 
           <p className="text-center text-xs text-slate-500">
-            Point phone camera at the item's QR Code or Barcode.
+            Point camera at the roll's CODE128 Batch Barcode sticker.
           </p>
 
           {/* Error Message & Photo upload fallback */}

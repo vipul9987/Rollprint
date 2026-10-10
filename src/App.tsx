@@ -5,7 +5,6 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   History,
-  QrCode,
   Search,
   Plus,
   Trash2,
@@ -32,7 +31,6 @@ import {
   calculateMatrixWithStock,
   calculateMatrixDashboardMetrics,
   generateMatrixBarcode,
-  getItemWebUrl,
   getItemSummaryGroup,
   FLEX_SUMMARY_WIDTHS,
   VINYL_SUMMARY_WIDTHS,
@@ -51,7 +49,6 @@ import {
   findBatchesByBatchOrBarcode
 } from './data/inventoryStore';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock, InventorySummaryGroup, MatrixBatch } from './types/inventory';
-import { QRCodeLabel } from './components/QRCodeLabel';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
 import { BatchBarcodeLabel } from './components/BatchBarcodeLabel';
@@ -1153,60 +1150,20 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // BARCODE LABELS PAGE STATE & PRINTING
+  // BARCODE LABELS PAGE STATE (BATCH-BASED CODE128 BARCODES ONLY)
   // -------------------------------------------------------------
-  const [labelSearch, setLabelSearch] = useState<string>('');
-  const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>([]);
+  const [batchSearch, setBatchSearch] = useState<string>('');
 
-  const filteredLabelItems = useMemo(() => {
-    const q = labelSearch.trim().toLowerCase();
-    return itemsWithStock.filter((i) => {
-      if (!i.active) return false;
-      if (!q) return true;
-      return (
-        i.materialName.toLowerCase().includes(q) ||
-        i.category.toLowerCase().includes(q) ||
-        i.variantSize.toLowerCase().includes(q) ||
-        i.barcode.toLowerCase().includes(q)
-      );
-    });
-  }, [itemsWithStock, labelSearch]);
-
-  const toggleSelectLabel = (itemId: string) => {
-    setSelectedLabelIds((prev) =>
-      prev.includes(itemId) ? prev.filter((id) => id !== itemId) : [...prev, itemId]
+  const filteredBatches = useMemo(() => {
+    const q = batchSearch.trim().toLowerCase();
+    if (!q) return batches;
+    return batches.filter((b) =>
+      (b.batchNumber || '').toLowerCase().includes(q) ||
+      (b.invoiceNumber || '').toLowerCase().includes(q) ||
+      (b.materialName || '').toLowerCase().includes(q) ||
+      (b.category || '').toLowerCase().includes(q)
     );
-  };
-
-  const toggleSelectAllLabels = () => {
-    if (selectedLabelIds.length === filteredLabelItems.length) {
-      setSelectedLabelIds([]);
-    } else {
-      setSelectedLabelIds(filteredLabelItems.map((i) => i.id));
-    }
-  };
-
-  const printSingleLabel = (item: MatrixItemWithStock) => {
-    setSelectedLabelIds([item.id]);
-    setTimeout(() => {
-      window.print();
-    }, 100);
-  };
-
-  const printSelectedLabels = () => {
-    if (selectedLabelIds.length === 0) {
-      showNotification('Please select at least one label to print.', 'error');
-      return;
-    }
-    window.print();
-  };
-
-  const printAllLabels = () => {
-    setSelectedLabelIds(filteredLabelItems.map((i) => i.id));
-    setTimeout(() => {
-      window.print();
-    }, 100);
-  };
+  }, [batches, batchSearch]);
 
   // -------------------------------------------------------------
   // SEARCH & FILTER STATE FOR MATERIALS & TRANSACTIONS
@@ -1489,19 +1446,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Printable Area for Barcode / QR Labels (@media print) */}
-      {!activeBatchForPrint && (
-        <div className="hidden print:block print-label-grid">
-          {(selectedLabelIds.length > 0
-            ? itemsWithStock.filter((i) => selectedLabelIds.includes(i.id))
-            : filteredLabelItems
-          ).map((item) => (
-            <div key={item.id} className="print-label-item">
-              <QRCodeLabel item={item} itemUrl={getItemWebUrl(item.id)} />
-            </div>
-          ))}
-        </div>
-      )}
 
       {/* Main App Header */}
       <header className="bg-[#0A0A0C] text-white border-b border-zinc-800/80 sticky top-0 z-40 print:hidden backdrop-blur-md">
@@ -1586,7 +1530,7 @@ export default function App() {
                     : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
                 }`}
               >
-                <QrCode className="w-3.5 h-3.5" />
+                <BarcodeIcon className="w-3.5 h-3.5" />
                 <span>Barcode Labels</span>
               </button>
             </nav>
@@ -3523,61 +3467,159 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 6: BARCODE LABELS */}
+        {/* TAB 6: BARCODE LABELS (BATCH-BASED CODE128 BARCODES ONLY) */}
         {/* ========================================================= */}
         {activeTab === 'qr-labels' && (
           <div className="space-y-6">
-            {/* Recent Batches Barcodes Section */}
-            {batches.length > 0 && (
-              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                  <div>
-                    <div className="flex items-center space-x-2">
-                      <h3 className="text-base font-black text-slate-900">
-                        Received Stock IN Batches ({batches.length})
-                      </h3>
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                        Batch Barcodes
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-500">
-                      Every Stock IN batch shares one batch barcode across all rolls. Click "Print Labels" to print barcode stickers.
-                    </p>
-                  </div>
+            {/* Header & Controls */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center space-x-2">
+                  <h2 className="text-lg font-black text-slate-900 tracking-tight">Barcode Labels</h2>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                    CODE128 Linear
+                  </span>
                 </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Stock IN batch barcodes. Every roll in a received batch receives this linear barcode sticker.
+                </p>
+              </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {batches.map((b) => (
-                    <div
-                      key={b.id}
-                      className="p-3.5 rounded-xl border border-slate-200 bg-slate-50/70 hover:bg-white hover:border-emerald-300 transition-all flex flex-col justify-between space-y-2"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                            {b.category || 'Roll'} &bull; {b.stockInDate}
-                          </span>
-                          <h4 className="font-bold text-sm text-slate-900">{b.materialName}</h4>
-                          <span className="text-xs font-mono text-slate-600 font-semibold">
-                            {b.variantSize}M &times; {b.rollLengthMtr}M
-                          </span>
-                        </div>
-                        <span className="px-2 py-1 bg-emerald-100 text-emerald-800 font-mono text-xs font-black rounded-lg border border-emerald-200">
-                          {b.initialRollQuantity} Rolls
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-semibold text-slate-600 bg-white border border-slate-200 px-3 py-1.5 rounded-xl shadow-xs">
+                  Total Batches: <strong className="text-slate-900">{batches.length}</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Search Bar (Search by Batch Number, Invoice Number, Material) */}
+            <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex items-center gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search batches by Batch Number, Invoice Number, or Material..."
+                  value={batchSearch}
+                  onChange={(e) => setBatchSearch(e.target.value)}
+                  className="w-full pl-9 pr-8 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500 font-medium placeholder:text-slate-400"
+                />
+                {batchSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setBatchSearch('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                    title="Clear search"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {batchSearch && (
+                <span className="text-xs text-slate-500 whitespace-nowrap hidden sm:inline">
+                  Found: <strong className="text-slate-900">{filteredBatches.length}</strong>
+                </span>
+              )}
+            </div>
+
+            {/* Batches Grid */}
+            {filteredBatches.length === 0 ? (
+              <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center space-y-3">
+                <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-400">
+                  <BarcodeIcon className="w-6 h-6" />
+                </div>
+                <h3 className="text-sm font-bold text-slate-800">
+                  {batchSearch ? 'No matching batches found' : 'No Stock IN batches yet'}
+                </h3>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  {batchSearch
+                    ? `No batch matches "${batchSearch}". Try searching by Batch Number, Invoice, or Material.`
+                    : 'Batches are automatically created when you receive stock in the Stock IN tab.'}
+                </p>
+                {batchSearch ? (
+                  <button
+                    type="button"
+                    onClick={() => setBatchSearch('')}
+                    className="text-xs text-amber-700 font-bold hover:underline"
+                  >
+                    Clear Search
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('stock-in')}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold inline-flex items-center space-x-1.5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Go to Stock IN</span>
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredBatches.map((b) => (
+                  <div
+                    key={b.id}
+                    className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs hover:border-amber-300 transition-all flex flex-col justify-between space-y-3"
+                  >
+                    {/* Header: Material Name, Category, Date */}
+                    <div className="flex items-start justify-between gap-2 border-b border-slate-100 pb-3">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                          {b.category || 'Roll'} &bull; {b.stockInDate}
+                        </span>
+                        <h4 className="font-black text-base text-slate-900 leading-tight mt-0.5">
+                          {b.materialName}
+                        </h4>
+                        <span className="text-xs font-mono text-slate-600 font-semibold mt-0.5 block">
+                          Width: {b.variantSize}M &bull; Length: {b.rollLengthMtr}M
                         </span>
                       </div>
+                      <span className="px-2.5 py-1 bg-amber-50 text-amber-900 font-mono text-xs font-black rounded-lg border border-amber-200 shrink-0">
+                        {b.initialRollQuantity} Rolls
+                      </span>
+                    </div>
 
-                      <div className="p-2 bg-white rounded-lg border border-slate-200 font-mono text-xs flex items-center justify-between">
-                        <div>
-                          <span className="text-[9px] text-slate-400 font-sans uppercase block">Batch Number</span>
-                          <strong className="text-slate-900">{b.batchNumber}</strong>
-                        </div>
-                        <div className="text-right">
-                          <span className="text-[9px] text-slate-400 font-sans uppercase block">Invoice</span>
-                          <span className="text-slate-700 font-bold">{b.invoiceNumber}</span>
-                        </div>
+                    {/* Batch Details block */}
+                    <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/80 font-mono text-xs space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500 font-sans uppercase font-bold">
+                          Batch:
+                        </span>
+                        <strong className="text-slate-900 font-bold tracking-wide">
+                          {b.batchNumber}
+                        </strong>
                       </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500 font-sans uppercase font-bold">
+                          Invoice:
+                        </span>
+                        <span className="text-slate-800 font-semibold">{b.invoiceNumber}</span>
+                      </div>
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
+                        <span className="text-[10px] text-slate-500 font-sans uppercase font-bold">
+                          Received:
+                        </span>
+                        <span className="text-slate-800 font-bold">{b.initialRollQuantity} Rolls</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-slate-500 font-sans uppercase font-bold">
+                          Remaining:
+                        </span>
+                        <strong
+                          className={
+                            b.currentRemainingRollQuantity > 0
+                              ? 'text-emerald-700 font-black'
+                              : 'text-slate-400 font-medium'
+                          }
+                        >
+                          {b.currentRemainingRollQuantity} Rolls
+                        </strong>
+                      </div>
+                    </div>
 
+                    {/* Print Actions: Print Batch Labels (N) and Reprint 1 */}
+                    <div className="space-y-2 pt-1">
                       <button
                         type="button"
                         onClick={() =>
@@ -3586,84 +3628,30 @@ export default function App() {
                             copies: b.initialRollQuantity
                           })
                         }
-                        className="w-full py-2 bg-slate-900 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold flex items-center justify-center space-x-1.5 transition-colors cursor-pointer"
+                        className="w-full py-2.5 bg-slate-900 hover:bg-[#C59B3F] hover:text-slate-950 text-white rounded-xl text-xs font-black flex items-center justify-center space-x-1.5 transition-all shadow-xs cursor-pointer active:scale-98"
                       >
                         <Printer className="w-3.5 h-3.5" />
-                        <span>Print Batch Labels ({b.initialRollQuantity} Rolls)</span>
+                        <span>Print Batch Labels ({b.initialRollQuantity})</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveBatchForPrint({
+                            batch: b,
+                            copies: 1
+                          })
+                        }
+                        className="w-full py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 hover:text-slate-900 border border-slate-200 rounded-lg text-[11px] font-semibold flex items-center justify-center space-x-1 transition-colors cursor-pointer"
+                      >
+                        <Printer className="w-3 h-3 text-slate-400" />
+                        <span>Reprint 1 Label (Sample / Replacement)</span>
                       </button>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
             )}
-
-            {/* Header & Controls for Material Master Labels */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">Material Master Barcode Labels</h2>
-                <p className="text-xs text-slate-500">
-                  Master variant barcodes (Material + Width + Roll Length) for catalog identification.
-                </p>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={printSelectedLabels}
-                  disabled={selectedLabelIds.length === 0}
-                  className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print Selected ({selectedLabelIds.length})</span>
-                </button>
-
-                <button
-                  onClick={printAllLabels}
-                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Print All Labels</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Search and Select All Bar */}
-            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="relative flex-1">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Search labels by material, category, width, or barcode..."
-                  value={labelSearch}
-                  onChange={(e) => setLabelSearch(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-
-              <div className="flex items-center space-x-2 text-xs">
-                <button
-                  onClick={toggleSelectAllLabels}
-                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold"
-                >
-                  {selectedLabelIds.length === filteredLabelItems.length ? 'Deselect All' : 'Select All'}
-                </button>
-              </div>
-            </div>
-
-            {/* Labels Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {filteredLabelItems.map((item) => (
-                <QRCodeLabel
-                  key={item.id}
-                  item={item}
-                  itemUrl={getItemWebUrl(item.id)}
-                  selectable={true}
-                  isSelected={selectedLabelIds.includes(item.id)}
-                  onToggleSelect={toggleSelectLabel}
-                  onPrintSingle={printSingleLabel}
-                  onOpenMobileView={openMobileItemPage}
-                />
-              ))}
-            </div>
           </div>
         )}
       </main>
@@ -3776,7 +3764,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Dynamic Calculation & Barcode Preview */}
+              {/* Dynamic Calculation Preview */}
               {itemFormMaterial.trim() && itemFormSize.trim() && (
                 <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1 text-[11px] font-mono">
                   <div className="flex items-center justify-between text-slate-700">
@@ -3786,16 +3774,6 @@ export default function App() {
                         Number(((parseFloat(itemFormSize) || 0) * (parseFloat(itemFormRollLength) || 70)).toFixed(2))
                       } m²
                     </strong>
-                  </div>
-                  <div className="flex items-center justify-between text-indigo-700 pt-1 border-t border-slate-200/60 font-bold">
-                    <span className="text-slate-500 font-sans">Expected Barcode:</span>
-                    <span>
-                      {generateMatrixBarcode(
-                        itemFormMaterial.trim(),
-                        normalizeNumericSize(itemFormSize.trim()),
-                        normalizeNumericLength(itemFormRollLength)
-                      )}
-                    </span>
                   </div>
                 </div>
               )}
