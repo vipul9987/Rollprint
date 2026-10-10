@@ -25,7 +25,7 @@ export const QRCodeLabel: React.FC<QRCodeLabelProps> = ({
   return (
     <div
       className={`bg-white rounded-2xl border-2 transition-all p-4 flex flex-col items-center justify-between text-center relative group ${
-        isSelected ? 'border-indigo-600 shadow-md ring-2 ring-indigo-200' : 'border-slate-200 hover:border-slate-300 shadow-xs'
+        isSelected ? 'border-amber-500 shadow-md ring-2 ring-amber-200' : 'border-slate-200 hover:border-slate-300 shadow-xs'
       }`}
     >
       {/* Selection checkbox */}
@@ -35,7 +35,7 @@ export const QRCodeLabel: React.FC<QRCodeLabelProps> = ({
             type="checkbox"
             checked={isSelected}
             onChange={() => onToggleSelect(item.id)}
-            className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer"
+            className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-slate-300 cursor-pointer"
           />
         </div>
       )}
@@ -45,7 +45,7 @@ export const QRCodeLabel: React.FC<QRCodeLabelProps> = ({
         {onOpenMobileView && (
           <button
             onClick={() => onOpenMobileView(item.id)}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-slate-100 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-slate-100 transition-colors"
             title="Open Mobile Item Page"
           >
             <ExternalLink className="w-3.5 h-3.5" />
@@ -70,7 +70,7 @@ export const QRCodeLabel: React.FC<QRCodeLabelProps> = ({
         <h3 className="font-black text-base text-slate-900 leading-snug line-clamp-1">
           {item.materialName}
         </h3>
-        <div className="mt-1 flex items-center justify-center gap-1.5 text-xs font-mono font-bold text-indigo-700">
+        <div className="mt-1 flex items-center justify-center gap-1.5 text-xs font-mono font-bold text-amber-700">
           <span>Width: {item.variantSize}M</span>
           <span>&bull;</span>
           <span>Length: {item.rollLengthMtr || 70}M</span>

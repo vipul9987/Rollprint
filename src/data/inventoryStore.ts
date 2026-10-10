@@ -171,20 +171,86 @@ export function formatDateToDDMMYY(dateStr: string): string {
  * Batch: 101026GSTINV287 (15 characters)
  */
 export function generateBatchNumber(dateStr: string, rawInvoice: string): string {
+  if (!dateStr || !rawInvoice) return '';
   const datePart = formatDateToDDMMYY(dateStr);
+  if (!datePart || datePart.length !== 6) return '';
   const invoicePart = normalizeInvoiceForBatch(rawInvoice);
-  if (!datePart && !invoicePart) return '';
+  if (!invoicePart) return '';
   const batch = `${datePart}${invoicePart}`;
   return batch.slice(0, 15);
 }
 
+/**
+ * Finds all batches matching a scanned barcode or batch number
+ */
+export function findBatchesByBatchOrBarcode(batches: MatrixBatch[], code: string): MatrixBatch[] {
+  if (!code || !code.trim()) return [];
+  const clean = code.trim().toUpperCase();
+  const cleanAlphaNum = clean.replace(/[^A-Z0-9]/g, '');
+
+  return batches.filter((b) => {
+    const bNum = (b.batchNumber || '').toUpperCase();
+    const bBar = (b.barcodeValue || '').toUpperCase();
+    if (bNum === clean || bBar === clean) return true;
+    const bNumAlpha = bNum.replace(/[^A-Z0-9]/g, '');
+    const bBarAlpha = bBar.replace(/[^A-Z0-9]/g, '');
+    return Boolean(cleanAlphaNum && (bNumAlpha === cleanAlphaNum || bBarAlpha === cleanAlphaNum));
+  });
+}
+
+export const INITIAL_MATRIX_BATCHES: MatrixBatch[] = [
+  {
+    id: 'bat-init-1',
+    batchNumber: '101026GT28728',
+    materialName: 'Bright FL 26',
+    category: 'Frontlit Flex',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    initialRollQuantity: 10,
+    currentRemainingRollQuantity: 10,
+    invoiceNumber: 'GT28728',
+    stockInDate: '2026-10-10',
+    barcodeValue: '101026GT28728',
+    createdAt: '2026-10-10T08:00:00Z'
+  },
+  {
+    id: 'bat-init-2',
+    batchNumber: '121026AB12345',
+    materialName: 'Bright FL 26',
+    category: 'Frontlit Flex',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    initialRollQuantity: 5,
+    currentRemainingRollQuantity: 5,
+    invoiceNumber: 'AB-12/345',
+    stockInDate: '2026-10-12',
+    barcodeValue: '121026AB12345',
+    createdAt: '2026-10-12T09:00:00Z'
+  },
+  {
+    id: 'bat-init-3',
+    batchNumber: '091026GT8812',
+    materialName: 'Backlit Sunlex',
+    category: 'Backlit',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    initialRollQuantity: 5,
+    currentRemainingRollQuantity: 5,
+    invoiceNumber: 'GT8812',
+    stockInDate: '2026-10-09',
+    barcodeValue: '091026GT8812',
+    createdAt: '2026-10-09T08:30:00Z'
+  }
+];
+
 export function getStoredMatrixBatches(): MatrixBatch[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_BATCHES);
-    if (!raw) return [];
-    return JSON.parse(raw);
+    if (!raw) return INITIAL_MATRIX_BATCHES;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_MATRIX_BATCHES;
   } catch {
-    return [];
+    return INITIAL_MATRIX_BATCHES;
   }
 }
 

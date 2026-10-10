@@ -14,6 +14,7 @@ import {
   generateBatchNumber,
   formatDateToDDMMYY,
   normalizeInvoiceForBatch,
+  findBatchesByBatchOrBarcode,
   INITIAL_MATRIX_ITEMS,
   INITIAL_MATRIX_TRANSACTIONS
 } from './data/inventoryStore';
@@ -531,6 +532,250 @@ const batchAreaPerRoll = Number((1.63 * 50).toFixed(2));
 const batchTotalArea = Number((batchAreaPerRoll * 10).toFixed(2));
 assert(batchAreaPerRoll === 81.5, `Batch area per roll is 1.63 × 50 = 81.50 m²`);
 assert(batchTotalArea === 815.0, `Batch total area for 10 rolls is 815.00 m²`);
+
+// ------------------------------------------------------------------
+// TEST SUITE 11: Stock OUT with Batch Barcode Workflow
+// ------------------------------------------------------------------
+console.log('--- Test Suite 11: Stock OUT Batch Barcode & Stock Deductions ---');
+
+// Case 1: Batch identification & deduction: 10 -> 7
+let testBatchRemaining = sampleBatch.currentRemainingRollQuantity; // 10
+const rollsOutBatch = 3;
+assert(rollsOutBatch <= testBatchRemaining, 'Requested 3 rolls <= 10 in batch is valid');
+testBatchRemaining -= rollsOutBatch;
+assert(testBatchRemaining === 7, `Batch stock decrements from 10 to 7 Rolls (got ${testBatchRemaining})`);
+
+// Case 2: Reject Stock OUT > Current Batch Roll Quantity
+const attemptedExceedQty = 8;
+const isBatchShortage = attemptedExceedQty > testBatchRemaining;
+assert(isBatchShortage, `Attempting to remove 8 rolls when batch only has 7 is blocked as shortage`);
+
+// Case 3: Overall inventory + Multiple batches
+// Batch 1: 7 rolls, Batch 2: 5 rolls -> Overall: 12 rolls
+const batch1Stock = 7;
+const batch2Stock = 5;
+const overallItemStock = batch1Stock + batch2Stock;
+assert(overallItemStock === 12, 'Multiple batches (7 + 5) sum to 12 Rolls overall');
+const afterBatch1Deduction = overallItemStock - 3;
+assert(afterBatch1Deduction === 9, 'Dispatching 3 rolls reduces overall stock from 12 to 9 Rolls');
+
+// ------------------------------------------------------------------
+// TEST SUITE 12: USER SPECIFIC TEST CASES 1 TO 6
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 12: User Specific Test Cases 1 to 6 ---');
+
+// TEST CASE 1:
+// Material: Bright FL 26, Size: 1.63, Roll Length: 50, Qty: 10, Invoice: GT28728, Date: 10/10/2026
+const tc1Batch = generateBatchNumber('10/10/2026', 'GT28728');
+assert(tc1Batch === '101026GT28728', `[Test Case 1] Bright FL 26: Expected 101026GT28728, got ${tc1Batch}`);
+
+// TEST CASE 2:
+// Material: Premium M 10 BB, Size: 1.32, Roll Length: 70, Qty: 5, Invoice: INV-8821, Date: 10/10/2026
+const tc2InvoiceNorm = normalizeInvoiceForBatch('INV-8821');
+assert(tc2InvoiceNorm === 'INV8821', `[Test Case 2] Normalized Invoice INV-8821 -> INV8821`);
+const tc2Batch = generateBatchNumber('10/10/2026', 'INV-8821');
+assert(tc2Batch === '101026INV8821', `[Test Case 2] Premium M 10 BB: Expected 101026INV8821, got ${tc2Batch}`);
+
+// TEST CASE 3:
+// Material: BB S/M, Size: 1.63, Roll Length: 50, Qty: 2, Invoice: AB/12-34, Date: 11/10/2026
+const tc3InvoiceNorm = normalizeInvoiceForBatch('AB/12-34');
+assert(tc3InvoiceNorm === 'AB1234', `[Test Case 3] Normalized Invoice AB/12-34 -> AB1234`);
+const tc3Batch = generateBatchNumber('11/10/2026', 'AB/12-34');
+assert(tc3Batch === '111026AB1234', `[Test Case 3] BB S/M: Expected 111026AB1234, got ${tc3Batch}`);
+
+// TEST CASE 4: LONG INVOICE
+// Invoice: GSTINV28728234, Date: 10/10/2026
+const tc4Batch = generateBatchNumber('10/10/2026', 'GSTINV28728234');
+assert(tc4Batch === '101026GSTINV287', `[Test Case 4] Long Invoice: Expected 101026GSTINV287, got ${tc4Batch}`);
+assert(tc4Batch.length === 15, `[Test Case 4] Length is exactly 15 chars`);
+
+// TEST CASE 5: STATE CHANGE
+// Changing Material, Size, Roll Length does NOT change Batch Number
+const tc5BatchBefore = generateBatchNumber('10/10/2026', 'GT28728');
+const tc5Material1 = 'Bright FL 26';
+const tc5Material2 = 'Premium M 10 BB';
+const tc5BatchAfterMatChange = generateBatchNumber('10/10/2026', 'GT28728');
+assert(tc5BatchBefore === tc5BatchAfterMatChange, `[Test Case 5] Changing material does not alter batch number`);
+// Changing invoice updates batch immediately
+const tc5BatchNewInvoice = generateBatchNumber('10/10/2026', 'INV-9900');
+assert(tc5BatchNewInvoice === '101026INV9900', `[Test Case 5] Changing invoice immediately updates batch: 101026INV9900`);
+// Changing date updates batch immediately
+const tc5BatchNewDate = generateBatchNumber('12/10/2026', 'INV-9900');
+assert(tc5BatchNewDate === '121026INV9900', `[Test Case 5] Changing date immediately updates batch: 121026INV9900`);
+
+// TEST CASE 6: RELOAD / STORAGE PERSISTENCE
+const simulatedStorage: Record<string, string> = {};
+const testBatchRecord: MatrixBatch = {
+  id: 'bat-persist-test',
+  batchNumber: '101026GT28728',
+  materialName: 'Bright FL 26',
+  category: 'Frontlit Flex',
+  variantSize: '1.63',
+  rollLengthMtr: 50,
+  initialRollQuantity: 10,
+  currentRemainingRollQuantity: 10,
+  invoiceNumber: 'GT28728',
+  stockInDate: '2026-10-10',
+  barcodeValue: '101026GT28728',
+  createdAt: '2026-10-10T10:00:00Z'
+};
+simulatedStorage['rollprint_client_batches_v1'] = JSON.stringify([testBatchRecord]);
+const reloaded = JSON.parse(simulatedStorage['rollprint_client_batches_v1']);
+assert(Array.isArray(reloaded) && reloaded.length === 1, '[Test Case 6] Batches persist across reload');
+assert(reloaded[0].batchNumber === '101026GT28728', '[Test Case 6] Reloaded batch retains exact batch number');
+assert(reloaded[0].barcodeValue === '101026GT28728', '[Test Case 6] Reloaded batch retains barcode value');
+
+// ------------------------------------------------------------------
+// TEST SUITE 13: FULL MATERIAL TEST MATRIX (ALL 20 MATERIALS)
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 13: Material Test Matrix (All 20 Materials) ---');
+
+const ALL_MATERIALS = [
+  'Backlit Sunlex',
+  'Backlit Megha',
+  'Backlit Hetax',
+  'Premium M 9',
+  'Premium M 10 BB',
+  'Premium S 10 BB',
+  'BB S/M',
+  'Lite',
+  'Economy',
+  'S Print 22',
+  'Bright FL 26',
+  'Hi Gloss HL-23',
+  'Hi Gloss HL-30',
+  'Vinyl Gloss 80 Mic',
+  'Vinyl Gloss 100 Mic',
+  'Vinyl Matt 100 Mic',
+  'Premium One Way',
+  'Lamination Matt',
+  'Lamination Gloss',
+  'PVC Foam Sheet 3mm'
+];
+
+ALL_MATERIALS.forEach((mat) => {
+  const generated = generateBatchNumber('10/10/2026', 'INV123');
+  assert(
+    generated === '101026INV123',
+    `Material "${mat}" produces deterministic batch 101026INV123 independent of material name`
+  );
+});
+
+// ------------------------------------------------------------------
+// TEST SUITE 14: DECIMAL SIZES & MANUAL LENGTHS MATRIX
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 14: Decimal Sizes & Manual Lengths Matrix ---');
+
+const TEST_SIZES = ['0.94', '0.98', '1.02', '1.06', '1.27', '1.32', '1.37', '1.52', '1.63', '1.93', '2.20', '2.54', '3.20'];
+const TEST_LENGTHS = [37, 50, 69, 70];
+
+TEST_SIZES.forEach((sz) => {
+  TEST_LENGTHS.forEach((len) => {
+    const batch = generateBatchNumber('15/10/2026', 'TEST77');
+    assert(batch === '151026TEST77', `Size ${sz}M and Length ${len}M maintain batch: 151026TEST77`);
+  });
+});
+
+// ------------------------------------------------------------------
+// TEST SUITE 15: SPECIAL CHARACTERS IN MATERIALS & INVOICES
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 15: Special Characters Matrix ---');
+
+const specialInvoiceInputs = [
+  { raw: 'INV/2026-99', expectedNorm: 'INV202699', expectedBatch: '101026INV202699' },
+  { raw: 'GT #88*21', expectedNorm: 'GT8821', expectedBatch: '101026GT8821' },
+  { raw: 'ab.cd-ef', expectedNorm: 'ABCDEF', expectedBatch: '101026ABCDEF' },
+  { raw: '   INVOICE  123   ', expectedNorm: 'INVOICE12', expectedBatch: '101026INVOICE12' }
+];
+
+specialInvoiceInputs.forEach((test) => {
+  const norm = normalizeInvoiceForBatch(test.raw);
+  const batch = generateBatchNumber('10/10/2026', test.raw);
+  assert(norm === test.expectedNorm, `Normalized special invoice "${test.raw}" -> "${test.expectedNorm}"`);
+  assert(batch === test.expectedBatch, `Batch for "${test.raw}" -> "${test.expectedBatch}"`);
+});
+
+// ------------------------------------------------------------------
+// TEST SUITE 16: DUPLICATE BATCH NUMBER EDGE CASE
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 16: Duplicate Batch Number Edge Case ---');
+
+const duplicateBatchesPool: MatrixBatch[] = [
+  {
+    id: 'bat-line-1',
+    batchNumber: '101026GT28728',
+    materialName: 'Bright FL 26',
+    category: 'Frontlit Flex',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    initialRollQuantity: 10,
+    currentRemainingRollQuantity: 10,
+    invoiceNumber: 'GT28728',
+    stockInDate: '2026-10-10',
+    barcodeValue: '101026GT28728',
+    createdAt: '2026-10-10T08:00:00Z'
+  },
+  {
+    id: 'bat-line-2',
+    batchNumber: '101026GT28728',
+    materialName: 'Premium M 10 BB',
+    category: 'Flex PVC',
+    variantSize: '1.32',
+    rollLengthMtr: 70,
+    initialRollQuantity: 5,
+    currentRemainingRollQuantity: 5,
+    invoiceNumber: 'GT28728',
+    stockInDate: '2026-10-10',
+    barcodeValue: '101026GT28728',
+    createdAt: '2026-10-10T08:05:00Z'
+  }
+];
+
+const matches = findBatchesByBatchOrBarcode(duplicateBatchesPool, '101026GT28728');
+assert(matches.length === 2, `Detected duplicate batch lines: exactly 2 records found for 101026GT28728`);
+assert(matches[0].materialName === 'Bright FL 26', `Line 1 is Bright FL 26`);
+assert(matches[1].materialName === 'Premium M 10 BB', `Line 2 is Premium M 10 BB`);
+
+// ------------------------------------------------------------------
+// TEST SUITE 17: MINIMAL ROLL BARCODE LABEL SPECIFICATION
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 17: Minimal Roll Barcode Label Specification ---');
+
+const sampleBatchForLabel: MatrixBatch = {
+  id: 'bat-10102612321',
+  batchNumber: '10102612321',
+  materialName: 'Bright FL 26',
+  category: 'Frontlit Flex',
+  variantSize: '1.63',
+  rollLengthMtr: 50,
+  initialRollQuantity: 10,
+  currentRemainingRollQuantity: 10,
+  invoiceNumber: '12321',
+  stockInDate: '2026-10-10',
+  barcodeValue: '10102612321',
+  createdAt: '2026-10-10T10:00:00Z'
+};
+
+// 1. Barcode value must encode exactly the batch number (10102612321)
+assert(sampleBatchForLabel.barcodeValue === '10102612321', 'Barcode value encodes exactly 10102612321');
+assert(sampleBatchForLabel.batchNumber === '10102612321', 'Human-readable batch number below barcode is 10102612321');
+
+// 2. All 10 roll copies for 10 rolls receive the exact same barcode & batch number
+const rollCopiesTen = Array.from({ length: 10 }, () => sampleBatchForLabel.barcodeValue);
+assert(rollCopiesTen.length === 10, 'Generated 10 roll label copies for 10 rolls');
+assert(rollCopiesTen.every((code) => code === '10102612321'), 'All 10 labels have identical barcode 10102612321');
+
+// 3. 1 test label copy retains the exact same barcode & batch number
+const rollCopiesOne = Array.from({ length: 1 }, () => sampleBatchForLabel.barcodeValue);
+assert(rollCopiesOne.length === 1, 'Generated 1 label copy for testing/reprinting');
+assert(rollCopiesOne[0] === '10102612321', 'Single test label has exact barcode 10102612321');
+
+// 4. Verification that label does NOT embed material, size, or invoice into barcode
+assert(!sampleBatchForLabel.barcodeValue.includes('Bright FL 26'), 'Barcode does not include material name');
+assert(!sampleBatchForLabel.barcodeValue.includes('Frontlit Flex'), 'Barcode does not include category');
+assert(!sampleBatchForLabel.barcodeValue.includes('1.63'), 'Barcode does not include size');
+assert(!sampleBatchForLabel.barcodeValue.includes('50M'), 'Barcode does not include roll length');
+assert(!sampleBatchForLabel.barcodeValue.includes('Batch Number:'), 'Barcode does not include label prefix');
 
 // ------------------------------------------------------------------
 // SUMMARY

@@ -42,17 +42,21 @@ import {
   CLIENT_VINYL_MATERIALS_ORDER,
   INITIAL_MATRIX_ITEMS,
   INITIAL_MATRIX_TRANSACTIONS,
+  INITIAL_MATRIX_BATCHES,
   generateBatchNumber,
   formatDateToDDMMYY,
   normalizeInvoiceForBatch,
   getStoredMatrixBatches,
-  saveStoredMatrixBatches
+  saveStoredMatrixBatches,
+  findBatchesByBatchOrBarcode
 } from './data/inventoryStore';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock, InventorySummaryGroup, MatrixBatch } from './types/inventory';
 import { QRCodeLabel } from './components/QRCodeLabel';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
 import { BatchBarcodeLabel } from './components/BatchBarcodeLabel';
+import { AppLogo } from './components/AppLogo';
+import { BarcodeDisplay } from './components/BarcodeDisplay';
 
 type TabType = 'dashboard' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
 type DashboardViewMode = 'matrix' | 'table';
@@ -287,16 +291,16 @@ export default function App() {
   const [stockInError, setStockInError] = useState<string>('');
 
   // Auto-generated Read-Only Batch Number: DDMMYY + CLEANED_INVOICE (Max 15 characters)
+  // Deterministic rule: depends strictly on Date + Normalized Invoice
   const stockInGeneratedBatchNumber = useMemo(() => {
     return generateBatchNumber(stockInDate, stockInInvoiceNumber);
   }, [stockInDate, stockInInvoiceNumber]);
 
-  const [stockInBarcodeCode, setStockInBarcodeCode] = useState<string>('');
-  const [stockInVerificationStatus, setStockInVerificationStatus] = useState<VerificationStatus>('IDLE');
+  // Track if CODE128 barcode successfully rendered
+  const [stockInBarcodeRenderSuccess, setStockInBarcodeRenderSuccess] = useState<boolean>(false);
 
   const stockInRollsInputRef = useRef<HTMLInputElement | null>(null);
   const stockInInvoiceInputRef = useRef<HTMLInputElement | null>(null);
-  const stockInVerificationInputRef = useRef<HTMLInputElement | null>(null);
 
   // Auto-populated Category for selected Material
   const stockInAutoCategory = useMemo(() => {
@@ -398,44 +402,53 @@ export default function App() {
     return parseFullRollCount(stockInRolls);
   }, [stockInRolls]);
 
-  // All conditions for enabling Save Stock IN button (including Invoice Number & Batch Barcode)
-  const isStockInSaveEnabled = useMemo(() => {
-    const hasMaterial = Boolean(stockInMaterial.trim());
-    const hasSize = Boolean(stockInVariantSize.trim());
-    const hasLength = Boolean(stockInRollLength.trim()) && parseFloat(stockInRollLength) > 0;
-    const hasValidRolls = stockInRollValidation.valid && stockInRollValidation.count > 0;
-    const hasInvoice = Boolean(stockInInvoiceNumber.trim());
-    const hasValidDate = Boolean(stockInDate.trim()) && !isNaN(new Date(stockInDate).getTime());
-    const isVerified = stockInVerificationStatus === 'VERIFIED';
-    const hasItem = Boolean(matchedStockInItem);
-
-    return hasMaterial && hasSize && hasLength && hasValidRolls && hasInvoice && hasValidDate && isVerified && hasItem;
+  // Computed reason if Save Stock IN is disabled (never leave unexplained grey button)
+  const stockInDisabledReason = useMemo((): string | null => {
+    if (!stockInMaterial.trim()) {
+      return 'Select Material Name to proceed';
+    }
+    const rawSize = stockInVariantSize.trim();
+    const parsedWidth = parseFloat(rawSize);
+    if (!rawSize || isNaN(parsedWidth) || parsedWidth <= 0) {
+      return 'Enter Size / Width (> 0) to proceed';
+    }
+    const rawLength = stockInRollLength.trim();
+    const parsedLength = parseFloat(rawLength);
+    if (!rawLength || isNaN(parsedLength) || parsedLength <= 0) {
+      return 'Enter Roll Length (> 0) to proceed';
+    }
+    if (!stockInRolls.trim()) {
+      return 'Enter Roll Quantity to continue';
+    }
+    if (!stockInRollValidation.valid || stockInRollValidation.count <= 0) {
+      return stockInRollValidation.error || 'Enter a valid positive whole number of rolls';
+    }
+    if (!stockInInvoiceNumber.trim()) {
+      return 'Enter Invoice Number to continue';
+    }
+    if (!stockInDate.trim() || isNaN(new Date(stockInDate).getTime())) {
+      return 'Select a valid Date to proceed';
+    }
+    if (!stockInGeneratedBatchNumber) {
+      return 'Unable to generate batch number. Check Date & Invoice';
+    }
+    if (!stockInBarcodeRenderSuccess) {
+      return 'Unable to generate barcode. Check Invoice Number';
+    }
+    return null;
   }, [
     stockInMaterial,
     stockInVariantSize,
     stockInRollLength,
+    stockInRolls,
     stockInRollValidation,
     stockInInvoiceNumber,
     stockInDate,
-    stockInVerificationStatus,
-    matchedStockInItem
+    stockInGeneratedBatchNumber,
+    stockInBarcodeRenderSuccess
   ]);
 
-  const validateStockInBarcode = (code: string) => {
-    const trimmed = code.trim();
-    if (!trimmed) {
-      setStockInVerificationStatus('IDLE');
-      return;
-    }
-    if (!matchedStockInItem) {
-      setStockInVerificationStatus('MISMATCH');
-      return;
-    }
-    // Barcode verification checks against generated batch barcode (primary) or material barcode
-    const expectedBatchBarcode = stockInGeneratedBatchNumber || undefined;
-    const isMatch = checkBarcodeMatch(trimmed, matchedStockInItem, expectedBatchBarcode);
-    setStockInVerificationStatus(isMatch ? 'VERIFIED' : 'MISMATCH');
-  };
+  const isStockInSaveEnabled = stockInDisabledReason === null;
 
   // -------------------------------------------------------------
   // STOCK OUT FORM STATE (Exact Blueprint Order)
@@ -458,9 +471,17 @@ export default function App() {
 
   const [stockOutBarcodeCode, setStockOutBarcodeCode] = useState<string>('');
   const [stockOutVerificationStatus, setStockOutVerificationStatus] = useState<VerificationStatus>('IDLE');
+  const [stockOutSelectedBatchId, setStockOutSelectedBatchId] = useState<string>('');
+  const [stockOutBatchSearchInput, setStockOutBatchSearchInput] = useState<string>('');
 
   const stockOutRollsInputRef = useRef<HTMLInputElement | null>(null);
   const stockOutVerificationInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Selected batch object
+  const selectedStockOutBatch = useMemo(() => {
+    if (!stockOutSelectedBatchId) return undefined;
+    return batches.find((b) => b.id === stockOutSelectedBatchId);
+  }, [batches, stockOutSelectedBatchId]);
 
   // Auto-populated Category for selected Material
   const stockOutAutoCategory = useMemo(() => {
@@ -520,6 +541,70 @@ export default function App() {
     return undefined;
   }, [itemsWithStock, stockOutMaterial, stockOutVariantSize, stockOutRollLength]);
 
+  // Available batches for current material + size + length with remaining rolls
+  const availableBatchesForCurrentStockOut = useMemo(() => {
+    if (!stockOutMaterial || !stockOutVariantSize) return [];
+    const normSize = normalizeNumericSize(stockOutVariantSize);
+    const normLen = normalizeNumericLength(stockOutRollLength);
+    return batches.filter(
+      (b) =>
+        b.materialName.toLowerCase() === stockOutMaterial.toLowerCase() &&
+        normalizeNumericSize(b.variantSize) === normSize &&
+        normalizeNumericLength(b.rollLengthMtr) === normLen &&
+        b.currentRemainingRollQuantity > 0
+    );
+  }, [batches, stockOutMaterial, stockOutVariantSize, stockOutRollLength]);
+
+  const [duplicateBatchMatches, setDuplicateBatchMatches] = useState<MatrixBatch[]>([]);
+
+  const selectSingleStockOutBatch = (found: MatrixBatch) => {
+    setDuplicateBatchMatches([]);
+    setStockOutMaterial(found.materialName);
+    setStockOutVariantSize(found.variantSize);
+    setStockOutRollLength(found.rollLengthMtr.toString());
+    setStockOutSelectedBatchId(found.id);
+    setStockOutBarcodeCode(found.batchNumber);
+    setStockOutVerificationStatus('VERIFIED');
+    setStockOutError('');
+    showNotification(
+      `Batch ${found.batchNumber} linked: ${found.materialName} (${found.currentRemainingRollQuantity} rolls available in batch)`,
+      'success'
+    );
+    setTimeout(() => stockOutRollsInputRef.current?.focus(), 100);
+  };
+
+  // Scan or select a batch directly by batch number / barcode
+  const handleBatchSelectOrScan = (batchCodeOrId: string): boolean => {
+    const clean = batchCodeOrId.trim().toUpperCase();
+    if (!clean) {
+      setDuplicateBatchMatches([]);
+      return false;
+    }
+
+    const matches = findBatchesByBatchOrBarcode(batches, clean);
+
+    if (matches.length === 0) {
+      const direct = batches.find((b) => b.id === batchCodeOrId);
+      if (direct) {
+        selectSingleStockOutBatch(direct);
+        return true;
+      }
+      return false;
+    }
+
+    if (matches.length === 1) {
+      selectSingleStockOutBatch(matches[0]);
+      return true;
+    }
+
+    // DUPLICATE BATCH CASE: Multiple material lines under same Date + Invoice
+    setDuplicateBatchMatches(matches);
+    setStockOutError(
+      `Multiple material lines found for Batch ${matches[0].batchNumber} (Invoice ${matches[0].invoiceNumber}). Please select the material line below.`
+    );
+    return true;
+  };
+
   // Central roll count validation for Stock OUT
   const stockOutRollValidation = useMemo(() => {
     return parseFullRollCount(stockOutRolls);
@@ -534,7 +619,18 @@ export default function App() {
     const hasValidDate = Boolean(stockOutDate.trim()) && !isNaN(new Date(stockOutDate).getTime());
     const isVerified = stockOutVerificationStatus === 'VERIFIED';
     const hasItem = Boolean(matchedStockOutItem);
-    const withinStock = Boolean(matchedStockOutItem && hasValidRolls && stockOutRollValidation.count <= matchedStockOutItem.currentStock);
+
+    // Validation: if a batch is selected, roll count cannot exceed batch stock
+    const withinBatchStock =
+      !selectedStockOutBatch ||
+      (hasValidRolls && stockOutRollValidation.count <= selectedStockOutBatch.currentRemainingRollQuantity);
+
+    const withinStock = Boolean(
+      matchedStockOutItem &&
+      hasValidRolls &&
+      stockOutRollValidation.count <= matchedStockOutItem.currentStock &&
+      withinBatchStock
+    );
 
     return hasMaterial && hasSize && hasLength && hasValidRolls && hasValidDate && isVerified && hasItem && withinStock;
   }, [
@@ -544,7 +640,8 @@ export default function App() {
     stockOutRollValidation,
     stockOutDate,
     stockOutVerificationStatus,
-    matchedStockOutItem
+    matchedStockOutItem,
+    selectedStockOutBatch
   ]);
 
   const validateStockOutBarcode = (code: string) => {
@@ -553,6 +650,11 @@ export default function App() {
       setStockOutVerificationStatus('IDLE');
       return;
     }
+
+    // Try matching as batch first
+    const isBatchMatched = handleBatchSelectOrScan(trimmed);
+    if (isBatchMatched) return;
+
     if (!matchedStockOutItem) {
       setStockOutVerificationStatus('MISMATCH');
       return;
@@ -564,11 +666,14 @@ export default function App() {
   // Camera scan success handler
   const handleCameraScanSuccess = (decodedText: string) => {
     if (cameraScannerTarget === 'stock-in') {
-      setStockInBarcodeCode(decodedText);
-      validateStockInBarcode(decodedText);
+      setStockInInvoiceNumber(decodedText.trim());
+      showNotification(`Scanned invoice: ${decodedText.trim()}`, 'success');
     } else {
       setStockOutBarcodeCode(decodedText);
-      validateStockOutBarcode(decodedText);
+      const isBatch = handleBatchSelectOrScan(decodedText);
+      if (!isBatch) {
+        validateStockOutBarcode(decodedText);
+      }
     }
   };
 
@@ -584,6 +689,7 @@ export default function App() {
     extraMeta?: {
       invoiceNumber?: string;
       batchNumber?: string;
+      batchId?: string;
     }
   ): { success: boolean; batch?: MatrixBatch } => {
     let targetItem = itemsWithStock.find((i) => i.id === itemId);
@@ -675,6 +781,19 @@ export default function App() {
       setBatches(updatedBatches);
       saveStoredMatrixBatches(updatedBatches);
       batchNumber = generatedBatchNum;
+    } else if (type === 'OUT' && extraMeta?.batchId) {
+      // Deduct from specific batch
+      const targetBatch = batches.find((b) => b.id === extraMeta.batchId);
+      if (targetBatch) {
+        const updatedBatches = batches.map((b) =>
+          b.id === extraMeta.batchId
+            ? { ...b, currentRemainingRollQuantity: Math.max(0, b.currentRemainingRollQuantity - quantity) }
+            : b
+        );
+        setBatches(updatedBatches);
+        saveStoredMatrixBatches(updatedBatches);
+        batchNumber = targetBatch.batchNumber;
+      }
     }
 
     const newTxn: MatrixStockTransaction = {
@@ -695,7 +814,7 @@ export default function App() {
       date: transactionDate,
       invoiceNumber: invoiceNumber || undefined,
       batchNumber: batchNumber || undefined,
-      batchId: createdBatch?.id,
+      batchId: createdBatch?.id || extraMeta?.batchId,
       createdAt: new Date().toISOString()
     };
 
@@ -727,8 +846,13 @@ export default function App() {
       return;
     }
 
-    if (stockInVerificationStatus !== 'VERIFIED') {
-      setStockInError('Barcode verification is required. Please verify the batch barcode before saving.');
+    if (!stockInGeneratedBatchNumber) {
+      setStockInError('Unable to generate Batch Number. Please verify Invoice Number and Date.');
+      return;
+    }
+
+    if (!stockInBarcodeRenderSuccess) {
+      setStockInError('Unable to generate barcode. Check Invoice Number.');
       return;
     }
 
@@ -761,8 +885,7 @@ export default function App() {
 
       setStockInRolls('');
       setStockInInvoiceNumber('');
-      setStockInBarcodeCode('');
-      setStockInVerificationStatus('IDLE');
+      setStockInError('');
       stockInRollsInputRef.current?.focus();
     }
   };
@@ -788,6 +911,15 @@ export default function App() {
     }
 
     const rollsToRemove = stockOutRollValidation.count;
+
+    // Batch-level stock validation as per client specification
+    if (selectedStockOutBatch && rollsToRemove > selectedStockOutBatch.currentRemainingRollQuantity) {
+      setStockOutError(
+        `Insufficient stock in this batch. Only ${selectedStockOutBatch.currentRemainingRollQuantity} rolls are available.`
+      );
+      return;
+    }
+
     if (rollsToRemove > matchedStockOutItem.currentStock) {
       setStockOutError(
         `Cannot remove ${rollsToRemove} rolls. Only ${matchedStockOutItem.currentStock} rolls available in stock.`
@@ -799,12 +931,22 @@ export default function App() {
       matchedStockOutItem.id,
       'OUT',
       rollsToRemove,
-      stockOutDate
+      stockOutDate,
+      undefined,
+      selectedStockOutBatch
+        ? {
+            batchId: selectedStockOutBatch.id,
+            batchNumber: selectedStockOutBatch.batchNumber,
+            invoiceNumber: selectedStockOutBatch.invoiceNumber
+          }
+        : undefined
     );
 
     if (result.success) {
       setStockOutRolls('');
       setStockOutBarcodeCode('');
+      setStockOutSelectedBatchId('');
+      setStockOutBatchSearchInput('');
       setStockOutVerificationStatus('IDLE');
       stockOutRollsInputRef.current?.focus();
     }
@@ -1172,9 +1314,11 @@ export default function App() {
     if (window.confirm('Reset inventory and transaction history to the baseline client blueprint dataset?')) {
       setItems(INITIAL_MATRIX_ITEMS);
       setTransactions(INITIAL_MATRIX_TRANSACTIONS);
+      setBatches(INITIAL_MATRIX_BATCHES);
       saveStoredMatrixItems(INITIAL_MATRIX_ITEMS);
       saveStoredMatrixTransactions(INITIAL_MATRIX_TRANSACTIONS);
-      showNotification('Restored baseline blueprint dataset.');
+      saveStoredMatrixBatches(INITIAL_MATRIX_BATCHES);
+      showNotification('Restored baseline blueprint dataset with client batches.');
     }
   };
 
@@ -1273,48 +1417,33 @@ export default function App() {
       )}
 
       {/* Printable Area for Barcode / QR Labels (@media print) */}
-      <div className="hidden print:block print-label-grid">
-        {(selectedLabelIds.length > 0
-          ? itemsWithStock.filter((i) => selectedLabelIds.includes(i.id))
-          : filteredLabelItems
-        ).map((item) => (
-          <div key={item.id} className="print-label-item">
-            <QRCodeLabel item={item} itemUrl={getItemWebUrl(item.id)} />
-          </div>
-        ))}
-      </div>
+      {!activeBatchForPrint && (
+        <div className="hidden print:block print-label-grid">
+          {(selectedLabelIds.length > 0
+            ? itemsWithStock.filter((i) => selectedLabelIds.includes(i.id))
+            : filteredLabelItems
+          ).map((item) => (
+            <div key={item.id} className="print-label-item">
+              <QRCodeLabel item={item} itemUrl={getItemWebUrl(item.id)} />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Main App Header */}
-      <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-40 print:hidden">
+      <header className="bg-[#0A192F] text-white border-b border-slate-800 sticky top-0 z-40 print:hidden">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            {/* Logo & Title */}
-            <div className="flex items-center space-x-3">
-              <div className="p-2 bg-indigo-600 rounded-xl shadow-inner text-white">
-                <Box className="w-5 h-5 stroke-[2.5]" />
-              </div>
-              <div>
-                <div className="flex items-center space-x-2">
-                  <h1 className="text-base font-black tracking-tight text-white">
-                    RollPrint <span className="text-indigo-400 font-medium">IMS</span>
-                  </h1>
-                  <span className="text-[10px] font-bold uppercase tracking-wider bg-indigo-950 text-indigo-300 border border-indigo-800 px-2 py-0.5 rounded-full">
-                    Blueprint Verified
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-400">
-                  Full-Roll Inventory & Material Area Tracker
-                </p>
-              </div>
-            </div>
+          <div className="flex flex-col md:flex-row md:items-center justify-between min-h-[4.25rem] py-2 md:py-0 gap-3">
+            {/* Logo & Title (Decora Sales logo with no background patch) */}
+            <AppLogo />
 
             {/* Navigation Tabs */}
-            <nav className="flex items-center space-x-1 sm:space-x-2 overflow-x-auto py-2">
+            <nav className="flex items-center space-x-1 sm:space-x-1.5 overflow-x-auto py-1 scrollbar-none">
               <button
                 onClick={() => setActiveTab('dashboard')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'dashboard'
-                    ? 'bg-indigo-600 text-white shadow-xs'
+                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800'
                 }`}
               >
@@ -1324,9 +1453,9 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('materials')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'materials'
-                    ? 'bg-indigo-600 text-white shadow-xs'
+                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800'
                 }`}
               >
@@ -1339,7 +1468,7 @@ export default function App() {
                   setActiveTab('stock-in');
                   setTimeout(() => stockInRollsInputRef.current?.focus(), 100);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'stock-in'
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-emerald-400 hover:text-white hover:bg-slate-800'
@@ -1354,7 +1483,7 @@ export default function App() {
                   setActiveTab('stock-out');
                   setTimeout(() => stockOutRollsInputRef.current?.focus(), 100);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'stock-out'
                     ? 'bg-amber-600 text-white shadow-xs'
                     : 'text-amber-400 hover:text-white hover:bg-slate-800'
@@ -1366,9 +1495,9 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('transactions')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'transactions'
-                    ? 'bg-indigo-600 text-white shadow-xs'
+                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
                     : 'text-slate-300 hover:text-white hover:bg-slate-800'
                 }`}
               >
@@ -1378,10 +1507,10 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('qr-labels')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
                   activeTab === 'qr-labels'
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-indigo-400 hover:text-white hover:bg-slate-800'
+                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
+                    : 'text-amber-300 hover:text-white hover:bg-slate-800'
                 }`}
               >
                 <QrCode className="w-3.5 h-3.5" />
@@ -1413,18 +1542,18 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="bg-white p-4 rounded-2xl border border-indigo-100 shadow-xs bg-gradient-to-br from-white to-indigo-50/40">
-                <span className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block">
+              <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-xs bg-gradient-to-br from-white to-amber-50/40">
+                <span className="text-[11px] font-bold text-amber-800 uppercase tracking-wider block">
                   Current Stock in Hand
                 </span>
                 <div className="mt-2 flex items-baseline justify-between">
                   <div>
-                    <span className="text-2xl sm:text-3xl font-black text-indigo-900 font-mono">
+                    <span className="text-2xl sm:text-3xl font-black text-[#0A192F] font-mono">
                       {dashboardMetrics.currentStock}
                     </span>
-                    <span className="ml-1 text-xs font-bold text-indigo-700">Rolls</span>
+                    <span className="ml-1 text-xs font-bold text-amber-700">Rolls</span>
                   </div>
-                  <span className="text-xs font-mono font-bold text-indigo-600">
+                  <span className="text-xs font-mono font-bold text-amber-700">
                     {dashboardMetrics.totalAreaMtr2.toLocaleString()} m²
                   </span>
                 </div>
@@ -2148,8 +2277,6 @@ export default function App() {
                       onChange={(e) => {
                         setStockInMaterial(e.target.value);
                         setStockInVariantSize('');
-                        setStockInBarcodeCode('');
-                        setStockInVerificationStatus('IDLE');
                         setStockInError('');
                       }}
                       required
@@ -2208,8 +2335,6 @@ export default function App() {
                           if (foundItem) {
                             setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
                           }
-                          setStockInBarcodeCode('');
-                          setStockInVerificationStatus('IDLE');
                           setStockInError('');
                         }}
                         className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
@@ -2238,8 +2363,7 @@ export default function App() {
                               if (foundItem) {
                                 setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
                               }
-                              setStockInBarcodeCode('');
-                              setStockInVerificationStatus('IDLE');
+                              setStockInError('');
                             }}
                             className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 hover:bg-emerald-100 hover:text-emerald-800 text-slate-600 transition-colors"
                           >
@@ -2267,8 +2391,6 @@ export default function App() {
                         value={stockInRollLength}
                         onChange={(e) => {
                           setStockInRollLength(e.target.value);
-                          setStockInBarcodeCode('');
-                          setStockInVerificationStatus('IDLE');
                           setStockInError('');
                         }}
                         className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
@@ -2285,8 +2407,7 @@ export default function App() {
                           key={len}
                           onClick={() => {
                             setStockInRollLength(len);
-                            setStockInBarcodeCode('');
-                            setStockInVerificationStatus('IDLE');
+                            setStockInError('');
                           }}
                           className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors ${
                             stockInRollLength === len ? 'bg-emerald-600 text-white font-bold' : 'bg-slate-100 hover:bg-emerald-100 text-slate-600'
@@ -2356,14 +2477,11 @@ export default function App() {
                       value={stockInInvoiceNumber}
                       onChange={(e) => {
                         setStockInInvoiceNumber(e.target.value);
-                        setStockInBarcodeCode('');
-                        setStockInVerificationStatus('IDLE');
                         setStockInError('');
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          stockInVerificationInputRef.current?.focus();
                         }
                       }}
                       className={`w-full p-3 bg-slate-50 border rounded-xl text-slate-900 font-mono text-sm font-bold uppercase placeholder:normal-case focus:ring-2 focus:ring-emerald-500 focus:outline-hidden ${
@@ -2388,8 +2506,7 @@ export default function App() {
                       value={stockInDate}
                       onChange={(e) => {
                         setStockInDate(e.target.value);
-                        setStockInBarcodeCode('');
-                        setStockInVerificationStatus('IDLE');
+                        setStockInError('');
                       }}
                       className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                     />
@@ -2496,120 +2613,36 @@ export default function App() {
                   })()
                 )}
 
-                {/* 10. GENERATE / VERIFY BATCH BARCODE */}
+                {/* 10. BATCH BARCODE (CODE128 Generated Automatically) */}
                 <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
                       <label className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center space-x-1.5">
                         <BarcodeIcon className="w-4 h-4 text-emerald-600" />
-                        <span>10. Generate / Verify Batch Barcode</span>
+                        <span>10. Batch Barcode</span>
                       </label>
                       <p className="text-[11px] text-slate-500">
-                        Expected Batch Barcode: <strong className="font-mono text-slate-900">{stockInGeneratedBatchNumber || (matchedStockInItem?.barcode || 'Enter Invoice Number')}</strong>
+                        Generated Batch Number: <strong className="font-mono text-slate-900">{stockInGeneratedBatchNumber || 'Enter Invoice Number'}</strong>
                       </p>
                     </div>
 
-                    <div className="flex items-center space-x-2">
-                      {stockInGeneratedBatchNumber && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setStockInBarcodeCode(stockInGeneratedBatchNumber);
-                            validateStockInBarcode(stockInGeneratedBatchNumber);
-                          }}
-                          className="px-2.5 py-1.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 rounded-lg font-bold text-xs shadow-xs transition-colors"
-                          title="Click to automatically verify with generated batch barcode"
-                        >
-                          Auto-Verify
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCameraScannerTarget('stock-in');
-                          setCameraScannerOpen(true);
-                        }}
-                        className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg text-slate-700 font-bold text-xs flex items-center space-x-1 shadow-xs"
-                        title="Open phone camera scanner"
-                      >
-                        <Camera className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Camera</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Input with auto-validation on Enter / rapid scanner typing */}
-                  <div className="relative">
-                    <input
-                      ref={stockInVerificationInputRef}
-                      type="text"
-                      disabled={!matchedStockInItem || !stockInGeneratedBatchNumber}
-                      placeholder={
-                        stockInGeneratedBatchNumber
-                          ? `Scan or enter batch barcode (e.g. ${stockInGeneratedBatchNumber})...`
-                          : 'Enter Invoice Number first to generate Batch Barcode'
-                      }
-                      value={stockInBarcodeCode}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setStockInBarcodeCode(val);
-                        if (val.trim()) {
-                          validateStockInBarcode(val);
-                        } else {
-                          setStockInVerificationStatus('IDLE');
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          validateStockInBarcode(stockInBarcodeCode);
-                        }
-                      }}
-                      className={`w-full p-3 bg-white border-2 rounded-xl text-slate-900 font-mono text-sm font-bold placeholder:font-sans placeholder:font-normal focus:outline-hidden transition-colors ${
-                        stockInVerificationStatus === 'VERIFIED'
-                          ? 'border-emerald-500 ring-2 ring-emerald-200'
-                          : stockInVerificationStatus === 'MISMATCH'
-                          ? 'border-red-500 ring-2 ring-red-200'
-                          : 'border-slate-300 focus:border-emerald-500'
-                      }`}
-                    />
-
-                    {stockInBarcodeCode && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStockInBarcodeCode('');
-                          setStockInVerificationStatus('IDLE');
-                          stockInVerificationInputRef.current?.focus();
-                        }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
+                    {stockInGeneratedBatchNumber && (
+                      <span className="text-[10px] font-mono font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-full">
+                        CODE128 &bull; {stockInGeneratedBatchNumber.length}/15 chars
+                      </span>
                     )}
                   </div>
 
-                  {/* Verification Status Feedback */}
-                  {stockInVerificationStatus === 'VERIFIED' && (
-                    <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-bold flex items-center justify-between">
-                      <div className="flex items-center space-x-2">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                        <span>
-                          ✓ Batch Barcode Verified: <span className="font-mono">{stockInGeneratedBatchNumber || stockInBarcodeCode}</span> &bull; All rolls share this barcode
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {stockInVerificationStatus === 'MISMATCH' && (
-                    <div className="p-3 bg-red-100/80 border border-red-300 rounded-xl text-xs text-red-900 font-bold flex items-center space-x-2">
-                      <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
-                      <span>✕ Scanned barcode does not match batch number ({stockInGeneratedBatchNumber}).</span>
-                    </div>
-                  )}
+                  {/* Real CODE128 Barcode Rendering */}
+                  <BarcodeDisplay
+                    value={stockInGeneratedBatchNumber}
+                    sanitizedInvoice={normalizeInvoiceForBatch(stockInInvoiceNumber)}
+                    dateValue={stockInDate}
+                    onGenerated={(success) => setStockInBarcodeRenderSuccess(success)}
+                  />
                 </div>
 
-                {/* 11. SAVE STOCK IN & 12. PRINT BATCH LABELS (Enabled only when invoice, date, verified & valid count > 0) */}
+                {/* 11. SAVE STOCK IN & 12. PRINT BATCH LABELS */}
                 <div className="pt-2 space-y-2">
                   <button
                     type="submit"
@@ -2617,20 +2650,14 @@ export default function App() {
                     className={`w-full py-3.5 px-4 font-bold rounded-xl shadow-sm transition-all text-sm flex items-center justify-center space-x-2 ${
                       isStockInSaveEnabled
                         ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-98 shadow-md'
-                        : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-75'
+                        : 'bg-slate-200 text-slate-500 cursor-not-allowed opacity-80'
                     }`}
                   >
                     <ArrowDownToLine className="w-4 h-4" />
                     <span>
                       {isStockInSaveEnabled
                         ? `11. Save Stock IN (+${stockInRollValidation.count} Rolls & Create Batch)`
-                        : !stockInInvoiceNumber.trim()
-                        ? 'Enter Invoice Number to Proceed'
-                        : stockInVerificationStatus !== 'VERIFIED'
-                        ? 'Verify Batch Barcode to Enable Save'
-                        : !stockInRollValidation.valid
-                        ? 'Enter Valid Roll Count (> 0)'
-                        : 'Complete Required Fields to Save'}
+                        : stockInDisabledReason}
                     </span>
                   </button>
 
@@ -2667,6 +2694,133 @@ export default function App() {
                   <span>{stockOutError}</span>
                 </div>
               )}
+
+              {/* Quick Batch Barcode Scan (Client Specification: Stock OUT scans batch barcode to identify material, size, roll length & batch) */}
+              <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border border-amber-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <BarcodeIcon className="w-4 h-4 text-amber-700" />
+                    <span className="font-black text-slate-900 text-xs uppercase tracking-wide">
+                      Scan Batch Barcode (Quick Dispatch)
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCameraScannerTarget('stock-out');
+                      setCameraScannerOpen(true);
+                    }}
+                    className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-amber-300 rounded-lg text-amber-900 font-bold text-xs flex items-center space-x-1 shadow-xs cursor-pointer"
+                  >
+                    <Camera className="w-3.5 h-3.5 text-amber-600" />
+                    <span>Scan Camera</span>
+                  </button>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Enter or scan Batch Barcode (e.g. 101026GT28728)..."
+                    value={stockOutBatchSearchInput}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setStockOutBatchSearchInput(val);
+                      handleBatchSelectOrScan(val);
+                    }}
+                    className="flex-1 p-2 bg-white border border-amber-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                  />
+                  {stockOutSelectedBatchId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStockOutSelectedBatchId('');
+                        setStockOutBatchSearchInput('');
+                        setStockOutBarcodeCode('');
+                        setStockOutVerificationStatus('IDLE');
+                      }}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
+                    >
+                      Clear Batch
+                    </button>
+                  )}
+                </div>
+
+                {/* DUPLICATE BATCH RESOLUTION UI */}
+                {duplicateBatchMatches.length > 1 && (
+                  <div className="p-3.5 bg-amber-50/90 border-2 border-amber-400 rounded-xl space-y-2">
+                    <div className="flex items-center space-x-2 text-amber-950 font-black text-xs">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Multiple Lines Found for Batch {duplicateBatchMatches[0].batchNumber} (Invoice {duplicateBatchMatches[0].invoiceNumber})</span>
+                    </div>
+                    <p className="text-[11px] text-slate-700">
+                      Invoice <strong>{duplicateBatchMatches[0].invoiceNumber}</strong> includes {duplicateBatchMatches.length} material lines under this batch code. Please select the specific material you are dispatching:
+                    </p>
+                    <div className="space-y-1.5 pt-1">
+                      {duplicateBatchMatches.map((batch) => (
+                        <button
+                          key={batch.id}
+                          type="button"
+                          onClick={() => selectSingleStockOutBatch(batch)}
+                          className="w-full p-2.5 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg text-left flex items-center justify-between transition-all shadow-xs cursor-pointer"
+                        >
+                          <div>
+                            <span className="font-black text-slate-900 text-xs block">{batch.materialName}</span>
+                            <span className="text-[11px] font-mono text-slate-600">
+                              Width: {batch.variantSize}M &bull; Length: {batch.rollLengthMtr}M &bull; {batch.category}
+                            </span>
+                          </div>
+                          <div className="text-right">
+                            <span className="font-mono font-black text-amber-800 text-sm block">
+                              {batch.currentRemainingRollQuantity} Rolls
+                            </span>
+                            <span className="text-[10px] text-slate-500 uppercase font-bold">Available in Batch</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {selectedStockOutBatch ? (
+                  <div className="p-2.5 bg-white rounded-xl border border-amber-200 text-xs font-mono space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-900">
+                        {selectedStockOutBatch.materialName} ({selectedStockOutBatch.variantSize}M &times; {selectedStockOutBatch.rollLengthMtr}M)
+                      </span>
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[10px]">
+                        Batch Linked
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-600 text-[11px]">
+                      <span>
+                        Batch: <strong className="text-slate-900">{selectedStockOutBatch.batchNumber}</strong> &bull; Invoice: <strong>{selectedStockOutBatch.invoiceNumber}</strong>
+                      </span>
+                      <span className="text-amber-800 font-black">
+                        Available in Batch: {selectedStockOutBatch.currentRemainingRollQuantity} Rolls
+                      </span>
+                    </div>
+                  </div>
+                ) : availableBatchesForCurrentStockOut.length > 0 ? (
+                  <div className="space-y-1">
+                    <span className="text-[10px] text-slate-500 font-bold block uppercase">
+                      Available Batches in Stock for this Item:
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {availableBatchesForCurrentStockOut.map((b) => (
+                        <button
+                          type="button"
+                          key={b.id}
+                          onClick={() => handleBatchSelectOrScan(b.batchNumber)}
+                          className="px-2 py-1 rounded-lg bg-white hover:bg-amber-100 border border-amber-300 text-slate-800 font-mono text-[11px] flex items-center space-x-1.5 shadow-xs cursor-pointer"
+                        >
+                          <span className="font-bold">{b.batchNumber}</span>
+                          <span className="text-amber-700 font-black">({b.currentRemainingRollQuantity} Rolls)</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
 
               <form onSubmit={handleStockOutSubmit} className="space-y-4 text-xs">
                 {/* 1 & 2: Material Name & Auto-Populated Category */}
@@ -2905,15 +3059,40 @@ export default function App() {
                         <div className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
                           <span>7. Calculation / Stock Preview</span>
                           <span className="font-mono text-slate-600 normal-case text-xs">
-                            Expected: <strong>{matchedStockOutItem.barcode}</strong>
+                            Expected: <strong>{selectedStockOutBatch ? selectedStockOutBatch.batchNumber : matchedStockOutItem.barcode}</strong>
                           </span>
                         </div>
+
+                        {/* Batch Stock Breakdown (if batch selected) */}
+                        {selectedStockOutBatch && (
+                          <div className="p-3 bg-amber-100/80 rounded-xl border border-amber-300 font-mono text-xs space-y-1.5">
+                            <div className="flex items-center justify-between text-slate-900 font-bold">
+                              <span>Batch: {selectedStockOutBatch.batchNumber} (Inv: {selectedStockOutBatch.invoiceNumber})</span>
+                              <span className="text-amber-900">In Batch: {selectedStockOutBatch.currentRemainingRollQuantity} Rolls</span>
+                            </div>
+                            <div className="flex items-center justify-between text-slate-700 pt-1 border-t border-amber-200">
+                              <span>Batch After OUT:</span>
+                              <strong className="text-amber-900">
+                                {selectedStockOutBatch.currentRemainingRollQuantity} &rarr;{' '}
+                                {Math.max(0, selectedStockOutBatch.currentRemainingRollQuantity - rollsOut)} Rolls
+                              </strong>
+                            </div>
+                            {rollsOut > selectedStockOutBatch.currentRemainingRollQuantity && (
+                              <div className="text-xs text-red-700 font-bold flex items-center space-x-1 pt-1">
+                                <AlertCircle className="w-3.5 h-3.5 shrink-0 text-red-600" />
+                                <span>
+                                  Insufficient stock in this batch. Only {selectedStockOutBatch.currentRemainingRollQuantity} rolls are available.
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         {/* Roll Counts */}
                         <div className="grid grid-cols-3 gap-2 text-center font-mono">
                           <div className="bg-white p-2.5 rounded-xl border border-slate-200">
                             <span className="text-[10px] text-slate-500 block uppercase font-sans font-semibold">
-                              Current Stock
+                              Total Stock
                             </span>
                             <span className="text-base font-bold text-slate-900">
                               {current} Rolls
@@ -2931,7 +3110,9 @@ export default function App() {
 
                           <div
                             className={`p-2.5 rounded-xl shadow-xs text-white ${
-                              isExceeded ? 'bg-red-600' : 'bg-slate-900'
+                              isExceeded || (selectedStockOutBatch && rollsOut > selectedStockOutBatch.currentRemainingRollQuantity)
+                                ? 'bg-red-600'
+                                : 'bg-slate-900'
                             }`}
                           >
                             <span className="text-[10px] text-slate-300 block uppercase font-sans font-semibold">
@@ -3051,11 +3232,21 @@ export default function App() {
                   </div>
 
                   {/* Verification Status Feedback */}
-                  {stockOutVerificationStatus === 'VERIFIED' && matchedStockOutItem && (
+                  {stockOutVerificationStatus === 'VERIFIED' && (
                     <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-bold flex items-center space-x-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
                       <span>
-                        ✓ Barcode Verified: {matchedStockOutItem.materialName} — {matchedStockOutItem.variantSize}M ({matchedStockOutItem.rollLengthMtr}M)
+                        {selectedStockOutBatch ? (
+                          <>
+                            ✓ Batch Barcode Verified: <strong className="font-mono">{selectedStockOutBatch.batchNumber}</strong> &bull; Invoice: <strong>{selectedStockOutBatch.invoiceNumber}</strong> &bull; Available: {selectedStockOutBatch.currentRemainingRollQuantity} Rolls
+                          </>
+                        ) : matchedStockOutItem ? (
+                          <>
+                            ✓ Barcode Verified: {matchedStockOutItem.materialName} &mdash; {matchedStockOutItem.variantSize}M ({matchedStockOutItem.rollLengthMtr}M)
+                          </>
+                        ) : (
+                          '✓ Barcode Verified'
+                        )}
                       </span>
                     </div>
                   )}
@@ -3063,7 +3254,7 @@ export default function App() {
                   {stockOutVerificationStatus === 'MISMATCH' && (
                     <div className="p-3 bg-red-100/80 border border-red-300 rounded-xl text-xs text-red-900 font-bold flex items-center space-x-2">
                       <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
-                      <span>✕ Barcode does not match the selected material configuration.</span>
+                      <span>✕ Barcode does not match the selected material configuration or batch.</span>
                     </div>
                   )}
                 </div>
@@ -3082,11 +3273,15 @@ export default function App() {
                     <ArrowUpFromLine className="w-4 h-4" />
                     <span>
                       {isStockOutSaveEnabled
-                        ? `9. Save Stock OUT (-${stockOutRollValidation.count} Rolls)`
+                        ? selectedStockOutBatch
+                          ? `9. Save Stock OUT (-${stockOutRollValidation.count} Rolls from Batch ${selectedStockOutBatch.batchNumber})`
+                          : `9. Save Stock OUT (-${stockOutRollValidation.count} Rolls)`
                         : stockOutVerificationStatus !== 'VERIFIED'
                         ? 'Scan Barcode to Enable Save'
                         : !stockOutRollValidation.valid
                         ? 'Enter Valid Roll Count (> 0)'
+                        : selectedStockOutBatch && stockOutRollValidation.count > selectedStockOutBatch.currentRemainingRollQuantity
+                        ? `Exceeds Batch Stock (${selectedStockOutBatch.currentRemainingRollQuantity} Max)`
                         : matchedStockOutItem && stockOutRollValidation.count > matchedStockOutItem.currentStock
                         ? 'Exceeds Current Stock'
                         : 'Complete Required Fields to Save'}
@@ -3551,25 +3746,7 @@ export default function App() {
       {/* Batch Barcode Label Print Modal / Dialog (Prompted after Stock IN or opened manually) */}
       {activeBatchForPrint && (
         <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-4 print:p-0 print:static print:bg-white print:z-auto">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6 print:p-0 print:border-none print:shadow-none print:max-w-none print:max-h-none space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3 print:hidden">
-              <div>
-                <h3 className="text-base font-black text-slate-900">
-                  Batch Barcode Labels — Ready to Print
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Batch: <strong className="font-mono text-slate-900">{activeBatchForPrint.batch.batchNumber}</strong> &bull; All {activeBatchForPrint.copies} rolls in this batch use the exact same batch barcode.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveBatchForPrint(null)}
-                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-300 max-w-4xl w-full max-h-[90vh] overflow-y-auto p-4 sm:p-6 print:p-0 print:border-none print:shadow-none print:max-w-none print:max-h-none">
             <BatchBarcodeLabel
               batch={activeBatchForPrint.batch}
               rollCopies={activeBatchForPrint.copies}
@@ -3583,7 +3760,7 @@ export default function App() {
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500 print:hidden">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>
-            RollPrint IMS &copy; 2026 &mdash; Built to Client Handwritten Blueprint
+            Decora Sales &copy; 2026 &mdash; Built to Client Handwritten Blueprint
           </span>
           <button
             onClick={handleResetSampleData}
