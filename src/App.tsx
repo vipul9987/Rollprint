@@ -55,6 +55,7 @@ import { BatchBarcodeLabel } from './components/BatchBarcodeLabel';
 import { AppLogo } from './components/AppLogo';
 import { BarcodeDisplay } from './components/BarcodeDisplay';
 import { BarcodeScannerView } from './components/BarcodeScannerView';
+import { BatchDetailPage } from './components/BatchDetailPage';
 
 type TabType = 'dashboard' | 'scan' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
 type DashboardViewMode = 'matrix' | 'table';
@@ -103,7 +104,22 @@ export default function App() {
   }, [items]);
 
   // -------------------------------------------------------------
-  // MOBILE ITEM PAGE / QR DIRECT URL ROUTING
+  // BATCH ROUTING (/b/:batchNumber)
+  // Example: https://rollprint.vercel.app/b/101026GE23542
+  // -------------------------------------------------------------
+  const [selectedBatchNumber, setSelectedBatchNumber] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const match = window.location.pathname.match(/\/b\/([^/?#]+)/);
+    if (match && match[1]) return match[1];
+    const q = new URLSearchParams(window.location.search).get('b') || new URLSearchParams(window.location.search).get('batch');
+    if (q) return q;
+    const h = window.location.hash.match(/\/b\/([^/?#]+)/);
+    if (h && h[1]) return h[1];
+    return null;
+  });
+
+  // -------------------------------------------------------------
+  // MOBILE ITEM PAGE / QR DIRECT URL ROUTING (/item/:itemId)
   // -------------------------------------------------------------
   const [selectedMobileItemId, setSelectedMobileItemId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -118,6 +134,21 @@ export default function App() {
 
   useEffect(() => {
     const handlePopState = () => {
+      // 1. Check Batch URL (/b/:batchNumber)
+      const bMatch = window.location.pathname.match(/\/b\/([^/?#]+)/);
+      const bParam = new URLSearchParams(window.location.search).get('b') || new URLSearchParams(window.location.search).get('batch');
+      const bHash = window.location.hash.match(/\/b\/([^/?#]+)/);
+      if (bMatch && bMatch[1]) {
+        setSelectedBatchNumber(bMatch[1]);
+      } else if (bParam) {
+        setSelectedBatchNumber(bParam);
+      } else if (bHash && bHash[1]) {
+        setSelectedBatchNumber(bHash[1]);
+      } else {
+        setSelectedBatchNumber(null);
+      }
+
+      // 2. Check Item URL (/item/:itemId)
       const match = window.location.pathname.match(/\/item\/([^/?#]+)/);
       const q = new URLSearchParams(window.location.search).get('item');
       if (match && match[1]) {
@@ -131,6 +162,27 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  const openBatchPage = (batchNum: string) => {
+    try {
+      window.history.pushState({}, '', `/b/${batchNum}`);
+    } catch {
+      // ignore
+    }
+    setSelectedBatchNumber(batchNum);
+  };
+
+  const closeBatchPage = () => {
+    try {
+      window.history.pushState({}, '', '/');
+    } catch {
+      // ignore
+    }
+    setSelectedBatchNumber(null);
+    setItems(getStoredMatrixItems());
+    setBatches(getStoredMatrixBatches());
+    setTransactions(getStoredMatrixTransactions());
+  };
 
   const openMobileItemPage = (itemId: string) => {
     try {
@@ -1399,6 +1451,28 @@ export default function App() {
       showNotification('Restored baseline blueprint dataset with client batches.');
     }
   };
+
+  // -------------------------------------------------------------
+  // STANDALONE BATCH VIEW (If URL is /b/:batchNumber)
+  // Example: https://rollprint.vercel.app/b/101026GE23542
+  // -------------------------------------------------------------
+  if (selectedBatchNumber) {
+    return (
+      <BatchDetailPage
+        batchNumber={selectedBatchNumber}
+        onNavigateHome={closeBatchPage}
+        onNavigateToScanner={() => {
+          closeBatchPage();
+          setActiveTab('scan');
+        }}
+        onStockUpdated={() => {
+          setItems(getStoredMatrixItems());
+          setBatches(getStoredMatrixBatches());
+          setTransactions(getStoredMatrixTransactions());
+        }}
+      />
+    );
+  }
 
   // -------------------------------------------------------------
   // STANDALONE MOBILE ITEM VIEW (If URL is /item/:id)

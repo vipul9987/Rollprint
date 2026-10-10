@@ -4,6 +4,8 @@ import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface BarcodeProps {
   value: string;
+  barcodePayload?: string;
+  displayText?: string;
   format?: string;
   width?: number;
   height?: number;
@@ -17,6 +19,8 @@ interface BarcodeProps {
 
 export const BarcodeDisplay: React.FC<BarcodeProps> = ({
   value,
+  barcodePayload,
+  displayText,
   format = 'CODE128',
   width = 1.8,
   height = 50,
@@ -51,7 +55,10 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
         svgRef.current.removeChild(svgRef.current.firstChild);
       }
 
-      JsBarcode(svgRef.current, trimmed, {
+      const payload = barcodePayload || (trimmed.startsWith('http') ? trimmed : `https://rollprint.vercel.app/b/${trimmed}`);
+      const textToDisplay = displayText || trimmed;
+
+      JsBarcode(svgRef.current, payload, {
         format,
         width,
         height,
@@ -63,6 +70,7 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
         margin: 8,
         background: '#ffffff',
         lineColor: '#0A192F', // Brand Navy
+        text: textToDisplay
       });
 
       setError(null);
@@ -80,7 +88,7 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
       setIsRendered(false);
       onGenerated?.(false);
     }
-  }, [value, format, width, height, displayValue, fontSize, sanitizedInvoice, dateValue, onGenerated]);
+  }, [value, barcodePayload, displayText, format, width, height, displayValue, fontSize, sanitizedInvoice, dateValue, onGenerated]);
 
   if (!value || !value.trim()) {
     return (

@@ -32,6 +32,9 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
   useEffect(() => {
     if (!batchCode) return;
 
+    const barcodePayload = `https://rollprint.vercel.app/b/${batchCode}`;
+    const displayBatchNumber = batchCode;
+
     copiesArray.forEach((_, idx) => {
       const svgEl = barcodeCanvasRefs.current[idx];
       if (svgEl) {
@@ -39,10 +42,10 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
           while (svgEl.firstChild) {
             svgEl.removeChild(svgEl.firstChild);
           }
-          JsBarcode(svgEl, batchCode, {
+          JsBarcode(svgEl, barcodePayload, {
             format: 'CODE128',
-            width: 2,
-            height: 50,
+            width: 1.6,
+            height: 52,
             displayValue: true,
             font: 'monospace',
             fontOptions: 'bold',
@@ -51,7 +54,7 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
             margin: 10,
             background: '#ffffff',
             lineColor: '#000000',
-            text: batchCode
+            text: displayBatchNumber
           });
         } catch (err) {
           console.error('JsBarcode label generation error:', err);

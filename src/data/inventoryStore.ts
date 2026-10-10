@@ -185,7 +185,11 @@ export function generateBatchNumber(dateStr: string, rawInvoice: string): string
  */
 export function findBatchesByBatchOrBarcode(batches: MatrixBatch[], code: string): MatrixBatch[] {
   if (!code || !code.trim()) return [];
-  const clean = code.trim().toUpperCase();
+  let clean = code.trim().toUpperCase();
+  if (clean.includes('/B/')) {
+    const parts = clean.split('/B/');
+    clean = parts[parts.length - 1].split('?')[0].split('#')[0].trim();
+  }
   const cleanAlphaNum = clean.replace(/[^A-Z0-9]/g, '');
 
   return batches.filter((b) => {
@@ -248,8 +252,8 @@ export const INITIAL_MATRIX_BATCHES: MatrixBatch[] = [
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 12,
-    initialRollQuantity: 1,
-    currentRemainingRollQuantity: 1,
+    initialRollQuantity: 7,
+    currentRemainingRollQuantity: 7,
     invoiceNumber: 'GE23542',
     stockInDate: '2026-10-10',
     barcodeValue: '101026GE23542',
@@ -279,14 +283,18 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
       return b;
     });
 
-    // Ensure test batch 101026GE23542 is always available
-    const hasGeBatch = sanitized.some((b) => b.batchNumber === '101026GE23542');
-    if (!hasGeBatch) {
+    // Ensure test batch 101026GE23542 is always available with 7 rolls requirement
+    const geBatchIndex = sanitized.findIndex((b) => b.batchNumber === '101026GE23542');
+    if (geBatchIndex === -1) {
       const geBatch = INITIAL_MATRIX_BATCHES.find((b) => b.batchNumber === '101026GE23542');
       if (geBatch) {
-        sanitized.push(geBatch);
+        sanitized.push({ ...geBatch });
         hasChanged = true;
       }
+    } else if (sanitized[geBatchIndex].initialRollQuantity === 1 && sanitized[geBatchIndex].currentRemainingRollQuantity === 1) {
+      sanitized[geBatchIndex].initialRollQuantity = 7;
+      sanitized[geBatchIndex].currentRemainingRollQuantity = 7;
+      hasChanged = true;
     }
 
     if (hasChanged) {

@@ -272,3 +272,25 @@ BEGIN
     RETURN 'JOB-' || LPAD(next_val::TEXT, 6, '0');
 END;
 $$ LANGUAGE plpgsql;
+
+-- ====================================================================
+-- 14. STOCK BATCHES TABLE (Linear Code128 Batch Tracking)
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS stock_batches (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    batch_number VARCHAR(100) NOT NULL UNIQUE,
+    material_name VARCHAR(150) NOT NULL,
+    category VARCHAR(100),
+    variant_size VARCHAR(50) NOT NULL,
+    roll_length_mtr NUMERIC(10, 2) NOT NULL,
+    initial_roll_quantity INTEGER NOT NULL DEFAULT 1,
+    current_remaining_roll_quantity INTEGER NOT NULL DEFAULT 1,
+    invoice_number VARCHAR(100) NOT NULL,
+    stock_in_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    barcode_value VARCHAR(100),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_stock_batches_number ON stock_batches(batch_number);
+CREATE INDEX IF NOT EXISTS idx_stock_batches_invoice ON stock_batches(invoice_number);
+

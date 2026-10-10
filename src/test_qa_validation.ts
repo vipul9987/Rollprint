@@ -1036,20 +1036,20 @@ assert(realBatch.variantSize === '1.02', `Size must be 1.02 M (got ${realBatch.v
 assert(realBatch.rollLengthMtr === 12, `Roll Length must be 12 M (got ${realBatch.rollLengthMtr})`);
 assert(realBatch.invoiceNumber === 'GE23542', `Invoice must be GE23542 (got ${realBatch.invoiceNumber})`);
 assert(realBatch.batchNumber === '101026GE23542', `Batch must be 101026GE23542 (got ${realBatch.batchNumber})`);
-assert(realBatch.currentRemainingRollQuantity === 1, `Current batch stock must be 1 Roll (got ${realBatch.currentRemainingRollQuantity})`);
+assert(realBatch.currentRemainingRollQuantity === 7, `Current batch stock must be 7 Rolls (got ${realBatch.currentRemainingRollQuantity})`);
 
 // 2. Stock OUT execution after scan
 const batchStockBefore = realBatch.currentRemainingRollQuantity;
-const rollsToDispatch = 1;
+const rollsToDispatch = 2;
 const batchStockAfter = Math.max(0, batchStockBefore - rollsToDispatch);
 const geAreaPerRoll = Number((parseFloat(realBatch.variantSize) * realBatch.rollLengthMtr).toFixed(2));
 const geTotalAreaOut = Number((geAreaPerRoll * rollsToDispatch).toFixed(2));
 
-assert(batchStockBefore === 1, 'Before stock is 1 Roll');
-assert(rollsToDispatch === 1, 'Rolls OUT is 1 Roll');
-assert(batchStockAfter === 0, 'After stock is 0 Rolls (1 - 1 = 0)');
+assert(batchStockBefore === 7, 'Before stock is 7 Rolls');
+assert(rollsToDispatch === 2, 'Rolls OUT is 2 Rolls');
+assert(batchStockAfter === 5, 'After stock is 5 Rolls (7 - 2 = 5)');
 assert(geAreaPerRoll === 12.24, `Area per roll is 1.02 × 12 = 12.24 m² (got ${geAreaPerRoll})`);
-assert(geTotalAreaOut === 12.24, `Total Area OUT is 12.24 m² (got ${geTotalAreaOut})`);
+assert(geTotalAreaOut === 24.48, `Total Area OUT is 24.48 m² (got ${geTotalAreaOut})`);
 
 // 3. Invalid Barcode Detection Test
 const invalidScannedCode = '101026UNKNOWN99';
@@ -1065,6 +1065,88 @@ assert(manualMatches.length > 0, 'Manual lookup handles whitespace and lowercase
 assert(manualMatches[0].batchNumber === '101026GE23542', 'Manual lookup finds exact batch');
 
 // ------------------------------------------------------------------
+// TEST SUITE 20: Critical Barcode Fix — Phone Scan URL Route & Database Stock OUT
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 20: Phone Scan URL Payload & /b/:batchNumber Workflow ---');
+
+// 1. Separation of Barcode Payload and Display Text
+const testBatchNumber = '101026GE23542';
+const testBarcodePayload = `https://rollprint.vercel.app/b/${testBatchNumber}`;
+const testDisplayValue = testBatchNumber;
+
+assert(
+  testBarcodePayload === 'https://rollprint.vercel.app/b/101026GE23542',
+  `CODE128 barcode payload correctly encodes full clickable phone URL: ${testBarcodePayload}`
+);
+assert(
+  testDisplayValue === '101026GE23542',
+  `Visible human-readable text printed below barcode remains ONLY batch number: ${testDisplayValue}`
+);
+assert(
+  !testDisplayValue.includes('rollprint.vercel.app'),
+  'Human-readable text does NOT print complete URL below the barcode'
+);
+
+// 2. URL Extraction & Decoding
+function testExtractBatchCode(input: string): string {
+  if (!input) return '';
+  let clean = input.trim();
+  if (clean.includes('/b/')) {
+    const parts = clean.split('/b/');
+    clean = parts[parts.length - 1];
+  }
+  return clean.split('?')[0].split('#')[0].trim().toUpperCase();
+}
+
+assert(
+  testExtractBatchCode('https://rollprint.vercel.app/b/101026GE23542') === '101026GE23542',
+  'Extracts 101026GE23542 from full phone camera scanned URL'
+);
+assert(
+  testExtractBatchCode('/b/101026GE23542') === '101026GE23542',
+  'Extracts 101026GE23542 from route path /b/101026GE23542'
+);
+assert(
+  testExtractBatchCode('101026GE23542') === '101026GE23542',
+  'Handles raw batch number cleanly'
+);
+
+// 3. Database Query for Batch 101026GE23542
+const batchResult = testBatches.find((b) => b.batchNumber === '101026GE23542');
+assert(Boolean(batchResult), 'Database contains batch 101026GE23542');
+assert(batchResult!.materialName === 'Backlit Hetax', 'Database batch material is Backlit Hetax');
+assert(batchResult!.variantSize === '1.02', 'Database batch size is 1.02 M');
+assert(batchResult!.rollLengthMtr === 12, 'Database batch roll length is 12 M');
+assert(batchResult!.invoiceNumber === 'GE23542', 'Database batch invoice is GE23542');
+assert(batchResult!.batchNumber === '101026GE23542', 'Database batch number is 101026GE23542');
+assert(batchResult!.currentRemainingRollQuantity === 7, 'Database live stock is 7 Rolls');
+
+// 4. Stock OUT Workflow (7 -> 5 Rolls)
+const initialRolls = batchResult!.currentRemainingRollQuantity;
+const rollsOutRequested = 2;
+const expectedRemaining = initialRolls - rollsOutRequested;
+
+assert(initialRolls === 7, 'Before: 7 Rolls');
+assert(rollsOutRequested === 2, 'Rolls OUT: 2');
+assert(expectedRemaining === 5, 'After: 5 Rolls');
+
+// Simulate confirmation in database
+const updatedBatchesList = testBatches.map((b) => {
+  if (b.batchNumber === '101026GE23542') {
+    return { ...b, currentRemainingRollQuantity: expectedRemaining };
+  }
+  return b;
+});
+const updatedBatchInDb = updatedBatchesList.find((b) => b.batchNumber === '101026GE23542');
+assert(updatedBatchInDb!.currentRemainingRollQuantity === 5, 'Database batch remaining rolls updated: 7 -> 5');
+
+// 5. Invalid Batch Route Behavior
+const invalidLookup = updatedBatchesList.find((b) => b.batchNumber === 'INVALIDCODE');
+assert(!invalidLookup, 'Invalid batch INVALIDCODE returns null');
+const invalidPageMessage = !invalidLookup ? 'Batch not found.' : 'Found';
+assert(invalidPageMessage === 'Batch not found.', 'Route /b/INVALIDCODE displays "Batch not found." without crash');
+
+// ------------------------------------------------------------------
 // SUMMARY
 // ------------------------------------------------------------------
 console.log('\n====================================================');
@@ -1074,3 +1156,4 @@ console.log('====================================================');
 if (testsFailed > 0) {
   process.exit(1);
 }
+

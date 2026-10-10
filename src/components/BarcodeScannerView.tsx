@@ -124,8 +124,13 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   // Process decoded barcode value
   const handleBarcodeDecoded = useCallback(
     (rawCode: string) => {
-      const clean = rawCode.trim().toUpperCase();
+      let clean = rawCode.trim().toUpperCase();
       if (!clean) return;
+
+      if (clean.includes('/B/')) {
+        const parts = clean.split('/B/');
+        clean = parts[parts.length - 1].split('?')[0].split('#')[0].trim();
+      }
 
       setScannedCode(clean);
       stopCamera();
@@ -240,7 +245,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         ]);
         hints.set(DecodeHintType.TRY_HARDER, true);
 
-        const reader = new BrowserMultiFormatReader(hints, 180);
+        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 180 });
         const controls = await reader.decodeFromVideoElement(
           videoRef.current,
           (result, err) => {
