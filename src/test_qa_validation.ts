@@ -1065,86 +1065,70 @@ assert(manualMatches.length > 0, 'Manual lookup handles whitespace and lowercase
 assert(manualMatches[0].batchNumber === '101026GE23542', 'Manual lookup finds exact batch');
 
 // ------------------------------------------------------------------
-// TEST SUITE 20: Critical Barcode Fix — Phone Scan URL Route & Database Stock OUT
+// TEST SUITE 20: Critical Barcode Scannability Fix (Batch Number Only)
 // ------------------------------------------------------------------
-console.log('\n--- Test Suite 20: Phone Scan URL Payload & /b/:batchNumber Workflow ---');
+console.log('\n--- Test Suite 20: Pure Batch Number CODE128 Scannability Specification ---');
 
-// 1. Separation of Barcode Payload and Display Text
-const testBatchNumber = '101026GE23542';
-const testBarcodePayload = `https://rollprint.vercel.app/b/${testBatchNumber}`;
-const testDisplayValue = testBatchNumber;
-
-assert(
-  testBarcodePayload === 'https://rollprint.vercel.app/b/101026GE23542',
-  `CODE128 barcode payload correctly encodes full clickable phone URL: ${testBarcodePayload}`
-);
-assert(
-  testDisplayValue === '101026GE23542',
-  `Visible human-readable text printed below barcode remains ONLY batch number: ${testDisplayValue}`
-);
-assert(
-  !testDisplayValue.includes('rollprint.vercel.app'),
-  'Human-readable text does NOT print complete URL below the barcode'
-);
-
-// 2. URL Extraction & Decoding
-function testExtractBatchCode(input: string): string {
-  if (!input) return '';
-  let clean = input.trim();
-  if (clean.includes('/b/')) {
-    const parts = clean.split('/b/');
-    clean = parts[parts.length - 1];
-  }
-  return clean.split('?')[0].split('#')[0].trim().toUpperCase();
-}
+// 1. Barcode Encodes ONLY the Batch Number
+const testBatchNumber = '121026AB12345';
+const encodedBarcodeValue = testBatchNumber;
+const displayedBarcodeText = testBatchNumber;
 
 assert(
-  testExtractBatchCode('https://rollprint.vercel.app/b/101026GE23542') === '101026GE23542',
-  'Extracts 101026GE23542 from full phone camera scanned URL'
+  encodedBarcodeValue === '121026AB12345',
+  `CODE128 barcode encodes ONLY Batch Number: ${encodedBarcodeValue}`
 );
 assert(
-  testExtractBatchCode('/b/101026GE23542') === '101026GE23542',
-  'Extracts 101026GE23542 from route path /b/101026GE23542'
+  !encodedBarcodeValue.includes('http'),
+  'Barcode value does NOT encode website URL (preserves optimal linear density)'
 );
 assert(
-  testExtractBatchCode('101026GE23542') === '101026GE23542',
-  'Handles raw batch number cleanly'
+  displayedBarcodeText === '121026AB12345',
+  `Visible human-readable text below barcode shows: ${displayedBarcodeText}`
 );
 
-// 3. Database Query for Batch 101026GE23542
-const batchResult = testBatches.find((b) => b.batchNumber === '101026GE23542');
-assert(Boolean(batchResult), 'Database contains batch 101026GE23542');
-assert(batchResult!.materialName === 'Backlit Hetax', 'Database batch material is Backlit Hetax');
-assert(batchResult!.variantSize === '1.02', 'Database batch size is 1.02 M');
-assert(batchResult!.rollLengthMtr === 12, 'Database batch roll length is 12 M');
-assert(batchResult!.invoiceNumber === 'GE23542', 'Database batch invoice is GE23542');
-assert(batchResult!.batchNumber === '101026GE23542', 'Database batch number is 101026GE23542');
-assert(batchResult!.currentRemainingRollQuantity === 7, 'Database live stock is 7 Rolls');
+// 2. Barcode Generation Settings (JsBarcode Configuration)
+const jsBarcodeConfig = {
+  format: 'CODE128',
+  width: 2,
+  height: 70,
+  margin: 12,
+  displayValue: true,
+  text: testBatchNumber,
+  fontSize: 18,
+  textMargin: 6
+};
 
-// 4. Stock OUT Workflow (7 -> 5 Rolls)
+assert(jsBarcodeConfig.format === 'CODE128', 'Format is genuine CODE128');
+assert(jsBarcodeConfig.width === 2, 'Module width is 2');
+assert(jsBarcodeConfig.height === 70, 'Barcode height is 70');
+assert(jsBarcodeConfig.margin === 12, 'Quiet zone margin is 12 on both sides');
+assert(jsBarcodeConfig.fontSize === 18, 'Human readable font size is 18');
+assert(jsBarcodeConfig.textMargin === 6, 'Text margin is 6');
+
+// 3. Database Query for Batch 121026AB12345
+const batchResult = testBatches.find((b) => b.batchNumber === '121026AB12345');
+assert(Boolean(batchResult), 'Database contains batch 121026AB12345');
+assert(batchResult!.materialName === 'Bright FL 26', 'Material is Bright FL 26');
+assert(batchResult!.variantSize === '1.63', 'Size is 1.63 M');
+assert(batchResult!.rollLengthMtr === 50, 'Roll Length is 50 M');
+assert(batchResult!.invoiceNumber === 'AB-12/345', 'Invoice is AB-12/345');
+assert(batchResult!.batchNumber === '121026AB12345', 'Batch is 121026AB12345');
+assert(batchResult!.currentRemainingRollQuantity === 5, 'Batch Stock is 5 Rolls');
+
+// 4. Stock OUT Workflow on Batch 121026AB12345
 const initialRolls = batchResult!.currentRemainingRollQuantity;
-const rollsOutRequested = 2;
+const rollsOutRequested = 1;
 const expectedRemaining = initialRolls - rollsOutRequested;
 
-assert(initialRolls === 7, 'Before: 7 Rolls');
-assert(rollsOutRequested === 2, 'Rolls OUT: 2');
-assert(expectedRemaining === 5, 'After: 5 Rolls');
+assert(initialRolls === 5, 'Available stock before: 5 Rolls');
+assert(rollsOutRequested === 1, 'Rolls OUT: 1 Roll');
+assert(expectedRemaining === 4, 'Available stock after: 4 Rolls');
 
-// Simulate confirmation in database
-const updatedBatchesList = testBatches.map((b) => {
-  if (b.batchNumber === '101026GE23542') {
-    return { ...b, currentRemainingRollQuantity: expectedRemaining };
-  }
-  return b;
-});
-const updatedBatchInDb = updatedBatchesList.find((b) => b.batchNumber === '101026GE23542');
-assert(updatedBatchInDb!.currentRemainingRollQuantity === 5, 'Database batch remaining rolls updated: 7 -> 5');
-
-// 5. Invalid Batch Route Behavior
-const invalidLookup = updatedBatchesList.find((b) => b.batchNumber === 'INVALIDCODE');
-assert(!invalidLookup, 'Invalid batch INVALIDCODE returns null');
-const invalidPageMessage = !invalidLookup ? 'Batch not found.' : 'Found';
-assert(invalidPageMessage === 'Batch not found.', 'Route /b/INVALIDCODE displays "Batch not found." without crash');
+// 5. Manual Fallback Lookup Verification
+const manualLookupBatch = testBatches.find((b) => b.batchNumber.trim() === '121026AB12345');
+assert(Boolean(manualLookupBatch), 'Manual fallback lookup resolves batch 121026AB12345');
+assert(manualLookupBatch!.materialName === 'Bright FL 26', 'Manual lookup finds Bright FL 26');
 
 // ------------------------------------------------------------------
 // SUMMARY

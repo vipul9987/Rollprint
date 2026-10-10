@@ -4,13 +4,13 @@ import { AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface BarcodeProps {
   value: string;
-  barcodePayload?: string;
-  displayText?: string;
   format?: string;
   width?: number;
   height?: number;
   displayValue?: boolean;
   fontSize?: number;
+  textMargin?: number;
+  margin?: number;
   className?: string;
   onGenerated?: (success: boolean) => void;
   sanitizedInvoice?: string;
@@ -19,13 +19,13 @@ interface BarcodeProps {
 
 export const BarcodeDisplay: React.FC<BarcodeProps> = ({
   value,
-  barcodePayload,
-  displayText,
   format = 'CODE128',
-  width = 1.8,
-  height = 50,
+  width = 2,
+  height = 70,
   displayValue = true,
-  fontSize = 13,
+  fontSize = 18,
+  textMargin = 6,
+  margin = 12,
   className = '',
   onGenerated,
   sanitizedInvoice,
@@ -55,10 +55,10 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
         svgRef.current.removeChild(svgRef.current.firstChild);
       }
 
-      const payload = barcodePayload || (trimmed.startsWith('http') ? trimmed : `https://rollprint.vercel.app/b/${trimmed}`);
-      const textToDisplay = displayText || trimmed;
+      // CODE128 encodes ONLY the Batch Number (e.g. 121026AB12345)
+      const batchCode = trimmed;
 
-      JsBarcode(svgRef.current, payload, {
+      JsBarcode(svgRef.current, batchCode, {
         format,
         width,
         height,
@@ -66,11 +66,11 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
         fontSize,
         font: 'monospace',
         fontOptions: 'bold',
-        textMargin: 4,
-        margin: 8,
+        textMargin,
+        margin,
         background: '#ffffff',
-        lineColor: '#0A192F', // Brand Navy
-        text: textToDisplay
+        lineColor: '#000000',
+        text: batchCode
       });
 
       setError(null);
@@ -88,7 +88,7 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
       setIsRendered(false);
       onGenerated?.(false);
     }
-  }, [value, barcodePayload, displayText, format, width, height, displayValue, fontSize, sanitizedInvoice, dateValue, onGenerated]);
+  }, [value, format, width, height, displayValue, fontSize, textMargin, margin, sanitizedInvoice, dateValue, onGenerated]);
 
   if (!value || !value.trim()) {
     return (
@@ -111,12 +111,21 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
   }
 
   return (
-    <div className={`flex flex-col items-center justify-center bg-white p-3 rounded-xl border border-slate-200 shadow-xs ${className}`}>
-      <svg ref={svgRef} className="max-w-full h-auto" />
+    <div className={`flex flex-col items-center justify-center bg-white p-4 rounded-xl border border-slate-200 shadow-xs overflow-x-auto ${className}`}>
+      {/* SVG rendered at natural aspect ratio without horizontal stretching */}
+      <svg
+        ref={svgRef}
+        style={{
+          display: 'block',
+          maxWidth: 'none',
+          height: 'auto',
+          backgroundColor: '#ffffff'
+        }}
+      />
       {isRendered && (
-        <div className="mt-1 flex items-center space-x-1.5 text-[11px] font-bold text-emerald-700">
+        <div className="mt-2 flex items-center space-x-1.5 text-[11px] font-bold text-emerald-700">
           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-          <span>CODE128 Generated &bull; Ready to Save &amp; Print</span>
+          <span>CODE128 Batch Barcode &bull; Ready to Save &amp; Print</span>
         </div>
       )}
     </div>

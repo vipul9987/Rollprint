@@ -519,7 +519,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               <form onSubmit={handleManualLookup} className="flex gap-2">
                 <input
                   type="text"
-                  placeholder="e.g. 101026GE23542..."
+                  placeholder="e.g. 121026AB12345 or 101026GE23542..."
                   value={manualInput}
                   onChange={(e) => setManualInput(e.target.value)}
                   className="flex-1 p-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-[#C59B3F] uppercase placeholder:normal-case placeholder:font-sans placeholder:font-normal"
@@ -536,6 +536,13 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               {/* Quick sample chips for testing */}
               <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[11px]">
                 <span className="text-slate-400 font-medium">Test Barcodes:</span>
+                <button
+                  type="button"
+                  onClick={() => handleBarcodeDecoded('121026AB12345')}
+                  className="px-2 py-0.5 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-mono font-bold border border-emerald-300 transition-colors cursor-pointer"
+                >
+                  121026AB12345 (Bright FL 26)
+                </button>
                 <button
                   type="button"
                   onClick={() => handleBarcodeDecoded('101026GE23542')}

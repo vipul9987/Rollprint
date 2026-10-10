@@ -28,12 +28,9 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
 
   const copiesArray = Array.from({ length: Math.max(1, copiesCount) }, (_, idx) => idx + 1);
 
-  // Render CODE128 barcode onto each SVG ref
+  // Render CODE128 barcode onto each SVG ref (Encodes ONLY Batch Number, e.g. 121026AB12345)
   useEffect(() => {
     if (!batchCode) return;
-
-    const barcodePayload = `https://rollprint.vercel.app/b/${batchCode}`;
-    const displayBatchNumber = batchCode;
 
     copiesArray.forEach((_, idx) => {
       const svgEl = barcodeCanvasRefs.current[idx];
@@ -42,19 +39,19 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
           while (svgEl.firstChild) {
             svgEl.removeChild(svgEl.firstChild);
           }
-          JsBarcode(svgEl, barcodePayload, {
+          JsBarcode(svgEl, batchCode, {
             format: 'CODE128',
-            width: 1.6,
-            height: 52,
+            width: 2,
+            height: 70,
+            margin: 12,
             displayValue: true,
-            font: 'monospace',
-            fontOptions: 'bold',
-            fontSize: 15,
-            textMargin: 5,
-            margin: 10,
+            text: batchCode,
+            fontSize: 18,
+            textMargin: 6,
             background: '#ffffff',
             lineColor: '#000000',
-            text: displayBatchNumber
+            font: 'monospace',
+            fontOptions: 'bold'
           });
         } catch (err) {
           console.error('JsBarcode label generation error:', err);
@@ -217,20 +214,28 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
         </div>
       </div>
 
-      {/* Printable Labels Grid: Clean, compact roll stickers */}
-      <div className="batch-sticker-grid grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 p-2 bg-slate-100 rounded-2xl border border-slate-200 print:bg-white print:border-none print:p-0 print:grid print:grid-cols-3 print:gap-3">
+      {/* Printable Labels Grid: Clean, compact roll stickers with uncompressed proportions */}
+      <div className="batch-sticker-grid flex flex-wrap items-center justify-center gap-4 p-4 bg-slate-100 rounded-2xl border border-slate-200 overflow-x-auto print:bg-white print:border-none print:p-0 print:gap-3">
         {copiesArray.map((copyNum, idx) => (
           <div
             key={copyNum}
-            className="batch-barcode-sticker bg-white border border-slate-300 rounded-lg p-2.5 flex flex-col items-center justify-center shadow-xs print:shadow-none print:border print:border-black/30 print:rounded-xs print:p-1.5 print:break-inside-avoid print:page-break-inside-avoid select-none"
-            style={{ minWidth: '200px' }}
+            className="batch-barcode-sticker bg-white border border-slate-300 rounded-lg p-3 flex flex-col items-center justify-center shadow-xs print:shadow-none print:border print:border-black/30 print:rounded-none print:p-2 print:break-inside-avoid print:page-break-inside-avoid select-none"
+            style={{
+              minWidth: '220px',
+              backgroundColor: '#ffffff'
+            }}
           >
             {/* ONLY the genuine CODE128 barcode with Batch Number centered below */}
             <svg
               ref={(el) => {
                 barcodeCanvasRefs.current[idx] = el;
               }}
-              className="max-w-full h-auto block mx-auto"
+              style={{
+                display: 'block',
+                maxWidth: 'none',
+                height: 'auto',
+                backgroundColor: '#ffffff'
+              }}
             />
           </div>
         ))}
