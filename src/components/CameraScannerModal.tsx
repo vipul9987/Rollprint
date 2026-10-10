@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { Camera, X, AlertCircle, Upload, CheckCircle2 } from 'lucide-react';
 
 interface CameraScannerModalProps {
@@ -33,14 +33,20 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
       if (!el || isCancelled) return;
 
       try {
-        const html5QrCode = new Html5Qrcode(elementId);
+        const html5QrCode = new Html5Qrcode(elementId, {
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39
+          ],
+          verbose: false
+        });
         scannerRef.current = html5QrCode;
 
         html5QrCode
           .start(
             { facingMode: 'environment' },
             {
-              fps: 10,
+              fps: 15,
               qrbox: { width: 280, height: 140 },
               aspectRatio: 1.0
             },
@@ -98,7 +104,15 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
 
     try {
       setErrorMessage('');
-      const tempScanner = scannerRef.current || new Html5Qrcode(elementId);
+      const tempScanner =
+        scannerRef.current ||
+        new Html5Qrcode(elementId, {
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.CODE_39
+          ],
+          verbose: false
+        });
       const decoded = await tempScanner.scanFile(file, true);
       onScanSuccess(decoded);
       onClose();

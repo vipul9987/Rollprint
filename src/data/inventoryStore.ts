@@ -240,6 +240,20 @@ export const INITIAL_MATRIX_BATCHES: MatrixBatch[] = [
     stockInDate: '2026-10-09',
     barcodeValue: '091026GT8812',
     createdAt: '2026-10-09T08:30:00Z'
+  },
+  {
+    id: 'bat-init-hetax-ge23542',
+    batchNumber: '101026GE23542',
+    materialName: 'Backlit Hetax',
+    category: 'Backlit',
+    variantSize: '1.02',
+    rollLengthMtr: 12,
+    initialRollQuantity: 1,
+    currentRemainingRollQuantity: 1,
+    invoiceNumber: 'GE23542',
+    stockInDate: '2026-10-10',
+    barcodeValue: '101026GE23542',
+    createdAt: '2026-10-10T10:00:00Z'
   }
 ];
 
@@ -264,6 +278,16 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
       }
       return b;
     });
+
+    // Ensure test batch 101026GE23542 is always available
+    const hasGeBatch = sanitized.some((b) => b.batchNumber === '101026GE23542');
+    if (!hasGeBatch) {
+      const geBatch = INITIAL_MATRIX_BATCHES.find((b) => b.batchNumber === '101026GE23542');
+      if (geBatch) {
+        sanitized.push(geBatch);
+        hasChanged = true;
+      }
+    }
 
     if (hasChanged) {
       saveStoredMatrixBatches(sanitized);

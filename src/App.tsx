@@ -54,8 +54,9 @@ import { CameraScannerModal } from './components/CameraScannerModal';
 import { BatchBarcodeLabel } from './components/BatchBarcodeLabel';
 import { AppLogo } from './components/AppLogo';
 import { BarcodeDisplay } from './components/BarcodeDisplay';
+import { BarcodeScannerView } from './components/BarcodeScannerView';
 
-type TabType = 'dashboard' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
+type TabType = 'dashboard' | 'scan' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
 type DashboardViewMode = 'matrix' | 'table';
 type VerificationStatus = 'IDLE' | 'VERIFIED' | 'MISMATCH';
 
@@ -857,6 +858,53 @@ export default function App() {
     return { success: true, batch: createdBatch };
   };
 
+  // Handler for direct Stock OUT executed from live Barcode Scanner
+  const handleScannerStockOut = (batch: MatrixBatch, rollsOutQty: number) => {
+    const normSize = normalizeNumericSize(batch.variantSize);
+    let matched = itemsWithStock.find(
+      (i) =>
+        i.materialName.toLowerCase() === batch.materialName.toLowerCase() &&
+        normalizeNumericSize(i.variantSize) === normSize
+    );
+
+    if (!matched) {
+      matched = itemsWithStock.find(
+        (i) => i.materialName.toLowerCase() === batch.materialName.toLowerCase()
+      );
+    }
+
+    if (matched) {
+      if (matched.currentStock < rollsOutQty) {
+        const diff = rollsOutQty - matched.currentStock;
+        const updatedItems = items.map((it) =>
+          it.id === matched!.id ? { ...it, openingStock: it.openingStock + diff } : it
+        );
+        setItems(updatedItems);
+        saveStoredMatrixItems(updatedItems);
+      }
+
+      executeStockTransaction(matched.id, 'OUT', rollsOutQty, undefined, undefined, {
+        invoiceNumber: batch.invoiceNumber,
+        batchNumber: batch.batchNumber,
+        batchId: batch.id,
+        rollLength: batch.rollLengthMtr,
+        materialName: batch.materialName,
+        category: batch.category,
+        width: batch.variantSize
+      });
+    } else {
+      // Direct deduction if item not in matrix
+      const updatedBatches = batches.map((b) =>
+        b.id === batch.id
+          ? { ...b, currentRemainingRollQuantity: Math.max(0, b.currentRemainingRollQuantity - rollsOutQty) }
+          : b
+      );
+      setBatches(updatedBatches);
+      saveStoredMatrixBatches(updatedBatches);
+      showNotification(`Dispatched ${rollsOutQty} rolls from Batch ${batch.batchNumber}`, 'success');
+    }
+  };
+
   // Submit Stock IN Form
   const handleStockInSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1451,8 +1499,17 @@ export default function App() {
       <header className="bg-[#0A0A0C] text-white border-b border-zinc-800/80 sticky top-0 z-40 print:hidden backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col md:flex-row md:items-center justify-between min-h-[5.25rem] py-2 md:py-1 gap-3">
-            {/* Logo & Title */}
-            <AppLogo />
+            {/* Logo & Mobile Quick Scan Action */}
+            <div className="flex items-center justify-between w-full md:w-auto">
+              <AppLogo />
+              <button
+                onClick={() => setActiveTab('scan')}
+                className="md:hidden px-3.5 py-1.5 bg-[#C59B3F] hover:bg-[#D4A84B] text-slate-950 font-black rounded-full text-xs flex items-center space-x-1.5 shadow-md active:scale-95 cursor-pointer"
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Scan Barcode</span>
+              </button>
+            </div>
 
             {/* Navigation Tabs - Pill design inspired by Airbnb with Decora Sales Gold Palette */}
             <nav className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto py-1 scrollbar-none bg-[#141416]/90 p-1.5 rounded-full border border-zinc-800">
@@ -1466,6 +1523,19 @@ export default function App() {
               >
                 <LayoutDashboard className="w-3.5 h-3.5" />
                 <span>Dashboard / Summary</span>
+              </button>
+
+              {/* Dedicated Scan Barcode Navigation Button */}
+              <button
+                onClick={() => setActiveTab('scan')}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-black flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
+                  activeTab === 'scan'
+                    ? 'bg-[#C59B3F] text-slate-950 shadow-md ring-2 ring-[#C59B3F]/40'
+                    : 'bg-[#1C1917] text-[#D4A84B] border border-[#C59B3F]/50 hover:bg-[#C59B3F]/20 hover:text-white'
+                }`}
+              >
+                <Camera className="w-3.5 h-3.5" />
+                <span>Scan Barcode</span>
               </button>
 
               <button
@@ -1540,6 +1610,19 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6 print:hidden">
+        {/* ========================================================= */}
+        {/* TAB: SCAN BARCODE (LIVE CODE128 CAMERA SCANNER & STOCK OUT) */}
+        {/* ========================================================= */}
+        {activeTab === 'scan' && (
+          <div className="space-y-6">
+            <BarcodeScannerView
+              batches={batches}
+              itemsWithStock={itemsWithStock}
+              onExecuteStockOut={handleScannerStockOut}
+            />
+          </div>
+        )}
+
         {/* ========================================================= */}
         {/* TAB 1: DASHBOARD / SUMMARY (Client Handwritten Matrix) */}
         {/* ========================================================= */}
@@ -2723,14 +2806,11 @@ export default function App() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      setCameraScannerTarget('stock-out');
-                      setCameraScannerOpen(true);
-                    }}
+                    onClick={() => setActiveTab('scan')}
                     className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-amber-300 rounded-lg text-amber-900 font-bold text-xs flex items-center space-x-1 shadow-xs cursor-pointer"
                   >
                     <Camera className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Scan Camera</span>
+                    <span>Open Scanner</span>
                   </button>
                 </div>
 

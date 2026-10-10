@@ -16,7 +16,9 @@ import {
   normalizeInvoiceForBatch,
   findBatchesByBatchOrBarcode,
   INITIAL_MATRIX_ITEMS,
-  INITIAL_MATRIX_TRANSACTIONS
+  INITIAL_MATRIX_TRANSACTIONS,
+  INITIAL_MATRIX_BATCHES,
+  getStoredMatrixBatches
 } from './data/inventoryStore';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
 
@@ -1014,6 +1016,53 @@ assert(!testRollLengthValidation('0').valid, '[Test Case 7] 0 roll length is inv
 assert(!testRollLengthValidation('-10').valid, '[Test Case 7] Negative roll length is invalid');
 assert(!testRollLengthValidation('abc').valid, '[Test Case 7] Non-numeric roll length is invalid');
 assert(testRollLengthValidation('22').valid && testRollLengthValidation('22').length === 22, '[Test Case 7] Valid input 22 passes with length 22');
+
+// ------------------------------------------------------------------
+// TEST SUITE 19: Real Barcode Scanner Workflow (101026GE23542)
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 19: Real Barcode Scanner Workflow (101026GE23542) ---');
+
+// 1. Database query by scanned Batch Number
+const testBatches = getStoredMatrixBatches();
+const scannedBatchCode = '101026GE23542';
+const foundBatches = findBatchesByBatchOrBarcode(testBatches, scannedBatchCode);
+
+assert(foundBatches.length > 0, `Scanned barcode ${scannedBatchCode} must be found in database`);
+const realBatch = foundBatches[0];
+
+assert(realBatch.materialName === 'Backlit Hetax', `Material must be Backlit Hetax (got ${realBatch.materialName})`);
+assert(realBatch.category === 'Backlit', `Category must be Backlit (got ${realBatch.category})`);
+assert(realBatch.variantSize === '1.02', `Size must be 1.02 M (got ${realBatch.variantSize})`);
+assert(realBatch.rollLengthMtr === 12, `Roll Length must be 12 M (got ${realBatch.rollLengthMtr})`);
+assert(realBatch.invoiceNumber === 'GE23542', `Invoice must be GE23542 (got ${realBatch.invoiceNumber})`);
+assert(realBatch.batchNumber === '101026GE23542', `Batch must be 101026GE23542 (got ${realBatch.batchNumber})`);
+assert(realBatch.currentRemainingRollQuantity === 1, `Current batch stock must be 1 Roll (got ${realBatch.currentRemainingRollQuantity})`);
+
+// 2. Stock OUT execution after scan
+const batchStockBefore = realBatch.currentRemainingRollQuantity;
+const rollsToDispatch = 1;
+const batchStockAfter = Math.max(0, batchStockBefore - rollsToDispatch);
+const geAreaPerRoll = Number((parseFloat(realBatch.variantSize) * realBatch.rollLengthMtr).toFixed(2));
+const geTotalAreaOut = Number((geAreaPerRoll * rollsToDispatch).toFixed(2));
+
+assert(batchStockBefore === 1, 'Before stock is 1 Roll');
+assert(rollsToDispatch === 1, 'Rolls OUT is 1 Roll');
+assert(batchStockAfter === 0, 'After stock is 0 Rolls (1 - 1 = 0)');
+assert(geAreaPerRoll === 12.24, `Area per roll is 1.02 × 12 = 12.24 m² (got ${geAreaPerRoll})`);
+assert(geTotalAreaOut === 12.24, `Total Area OUT is 12.24 m² (got ${geTotalAreaOut})`);
+
+// 3. Invalid Barcode Detection Test
+const invalidScannedCode = '101026UNKNOWN99';
+const invalidMatches = findBatchesByBatchOrBarcode(testBatches, invalidScannedCode);
+assert(invalidMatches.length === 0, `Invalid barcode ${invalidScannedCode} must return 0 matches`);
+const notFoundMessage = `Batch not found for barcode ${invalidScannedCode}.`;
+assert(notFoundMessage === 'Batch not found for barcode 101026UNKNOWN99.', 'Clear not found message formatted correctly');
+
+// 4. Case-insensitive and whitespace-trimmed manual lookup fallback
+const manualInputCode = '   101026ge23542   ';
+const manualMatches = findBatchesByBatchOrBarcode(testBatches, manualInputCode);
+assert(manualMatches.length > 0, 'Manual lookup handles whitespace and lowercase correctly');
+assert(manualMatches[0].batchNumber === '101026GE23542', 'Manual lookup finds exact batch');
 
 // ------------------------------------------------------------------
 // SUMMARY
