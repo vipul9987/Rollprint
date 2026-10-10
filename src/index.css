@@ -1,33 +1,34 @@
 @import "tailwindcss";
 
 :root {
-  /* Decora Sales Brand Color Tokens */
-  --brand-navy: #0A192F;
-  --brand-navy-surface: #0F172A;
-  --brand-navy-light: #1E293B;
-  --brand-navy-muted: #334155;
+  /* Decora Sales Brand Color Tokens (From Logo) */
+  --brand-black: #0A0A0C;
+  --brand-dark-surface: #141416;
+  --brand-dark-border: #27272A;
   
-  --brand-gold: #F59E0B;
-  --brand-gold-hover: #D97706;
-  --brand-gold-light: #FEF3C7;
-  --brand-gold-dark: #B45309;
+  --brand-gold: #C59B3F;
+  --brand-gold-hover: #D4A84B;
+  --brand-gold-active: #A87E28;
+  --brand-gold-light: #FDF9F0;
+  --brand-gold-border: #E7D4A6;
+  --brand-gold-muted: #8C6D27;
 
   --brand-bg: #F8FAFC;
   --brand-card: #FFFFFF;
-  --brand-border: #E2E8F0;
-  --brand-border-dark: #CBD5E1;
+  --brand-border: #E4E4E7;
+  --brand-border-dark: #D4D4D8;
 
-  --success: #059669;
-  --success-hover: #047857;
+  --success: #10B981;
+  --success-hover: #059669;
   --success-bg: #ECFDF5;
   --success-border: #A7F3D0;
 
-  --warning: #EA580C;
-  --warning-hover: #C2410C;
-  --warning-bg: #FFF7ED;
+  --warning: #F59E0B;
+  --warning-hover: #D97706;
+  --warning-bg: #FFFBEB;
 
-  --danger: #DC2626;
-  --danger-hover: #B91C1C;
+  --danger: #EF4444;
+  --danger-hover: #DC2626;
   --danger-bg: #FEF2F2;
 }
 

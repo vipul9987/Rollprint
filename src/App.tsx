@@ -1431,20 +1431,20 @@ export default function App() {
       )}
 
       {/* Main App Header */}
-      <header className="bg-[#0A192F] text-white border-b border-slate-800 sticky top-0 z-40 print:hidden">
+      <header className="bg-[#0A0A0C] text-white border-b border-zinc-800/80 sticky top-0 z-40 print:hidden backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row md:items-center justify-between min-h-[4.25rem] py-2 md:py-0 gap-3">
-            {/* Logo & Title (Decora Sales logo with no background patch) */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between min-h-[4.75rem] py-2.5 md:py-1 gap-3">
+            {/* Logo & Title (Decora Sales circular gold medallion) */}
             <AppLogo />
 
-            {/* Navigation Tabs */}
-            <nav className="flex items-center space-x-1 sm:space-x-1.5 overflow-x-auto py-1 scrollbar-none">
+            {/* Navigation Tabs - Pill design inspired by Airbnb with Decora Sales Gold Palette */}
+            <nav className="flex items-center space-x-1.5 sm:space-x-2 overflow-x-auto py-1 scrollbar-none bg-[#141416]/90 p-1.5 rounded-full border border-zinc-800">
               <button
                 onClick={() => setActiveTab('dashboard')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === 'dashboard'
-                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    ? 'bg-[#27272A] text-[#D4A84B] border border-[#C59B3F]/50 shadow-sm'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
                 }`}
               >
                 <LayoutDashboard className="w-3.5 h-3.5" />
@@ -1453,10 +1453,10 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('materials')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === 'materials'
-                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    ? 'bg-[#27272A] text-[#D4A84B] border border-[#C59B3F]/50 shadow-sm'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
                 }`}
               >
                 <Layers className="w-3.5 h-3.5" />
@@ -1468,10 +1468,10 @@ export default function App() {
                   setActiveTab('stock-in');
                   setTimeout(() => stockInRollsInputRef.current?.focus(), 100);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === 'stock-in'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-emerald-400 hover:text-white hover:bg-slate-800'
+                    ? 'bg-emerald-600 text-white shadow-xs font-bold'
+                    : 'text-emerald-400 hover:text-white hover:bg-zinc-800/60'
                 }`}
               >
                 <ArrowDownToLine className="w-3.5 h-3.5" />
@@ -1483,10 +1483,10 @@ export default function App() {
                   setActiveTab('stock-out');
                   setTimeout(() => stockOutRollsInputRef.current?.focus(), 100);
                 }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === 'stock-out'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-amber-400 hover:text-white hover:bg-slate-800'
+                    ? 'bg-[#C59B3F] text-zinc-950 font-bold shadow-xs'
+                    : 'text-[#D4A84B] hover:text-white hover:bg-zinc-800/60'
                 }`}
               >
                 <ArrowUpFromLine className="w-3.5 h-3.5" />
@@ -1495,10 +1495,10 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('transactions')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === 'transactions'
-                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
-                    : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    ? 'bg-[#27272A] text-[#D4A84B] border border-[#C59B3F]/50 shadow-sm'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
                 }`}
               >
                 <History className="w-3.5 h-3.5" />
@@ -1507,10 +1507,10 @@ export default function App() {
 
               <button
                 onClick={() => setActiveTab('qr-labels')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center space-x-1.5 transition-colors whitespace-nowrap cursor-pointer ${
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
                   activeTab === 'qr-labels'
-                    ? 'bg-[#1E293B] text-amber-400 border border-amber-400/40 shadow-xs'
-                    : 'text-amber-300 hover:text-white hover:bg-slate-800'
+                    ? 'bg-[#27272A] text-[#D4A84B] border border-[#C59B3F]/50 shadow-sm'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
                 }`}
               >
                 <QrCode className="w-3.5 h-3.5" />
