@@ -21,7 +21,12 @@ import {
   Grid,
   Table as TableIcon,
   Camera,
-  Barcode as BarcodeIcon
+  Barcode as BarcodeIcon,
+  Filter,
+  Calendar,
+  FileText,
+  Ruler,
+  RotateCcw
 } from 'lucide-react';
 import {
   getStoredMatrixItems,
@@ -1263,14 +1268,62 @@ export default function App() {
       (b.materialName || '').toLowerCase().includes(q) ||
       (b.category || '').toLowerCase().includes(q)
     );
-  }, [batches, batchSearch]);
-
-  // -------------------------------------------------------------
+  }, [batches, batchSearch]);  // -------------------------------------------------------------
   // SEARCH & FILTER STATE FOR MATERIALS & TRANSACTIONS
   // -------------------------------------------------------------
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [txnTypeFilter, setTxnTypeFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
+
+  // Dedicated filters for Transaction History (Date, Invoice No, Item, Size, Length)
+  const [txnDateFilter, setTxnDateFilter] = useState<string>('');
+  const [txnInvoiceFilter, setTxnInvoiceFilter] = useState<string>('');
+  const [txnItemFilter, setTxnItemFilter] = useState<string>('ALL');
+  const [txnSizeFilter, setTxnSizeFilter] = useState<string>('ALL');
+  const [txnLengthFilter, setTxnLengthFilter] = useState<string>('ALL');
+
+  const uniqueTxnMaterials = useMemo(() => {
+    const set = new Set<string>();
+    transactions.forEach((t) => {
+      if (t.materialName) set.add(t.materialName);
+    });
+    items.forEach((i) => set.add(i.materialName));
+    return Array.from(set).sort();
+  }, [transactions, items]);
+
+  const uniqueTxnSizes = useMemo(() => {
+    const set = new Set<string>();
+    transactions.forEach((t) => {
+      if (t.variantSize) set.add(t.variantSize.trim());
+    });
+    return Array.from(set).sort((a, b) => (parseFloat(a) || 0) - (parseFloat(b) || 0));
+  }, [transactions]);
+
+  const uniqueTxnLengths = useMemo(() => {
+    const set = new Set<number>();
+    transactions.forEach((t) => {
+      if (t.rollLengthMtr) set.add(t.rollLengthMtr);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }, [transactions]);
+
+  const hasActiveTxnFilters = Boolean(
+    txnDateFilter ||
+    txnInvoiceFilter ||
+    txnItemFilter !== 'ALL' ||
+    txnSizeFilter !== 'ALL' ||
+    txnLengthFilter !== 'ALL' ||
+    txnTypeFilter !== 'ALL'
+  );
+
+  const resetTxnFilters = () => {
+    setTxnDateFilter('');
+    setTxnInvoiceFilter('');
+    setTxnItemFilter('ALL');
+    setTxnSizeFilter('ALL');
+    setTxnLengthFilter('ALL');
+    setTxnTypeFilter('ALL');
+  };
 
   const displayedItems = useMemo(() => {
     return itemsWithStock.filter((i) => {
@@ -1280,7 +1333,6 @@ export default function App() {
       if (!i.active && activeTab === 'dashboard') {
         return false;
       }
-
       const matchesSearch =
         i.materialName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         i.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1293,19 +1345,55 @@ export default function App() {
   }, [itemsWithStock, searchQuery, categoryFilter, showInactive, activeTab]);
 
   const filteredTransactions = useMemo(() => {
-    const q = searchQuery.toLowerCase();
     return transactions.filter((t) => {
-      const matchesType = txnTypeFilter === 'ALL' || t.type === txnTypeFilter;
-      const matchesSearch =
-        t.materialName.toLowerCase().includes(q) ||
-        t.category.toLowerCase().includes(q) ||
-        t.variantSize.toLowerCase().includes(q) ||
-        t.barcode.toLowerCase().includes(q) ||
-        (t.invoiceNumber && t.invoiceNumber.toLowerCase().includes(q)) ||
-        (t.batchNumber && t.batchNumber.toLowerCase().includes(q));
-      return matchesType && matchesSearch;
+      // 1. Transaction Type (ALL / IN / OUT)
+      if (txnTypeFilter !== 'ALL' && t.type !== txnTypeFilter) {
+        return false;
+      }
+
+      // 2. Date Filter
+      if (txnDateFilter.trim()) {
+        const queryDate = txnDateFilter.trim();
+        const txnDate = (t.date || '').trim();
+        const matchesDate =
+          txnDate.includes(queryDate) ||
+          (t.createdAt && t.createdAt.startsWith(queryDate)) ||
+          formatDateToDDMMYY(txnDate) === formatDateToDDMMYY(queryDate);
+        if (!matchesDate) return false;
+      }
+
+      // 3. Invoice No Filter
+      if (txnInvoiceFilter.trim()) {
+        const queryInv = txnInvoiceFilter.trim().toLowerCase();
+        const txnInv = (t.invoiceNumber || '').toLowerCase();
+        if (!txnInv.includes(queryInv)) return false;
+      }
+
+      // 4. Item / Material Filter
+      if (txnItemFilter !== 'ALL') {
+        if (t.materialName.toLowerCase() !== txnItemFilter.toLowerCase()) {
+          return false;
+        }
+      }
+
+      // 5. Size / Width Filter
+      if (txnSizeFilter !== 'ALL') {
+        if (t.variantSize.trim() !== txnSizeFilter.trim()) {
+          return false;
+        }
+      }
+
+      // 6. Length Filter
+      if (txnLengthFilter !== 'ALL') {
+        const targetLen = parseFloat(txnLengthFilter);
+        if (!isNaN(targetLen) && t.rollLengthMtr !== targetLen) {
+          return false;
+        }
+      }
+
+      return true;
     });
-  }, [transactions, txnTypeFilter, searchQuery]);
+  }, [transactions, txnTypeFilter, txnDateFilter, txnInvoiceFilter, txnItemFilter, txnSizeFilter, txnLengthFilter]);
 
   // -------------------------------------------------------------
   // CLIENT MULTI-TABLE SUMMARY COMPUTATION
@@ -3510,17 +3598,118 @@ export default function App() {
               </div>
             </div>
 
-            {/* Search Input */}
-            <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs">
-              <div className="relative">
-                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Filter transactions by material, category, width, or barcode..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
-                />
+            {/* Dedicated Transaction Filters: Date, Invoice No, Item, Size, Length */}
+            <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                <div className="flex items-center gap-2 text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  <Filter className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Filter Transactions</span>
+                  {hasActiveTxnFilters && (
+                    <span className="ml-1 px-2 py-0.5 text-[10px] bg-indigo-50 text-indigo-700 font-semibold rounded-full border border-indigo-200">
+                      Active
+                    </span>
+                  )}
+                </div>
+                {hasActiveTxnFilters && (
+                  <button
+                    onClick={resetTxnFilters}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    Reset Filters
+                  </button>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                {/* 1. Date Filter */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-slate-400" />
+                    <span>Date</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={txnDateFilter}
+                    onChange={(e) => setTxnDateFilter(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+
+                {/* 2. Invoice No Filter */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                    <FileText className="w-3 h-3 text-slate-400" />
+                    <span>Invoice No.</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. GE23542"
+                    value={txnInvoiceFilter}
+                    onChange={(e) => setTxnInvoiceFilter(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500 placeholder:text-slate-400"
+                  />
+                </div>
+
+                {/* 3. Item (Material) Filter */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                    <Box className="w-3 h-3 text-slate-400" />
+                    <span>Item</span>
+                  </label>
+                  <select
+                    value={txnItemFilter}
+                    onChange={(e) => setTxnItemFilter(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="ALL">All Items</option>
+                    {uniqueTxnMaterials.map((mat) => (
+                      <option key={mat} value={mat}>
+                        {mat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 4. Size (Width) Filter */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                    <Ruler className="w-3 h-3 text-slate-400" />
+                    <span>Size / Width</span>
+                  </label>
+                  <select
+                    value={txnSizeFilter}
+                    onChange={(e) => setTxnSizeFilter(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="ALL">All Sizes</option>
+                    {uniqueTxnSizes.map((sz) => (
+                      <option key={sz} value={sz}>
+                        {sz}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* 5. Length Filter */}
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
+                    <Ruler className="w-3 h-3 text-slate-400" />
+                    <span>Length</span>
+                  </label>
+                  <select
+                    value={txnLengthFilter}
+                    onChange={(e) => setTxnLengthFilter(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="ALL">All Lengths</option>
+                    {uniqueTxnLengths.map((len) => (
+                      <option key={len} value={String(len)}>
+                        {len} M
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
             </div>
 

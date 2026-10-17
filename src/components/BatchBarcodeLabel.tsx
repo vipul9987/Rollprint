@@ -41,13 +41,13 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
           }
           JsBarcode(svgEl, batchCode, {
             format: 'CODE128',
-            width: 2,
-            height: 70,
-            margin: 12,
+            width: 1,
+            height: 22,
+            margin: 2,
             displayValue: true,
             text: batchCode,
-            fontSize: 18,
-            textMargin: 6,
+            fontSize: 9,
+            textMargin: 1,
             background: '#ffffff',
             lineColor: '#000000',
             font: 'monospace',
@@ -209,19 +209,27 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
         <div className="flex items-center space-x-2 text-[11px] text-slate-300 bg-slate-800/80 px-3 py-2 rounded-xl border border-slate-700/60">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>
-            <strong>Minimal Roll Sticker:</strong> Physical printed labels contain <strong>ONLY</strong> the genuine CODE128 barcode and the batch number (<span className="font-mono text-amber-300">{batchCode}</span>). No material name, size, roll length, or invoice text is printed on the physical labels.
+            <strong>Minimal Roll Sticker (46 × 11 mm Standard):</strong> Physical printed labels contain <strong>ONLY</strong> the genuine CODE128 barcode and the batch number (<span className="font-mono text-amber-300">{batchCode}</span>). No material name, size, roll length, or invoice text is printed on the physical labels.
           </span>
         </div>
       </div>
 
-      {/* Printable Labels Grid: Clean, compact roll stickers with uncompressed proportions */}
-      <div className="batch-sticker-grid flex flex-wrap items-center justify-center gap-4 p-4 bg-slate-100 rounded-2xl border border-slate-200 overflow-x-auto print:bg-white print:border-none print:p-0 print:gap-3">
+      {/* Printable Labels Grid: Clean 46mm × 11mm roll stickers */}
+      <div className="batch-sticker-grid flex flex-wrap items-center justify-center gap-3 p-4 bg-slate-100 rounded-2xl border border-slate-200 overflow-x-auto print:bg-white print:border-none print:p-0">
         {copiesArray.map((copyNum, idx) => (
           <div
             key={copyNum}
-            className="batch-barcode-sticker bg-white border border-slate-300 rounded-lg p-3 flex flex-col items-center justify-center shadow-xs print:shadow-none print:border print:border-black/30 print:rounded-none print:p-2 print:break-inside-avoid print:page-break-inside-avoid select-none"
+            className="batch-barcode-sticker bg-white border border-slate-300 rounded-xs flex flex-col items-center justify-center shadow-xs select-none"
             style={{
-              minWidth: '220px',
+              width: '46mm',
+              height: '11mm',
+              minWidth: '46mm',
+              maxWidth: '46mm',
+              minHeight: '11mm',
+              maxHeight: '11mm',
+              padding: '0.5mm 1mm',
+              boxSizing: 'border-box',
+              overflow: 'hidden',
               backgroundColor: '#ffffff'
             }}
           >
@@ -232,7 +240,9 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
               }}
               style={{
                 display: 'block',
-                maxWidth: 'none',
+                maxWidth: '44mm',
+                maxHeight: '10mm',
+                width: 'auto',
                 height: 'auto',
                 backgroundColor: '#ffffff'
               }}

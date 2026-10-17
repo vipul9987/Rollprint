@@ -20,12 +20,12 @@ interface BarcodeProps {
 export const BarcodeDisplay: React.FC<BarcodeProps> = ({
   value,
   format = 'CODE128',
-  width = 2,
-  height = 70,
+  width = 1,
+  height = 24,
   displayValue = true,
-  fontSize = 18,
-  textMargin = 6,
-  margin = 12,
+  fontSize = 9,
+  textMargin = 1,
+  margin = 2,
   className = '',
   onGenerated,
   sanitizedInvoice,
@@ -93,7 +93,7 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
   if (!value || !value.trim()) {
     return (
       <div className={`p-4 bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl text-center text-xs text-slate-500 font-medium ${className}`}>
-        Enter Invoice Number &amp; Date to generate Batch Barcode
+        Enter Invoice Number &amp; Date to generate Batch Barcode (46 × 11 mm)
       </div>
     );
   }
@@ -111,21 +111,37 @@ export const BarcodeDisplay: React.FC<BarcodeProps> = ({
   }
 
   return (
-    <div className={`flex flex-col items-center justify-center bg-white p-4 rounded-xl border border-slate-200 shadow-xs overflow-x-auto ${className}`}>
-      {/* SVG rendered at natural aspect ratio without horizontal stretching */}
-      <svg
-        ref={svgRef}
+    <div className={`flex flex-col items-center justify-center bg-white p-3 rounded-xl border border-slate-200 shadow-xs overflow-x-auto ${className}`}>
+      {/* Physical 46mm × 11mm Sticker Preview Container */}
+      <div
+        className="bg-white border border-slate-300 rounded-xs flex items-center justify-center overflow-hidden shadow-2xs"
         style={{
-          display: 'block',
-          maxWidth: 'none',
-          height: 'auto',
-          backgroundColor: '#ffffff'
+          width: '46mm',
+          height: '11mm',
+          minWidth: '46mm',
+          maxWidth: '46mm',
+          minHeight: '11mm',
+          maxHeight: '11mm',
+          boxSizing: 'border-box',
+          padding: '0.5mm 1mm'
         }}
-      />
+      >
+        <svg
+          ref={svgRef}
+          style={{
+            display: 'block',
+            maxWidth: '44mm',
+            maxHeight: '10mm',
+            width: 'auto',
+            height: 'auto',
+            backgroundColor: '#ffffff'
+          }}
+        />
+      </div>
       {isRendered && (
         <div className="mt-2 flex items-center space-x-1.5 text-[11px] font-bold text-emerald-700">
           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-          <span>CODE128 Batch Barcode &bull; Ready to Save &amp; Print</span>
+          <span>Label Size: 46 × 11 mm &bull; Ready to Save &amp; Print</span>
         </div>
       )}
     </div>

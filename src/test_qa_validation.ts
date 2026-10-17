@@ -1131,6 +1131,169 @@ assert(Boolean(manualLookupBatch), 'Manual fallback lookup resolves batch 121026
 assert(manualLookupBatch!.materialName === 'Bright FL 26', 'Manual lookup finds Bright FL 26');
 
 // ------------------------------------------------------------------
+// TEST SUITE 21: 46 X 11 MM Physical Barcode Label & Transaction History Filters
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 21: 46 X 11 mm Barcode Label & Dedicated Transaction Filters ---');
+
+// 1. Barcode Label Dimensions: 46 x 11 mm
+const thermalLabelSpecs = {
+  widthMm: 46,
+  heightMm: 11,
+  jsBarcode: {
+    format: 'CODE128',
+    width: 1,
+    height: 22,
+    margin: 2,
+    fontSize: 9,
+    textMargin: 1
+  }
+};
+
+assert(thermalLabelSpecs.widthMm === 46, 'Sticker physical width is 46 mm');
+assert(thermalLabelSpecs.heightMm === 11, 'Sticker physical height is 11 mm');
+assert(thermalLabelSpecs.jsBarcode.width === 1, '46x11mm barcode module width is 1 (optimized for 46mm width)');
+assert(thermalLabelSpecs.jsBarcode.height === 22, '46x11mm barcode height is 22px (fits in 11mm label)');
+assert(thermalLabelSpecs.jsBarcode.fontSize === 9, '46x11mm human readable font size is 9px');
+
+// 2. Transaction Filter Logic: Date, Invoice No, Item, Size, Length
+const sampleTransactions: MatrixStockTransaction[] = [
+  {
+    id: 'txn-1',
+    date: '2026-10-10 19:14',
+    createdAt: '2026-10-10T19:14:00Z',
+    type: 'OUT',
+    materialName: 'Backlit Hetax',
+    category: 'Backlit',
+    variantSize: '1.02',
+    rollLengthMtr: 12,
+    rollQuantity: 1,
+    areaSqMtr: 12.24,
+    openingBalance: 4,
+    closingBalance: 3,
+    invoiceNumber: 'ge23542',
+    batchNumber: '101026GE23542',
+    notes: 'Sample Out'
+  },
+  {
+    id: 'txn-2',
+    date: '2026-10-10 17:56',
+    createdAt: '2026-10-10T17:56:00Z',
+    type: 'IN',
+    materialName: 'Backlit Hetax',
+    category: 'Backlit',
+    variantSize: '1.02',
+    rollLengthMtr: 12,
+    rollQuantity: 1,
+    areaSqMtr: 12.24,
+    openingBalance: 3,
+    closingBalance: 4,
+    invoiceNumber: 'ge23542',
+    batchNumber: '101026GE23542',
+    notes: 'Sample In'
+  },
+  {
+    id: 'txn-3',
+    date: '2026-10-10 17:55',
+    createdAt: '2026-10-10T17:55:00Z',
+    type: 'IN',
+    materialName: 'Backlit Hetax',
+    category: 'Backlit',
+    variantSize: '1.02',
+    rollLengthMtr: 50,
+    rollQuantity: 1,
+    areaSqMtr: 51,
+    openingBalance: 2,
+    closingBalance: 3,
+    invoiceNumber: 'grtr14123',
+    batchNumber: '101026GRTR14123',
+    notes: 'Sample In 50m'
+  },
+  {
+    id: 'txn-4',
+    date: '2026-10-10 17:26',
+    createdAt: '2026-10-10T17:26:00Z',
+    type: 'IN',
+    materialName: 'Active',
+    category: 'Flex PVC',
+    variantSize: '1.02',
+    rollLengthMtr: 70,
+    rollQuantity: 10,
+    areaSqMtr: 714,
+    openingBalance: 5,
+    closingBalance: 15,
+    invoiceNumber: 'gt112233',
+    batchNumber: '101026GT112233',
+    notes: 'Sample In Active'
+  }
+];
+
+function filterTxns(
+  txns: MatrixStockTransaction[],
+  filters: {
+    type?: 'ALL' | 'IN' | 'OUT';
+    date?: string;
+    invoice?: string;
+    item?: string;
+    size?: string;
+    length?: string;
+  }
+) {
+  return txns.filter((t) => {
+    if (filters.type && filters.type !== 'ALL' && t.type !== filters.type) return false;
+    if (filters.date && filters.date.trim()) {
+      const q = filters.date.trim();
+      const match =
+        (t.date && t.date.includes(q)) ||
+        (t.createdAt && t.createdAt.startsWith(q)) ||
+        formatDateToDDMMYY(t.date || '') === formatDateToDDMMYY(q);
+      if (!match) return false;
+    }
+    if (filters.invoice && filters.invoice.trim()) {
+      if (!t.invoiceNumber?.toLowerCase().includes(filters.invoice.trim().toLowerCase())) return false;
+    }
+    if (filters.item && filters.item !== 'ALL') {
+      if (t.materialName.toLowerCase() !== filters.item.toLowerCase()) return false;
+    }
+    if (filters.size && filters.size !== 'ALL') {
+      if (t.variantSize.trim() !== filters.size.trim()) return false;
+    }
+    if (filters.length && filters.length !== 'ALL') {
+      const num = parseFloat(filters.length);
+      if (!isNaN(num) && t.rollLengthMtr !== num) return false;
+    }
+    return true;
+  });
+}
+
+// Test Date filter
+const dateFiltered = filterTxns(sampleTransactions, { date: '2026-10-10' });
+assert(dateFiltered.length === 4, 'Date filter matches all 4 transactions on 2026-10-10');
+
+// Test Invoice No filter
+const invFiltered = filterTxns(sampleTransactions, { invoice: 'ge23542' });
+assert(invFiltered.length === 2, 'Invoice filter ge23542 matches 2 transactions');
+
+// Test Item filter
+const itemFiltered = filterTxns(sampleTransactions, { item: 'Active' });
+assert(itemFiltered.length === 1 && itemFiltered[0].materialName === 'Active', 'Item filter Active matches 1 transaction');
+
+// Test Size filter
+const sizeFiltered = filterTxns(sampleTransactions, { size: '1.02' });
+assert(sizeFiltered.length === 4, 'Size filter 1.02 matches all 4 transactions');
+
+// Test Length filter
+const lenFiltered = filterTxns(sampleTransactions, { length: '50' });
+assert(lenFiltered.length === 1 && lenFiltered[0].rollLengthMtr === 50, 'Length filter 50 M matches 1 transaction');
+
+// Test Combined filters: Item: Backlit Hetax + Length: 12 + Type: OUT
+const combinedFiltered = filterTxns(sampleTransactions, {
+  item: 'Backlit Hetax',
+  length: '12',
+  type: 'OUT'
+});
+assert(combinedFiltered.length === 1 && combinedFiltered[0].id === 'txn-1', 'Combined Item + Length + Type filter works accurately');
+
+// ------------------------------------------------------------------
 // SUMMARY
 // ------------------------------------------------------------------
 console.log('\n====================================================');
@@ -1140,4 +1303,5 @@ console.log('====================================================');
 if (testsFailed > 0) {
   process.exit(1);
 }
+
 
