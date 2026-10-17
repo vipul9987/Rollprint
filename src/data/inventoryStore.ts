@@ -193,7 +193,7 @@ export function findBatchesByBatchOrBarcode(batches: MatrixBatch[], code: string
   }
   const cleanAlphaNum = clean.replace(/[^A-Z0-9]/g, '');
 
-  return batches.filter((b) => {
+  let results = batches.filter((b) => {
     const bNum = (b.batchNumber || '').toUpperCase();
     const bBar = (b.barcodeValue || '').toUpperCase();
     if (bNum === clean || bBar === clean) return true;
@@ -201,6 +201,20 @@ export function findBatchesByBatchOrBarcode(batches: MatrixBatch[], code: string
     const bBarAlpha = bBar.replace(/[^A-Z0-9]/g, '');
     return Boolean(cleanAlphaNum && (bNumAlpha === cleanAlphaNum || bBarAlpha === cleanAlphaNum));
   });
+
+  // If not found in current storage, also check INITIAL_MATRIX_BATCHES directly
+  if (results.length === 0) {
+    results = INITIAL_MATRIX_BATCHES.filter((b) => {
+      const bNum = (b.batchNumber || '').toUpperCase();
+      const bBar = (b.barcodeValue || '').toUpperCase();
+      if (bNum === clean || bBar === clean) return true;
+      const bNumAlpha = bNum.replace(/[^A-Z0-9]/g, '');
+      const bBarAlpha = bBar.replace(/[^A-Z0-9]/g, '');
+      return Boolean(cleanAlphaNum && (bNumAlpha === cleanAlphaNum || bBarAlpha === cleanAlphaNum));
+    });
+  }
+
+  return results;
 }
 
 export const INITIAL_MATRIX_BATCHES: MatrixBatch[] = [
@@ -421,7 +435,25 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
     if (raw) {
       const parsed: MatrixBatch[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        list = parsed;
+        list = [...parsed];
+        // Ensure any seed batches (like 101026GT28728) are merged into active storage
+        for (const seed of INITIAL_MATRIX_BATCHES) {
+          const matchIdx = list.findIndex(
+            (b) =>
+              b.batchNumber?.toUpperCase() === seed.batchNumber?.toUpperCase() ||
+              b.id === seed.id
+          );
+          if (matchIdx === -1) {
+            list.push(seed);
+            hasChanged = true;
+          } else if (seed.items && seed.items.length > 1) {
+            // If cached batch has fewer items than seed definition
+            if (!list[matchIdx].items || list[matchIdx].items.length < seed.items.length) {
+              list[matchIdx] = { ...seed };
+              hasChanged = true;
+            }
+          }
+        }
       }
     }
 

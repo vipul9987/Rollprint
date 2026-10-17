@@ -633,27 +633,49 @@ export default function App() {
 
   const [duplicateBatchMatches, setDuplicateBatchMatches] = useState<MatrixBatch[]>([]);
 
-  const selectSingleStockOutBatch = (found: MatrixBatch) => {
+  const [stockOutSelectedBatchItemId, setStockOutSelectedBatchItemId] = useState<string>('');
+
+  const selectSingleStockOutBatch = (found: MatrixBatch, specificItemId?: string) => {
     setDuplicateBatchMatches([]);
-    setStockOutMaterial(found.materialName);
-    setStockOutVariantSize(found.variantSize);
-    setStockOutRollLength(found.rollLengthMtr.toString());
     setStockOutSelectedBatchId(found.id);
     setStockOutBarcodeCode(found.batchNumber);
+    setStockOutBatchSearchInput(found.batchNumber);
     setStockOutVerificationStatus('VERIFIED');
     setStockOutError('');
+
+    const items = found.items || [];
+    const targetItem = specificItemId
+      ? items.find((it) => it.id === specificItemId)
+      : items.find((it) => it.remainingRollQuantity > 0) || items[0];
+
+    if (targetItem) {
+      setStockOutSelectedBatchItemId(targetItem.id);
+      setStockOutMaterial(targetItem.materialNameSnapshot);
+      setStockOutVariantSize(targetItem.width);
+      setStockOutRollLength(targetItem.rollLength.toString());
+      setStockOutRolls('1');
+    } else {
+      setStockOutSelectedBatchItemId('');
+      setStockOutMaterial(found.materialName);
+      setStockOutVariantSize(found.variantSize);
+      setStockOutRollLength(found.rollLengthMtr.toString());
+      setStockOutRolls('1');
+    }
+
     showNotification(
-      `Batch ${found.batchNumber} linked: ${found.materialName} (${found.currentRemainingRollQuantity} rolls available in batch)`,
+      `Batch ${found.batchNumber} linked (${found.currentRemainingRollQuantity} rolls across ${items.length || 1} items)`,
       'success'
     );
     setTimeout(() => stockOutRollsInputRef.current?.focus(), 100);
   };
 
   // Scan or select a batch directly by batch number / barcode
-  const handleBatchSelectOrScan = (batchCodeOrId: string): boolean => {
+  const handleBatchSelectOrScan = (batchCodeOrId: string, specificItemId?: string): boolean => {
     const clean = batchCodeOrId.trim().toUpperCase();
     if (!clean) {
       setDuplicateBatchMatches([]);
+      setStockOutSelectedBatchId('');
+      setStockOutSelectedBatchItemId('');
       return false;
     }
 
@@ -662,14 +684,14 @@ export default function App() {
     if (matches.length === 0) {
       const direct = batches.find((b) => b.id === batchCodeOrId);
       if (direct) {
-        selectSingleStockOutBatch(direct);
+        selectSingleStockOutBatch(direct, specificItemId);
         return true;
       }
       return false;
     }
 
     if (matches.length === 1) {
-      selectSingleStockOutBatch(matches[0]);
+      selectSingleStockOutBatch(matches[0], specificItemId);
       return true;
     }
 
@@ -741,14 +763,18 @@ export default function App() {
 
   // Camera scan success handler
   const handleCameraScanSuccess = (decodedText: string) => {
+    const clean = decodedText.trim();
     if (cameraScannerTarget === 'stock-in') {
-      setStockInInvoiceNumber(decodedText.trim());
-      showNotification(`Scanned invoice: ${decodedText.trim()}`, 'success');
+      setStockInInvoiceNumber(clean);
+      showNotification(`Scanned invoice: ${clean}`, 'success');
     } else {
-      setStockOutBarcodeCode(decodedText);
-      const isBatch = handleBatchSelectOrScan(decodedText);
-      if (!isBatch) {
-        validateStockOutBarcode(decodedText);
+      setStockOutBarcodeCode(clean);
+      setStockOutBatchSearchInput(clean);
+      const isBatch = handleBatchSelectOrScan(clean);
+      if (isBatch) {
+        showNotification(`Batch ${clean} found! Displaying batch items.`, 'success');
+      } else {
+        validateStockOutBarcode(clean);
       }
     }
   };
@@ -766,6 +792,7 @@ export default function App() {
       invoiceNumber?: string;
       batchNumber?: string;
       batchId?: string;
+      batchItemId?: string;
       width?: string;
       rollLength?: number;
       materialName?: string;
@@ -880,14 +907,39 @@ export default function App() {
       saveStoredMatrixBatches(updatedBatches);
       batchNumber = generatedBatchNum;
     } else if (type === 'OUT' && extraMeta?.batchId) {
-      // Deduct from specific batch
+      // Deduct from specific batch and item line
       const targetBatch = batches.find((b) => b.id === extraMeta.batchId);
       if (targetBatch) {
-        const updatedBatches = batches.map((b) =>
-          b.id === extraMeta.batchId
-            ? { ...b, currentRemainingRollQuantity: Math.max(0, b.currentRemainingRollQuantity - quantity) }
-            : b
-        );
+        const targetItemId = extraMeta.batchItemId;
+        const updatedBatches = batches.map((b) => {
+          if (b.id !== extraMeta.batchId) return b;
+          let updatedItems = b.items;
+          if (Array.isArray(b.items) && b.items.length > 0) {
+            let deducted = false;
+            updatedItems = b.items.map((it) => {
+              if (
+                (!deducted && targetItemId && it.id === targetItemId) ||
+                (!deducted && !targetItemId && it.materialNameSnapshot === effectiveMaterialName && it.width === effectiveWidthStr)
+              ) {
+                deducted = true;
+                return {
+                  ...it,
+                  remainingRollQuantity: Math.max(0, it.remainingRollQuantity - quantity)
+                };
+              }
+              return it;
+            });
+          }
+          const totalRemaining = updatedItems && updatedItems.length > 0
+            ? updatedItems.reduce((s, it) => s + (it.remainingRollQuantity || 0), 0)
+            : Math.max(0, b.currentRemainingRollQuantity - quantity);
+
+          return {
+            ...b,
+            items: updatedItems,
+            currentRemainingRollQuantity: totalRemaining
+          };
+        });
         setBatches(updatedBatches);
         saveStoredMatrixBatches(updatedBatches);
         batchNumber = targetBatch.batchNumber;
@@ -1356,12 +1408,13 @@ export default function App() {
       selectedStockOutBatch
         ? {
             batchId: selectedStockOutBatch.id,
+            batchItemId: stockOutSelectedBatchItemId,
             batchNumber: selectedStockOutBatch.batchNumber,
             invoiceNumber: selectedStockOutBatch.invoiceNumber,
-            width: selectedStockOutBatch.variantSize,
-            rollLength: selectedStockOutBatch.rollLengthMtr,
-            materialName: selectedStockOutBatch.materialName,
-            category: selectedStockOutBatch.category
+            width: stockOutVariantSize,
+            rollLength: Number(stockOutRollLength),
+            materialName: stockOutMaterial,
+            category: stockOutAutoCategory
           }
         : {
             width: normalizedWidth,
@@ -3386,22 +3439,120 @@ export default function App() {
                 )}
 
                 {selectedStockOutBatch ? (
-                  <div className="p-2.5 bg-white rounded-xl border border-amber-200 text-xs font-mono space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-900">
-                        {selectedStockOutBatch.materialName} ({selectedStockOutBatch.variantSize}M &times; {selectedStockOutBatch.rollLengthMtr}M)
-                      </span>
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[10px]">
-                        Batch Linked
-                      </span>
+                  <div className="p-3.5 bg-white rounded-2xl border-2 border-amber-300 shadow-xs space-y-3">
+                    {/* BATCH DETAILS HEADER */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-100 pb-2.5">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-sm font-black text-slate-900">
+                            Batch: {selectedStockOutBatch.batchNumber}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-mono text-[10px] font-bold">
+                            Invoice: {selectedStockOutBatch.invoiceNumber}
+                          </span>
+                        </div>
+                        <span className="text-[11px] text-slate-500 font-medium">
+                          Stock IN Date: {selectedStockOutBatch.stockInDate}
+                        </span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Batch Stock</span>
+                        <span className="font-mono text-sm font-black text-emerald-700">
+                          {selectedStockOutBatch.currentRemainingRollQuantity} Rolls ({ (selectedStockOutBatch.items || []).length } Items)
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center justify-between text-slate-600 text-[11px]">
-                      <span>
-                        Batch: <strong className="text-slate-900">{selectedStockOutBatch.batchNumber}</strong> &bull; Invoice: <strong>{selectedStockOutBatch.invoiceNumber}</strong>
-                      </span>
-                      <span className="text-amber-800 font-black">
-                        Available in Batch: {selectedStockOutBatch.currentRemainingRollQuantity} Rolls
-                      </span>
+
+                    {/* ITEMS IN THIS BATCH TABLE (Client Specification) */}
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-black uppercase tracking-wider text-slate-800">
+                          ITEMS IN THIS BATCH
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          Click row to select item line
+                        </span>
+                      </div>
+
+                      <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-left text-xs">
+                            <thead>
+                              <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold text-[10px] uppercase tracking-wider">
+                                <th className="py-2 px-2.5">Material</th>
+                                <th className="py-2 px-2">Size</th>
+                                <th className="py-2 px-2">Length</th>
+                                <th className="py-2 px-2 text-right">Available</th>
+                                <th className="py-2 px-2">Barcode</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {(selectedStockOutBatch.items && selectedStockOutBatch.items.length > 0
+                                ? selectedStockOutBatch.items
+                                : [
+                                    {
+                                      id: `item-${selectedStockOutBatch.id}`,
+                                      batchId: selectedStockOutBatch.id,
+                                      materialNameSnapshot: selectedStockOutBatch.materialName || 'Material',
+                                      categorySnapshot: selectedStockOutBatch.category || 'Roll Material',
+                                      width: selectedStockOutBatch.variantSize || '1.02',
+                                      rollLength: selectedStockOutBatch.rollLengthMtr || 50,
+                                      initialRollQuantity: selectedStockOutBatch.initialRollQuantity || 1,
+                                      remainingRollQuantity: selectedStockOutBatch.currentRemainingRollQuantity || 0,
+                                      areaM2: 0,
+                                      createdAt: selectedStockOutBatch.createdAt
+                                    }
+                                  ]
+                              ).map((line) => {
+                                const isSelected = stockOutSelectedBatchItemId === line.id;
+                                const isDepleted = line.remainingRollQuantity <= 0;
+                                return (
+                                  <tr
+                                    key={line.id}
+                                    onClick={() => {
+                                      if (!isDepleted) {
+                                        selectSingleStockOutBatch(selectedStockOutBatch, line.id);
+                                      }
+                                    }}
+                                    className={`transition-colors cursor-pointer text-[11px] ${
+                                      isSelected
+                                        ? 'bg-amber-100/80 font-bold border-l-4 border-l-amber-600'
+                                        : isDepleted
+                                        ? 'bg-slate-50/50 opacity-50 cursor-not-allowed'
+                                        : 'hover:bg-slate-50'
+                                    }`}
+                                  >
+                                    <td className="py-2 px-2.5 font-bold text-slate-900">
+                                      <div className="flex items-center gap-1.5">
+                                        {isSelected && (
+                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
+                                        )}
+                                        <span>{line.materialNameSnapshot}</span>
+                                      </div>
+                                    </td>
+                                    <td className="py-2 px-2 font-mono text-slate-700 whitespace-nowrap">
+                                      {line.width}M
+                                    </td>
+                                    <td className="py-2 px-2 font-mono text-slate-700 whitespace-nowrap">
+                                      {line.rollLength}M
+                                    </td>
+                                    <td className="py-2 px-2 text-right font-mono font-black whitespace-nowrap">
+                                      <span className={isDepleted ? 'text-slate-400' : 'text-emerald-700'}>
+                                        {line.remainingRollQuantity} {line.remainingRollQuantity === 1 ? 'Roll' : 'Rolls'}
+                                      </span>
+                                    </td>
+                                    <td className="py-2 px-2 font-mono text-indigo-700 font-bold whitespace-nowrap">
+                                      <span className="px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 rounded">
+                                        {selectedStockOutBatch.batchNumber}
+                                      </span>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ) : availableBatchesForCurrentStockOut.length > 0 ? (
