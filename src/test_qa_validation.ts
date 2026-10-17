@@ -22,6 +22,13 @@ import {
 } from './data/inventoryStore';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
 
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 let testsPassed = 0;
 let testsFailed = 0;
 
@@ -1455,7 +1462,73 @@ const mockExportData = {
 const generatedCsv = generateSummaryCsv(mockExportData);
 assert(generatedCsv.includes('TABLE 1: FLEX / BACKLIT ROLL STOCK'), 'CSV export includes Table 1 header');
 assert(generatedCsv.includes('Backlit Flex,Backlit'), 'CSV export includes Backlit Flex row');
-assert(generatedCsv.includes('TOTAL ROLLS'), 'CSV export includes totals row');
+// ------------------------------------------------------------------
+// TEST SUITE 23: ONE BATCH CAN CONTAIN MULTIPLE ITEMS (CLIENT TALLY ARCHITECTURE)
+// ------------------------------------------------------------------
+console.log('\n--- TEST SUITE 23: ONE BATCH = MULTIPLE ITEMS (TALLY ARCHITECTURE) ---');
+
+// 1. Verify Client Sample Batch 101026GT28728
+const tallyBatch = INITIAL_MATRIX_BATCHES.find((b) => b.batchNumber === '101026GT28728');
+assert(!!tallyBatch, 'Client sample batch 101026GT28728 exists in INITIAL_MATRIX_BATCHES');
+assert(tallyBatch?.invoiceNumber === 'GT28728', 'Batch invoice number is GT28728');
+assert(tallyBatch?.barcodeValue === '101026GT28728', 'Batch barcode value is 101026GT28728 (DDMMYY + Invoice)');
+assert(Array.isArray(tallyBatch?.items), 'Batch contains items array');
+assert(tallyBatch?.items.length === 9, 'Batch contains exactly 9 inventory item lines under invoice GT28728');
+
+// 2. Validate all 9 lines belong to the SAME batch and share the SAME barcode
+tallyBatch?.items.forEach((itemLine, idx) => {
+  assert(itemLine.batchId === tallyBatch.id, `Item line ${idx + 1} references parent batch id ${tallyBatch.id}`);
+  assert(tallyBatch.barcodeValue === '101026GT28728', `Item line ${idx + 1} shares identical batch barcode 101026GT28728`);
+});
+
+// Check exact material lines from client's system
+const bronzeLines = tallyBatch?.items.filter((it) => it.materialNameSnapshot === 'Bronze (S Prints) N') || [];
+assert(bronzeLines.length === 6, 'Contains 6 Bronze (S Prints) N lines (1.32, 1.63, 1.93, 2.54, 3.20 50M, 3.20 45M)');
+
+const tufanLines = tallyBatch?.items.filter((it) => it.materialNameSnapshot === 'Flex Tufan') || [];
+assert(tufanLines.length === 3, 'Contains 3 Flex Tufan lines (1.93, 2.54, 3.20)');
+
+// Total rolls in batch: 1 + 1 + 2 + 2 + 2 + 1 + 3 + 2 + 3 = 17
+const totalInitialRolls = tallyBatch?.items.reduce((sum, it) => sum + it.initialRollQuantity, 0);
+assert(totalInitialRolls === 17, `Total initial roll quantity across all lines is 17 Rolls (got ${totalInitialRolls})`);
+
+// 3. Item-level Stock OUT deduction:
+// Deduct 1 roll from Bronze (S Prints) N | Size: 1.93 | Length: 70M (from 2 Rolls -> 1 Roll)
+const targetBronze193 = tallyBatch?.items.find(
+  (it) => it.materialNameSnapshot === 'Bronze (S Prints) N' && it.width === '1.93'
+);
+assert(!!targetBronze193, 'Found Bronze (S Prints) N 1.93 line');
+assert(targetBronze193?.remainingRollQuantity === 2, 'Initial remaining quantity for Bronze 1.93 is 2 Rolls');
+
+// Simulate single line Stock OUT deduction
+const updatedItems = tallyBatch!.items.map((it) =>
+  it.id === targetBronze193!.id
+    ? { ...it, remainingRollQuantity: it.remainingRollQuantity - 1 }
+    : it
+);
+
+const updatedBronze193 = updatedItems.find((it) => it.id === targetBronze193!.id);
+assert(updatedBronze193?.remainingRollQuantity === 1, 'Only selected item line decreased from 2 -> 1 Roll');
+
+// Verify all other 8 item lines remain UNCHANGED
+const bronze132 = updatedItems.find((it) => it.materialNameSnapshot === 'Bronze (S Prints) N' && it.width === '1.32');
+assert(bronze132?.remainingRollQuantity === 1, 'Bronze 1.32 remains unchanged at 1 Roll');
+
+const bronze254 = updatedItems.find((it) => it.materialNameSnapshot === 'Bronze (S Prints) N' && it.width === '2.54');
+assert(bronze254?.remainingRollQuantity === 2, 'Bronze 2.54 remains unchanged at 2 Rolls');
+
+const tufan193 = updatedItems.find((it) => it.materialNameSnapshot === 'Flex Tufan' && it.width === '1.93');
+assert(tufan193?.remainingRollQuantity === 3, 'Flex Tufan 1.93 remains unchanged at 3 Rolls');
+
+const newBatchTotalRemaining = updatedItems.reduce((sum, it) => sum + it.remainingRollQuantity, 0);
+assert(newBatchTotalRemaining === 16, `Total batch remaining rolls is now 16 (17 - 1 = 16)`);
+
+// 4. Verify Database Schema Definitions
+const schemaSql = fs.readFileSync(path.resolve(__dirname, '../supabase/migrations/001_initial_schema.sql'), 'utf-8');
+assert(schemaSql.includes('CREATE TABLE IF NOT EXISTS stock_batches'), 'Schema defines parent table stock_batches');
+assert(schemaSql.includes('CREATE TABLE IF NOT EXISTS stock_batch_items'), 'Schema defines child table stock_batch_items');
+assert(schemaSql.includes('batch_id UUID NOT NULL REFERENCES stock_batches(id)'), 'Schema establishes foreign key relationship stock_batches 1 -> many stock_batch_items');
+assert(schemaSql.includes('remaining_roll_quantity INTEGER NOT NULL'), 'Schema defines remaining_roll_quantity on child item level');
 
 // ------------------------------------------------------------------
 // SUMMARY

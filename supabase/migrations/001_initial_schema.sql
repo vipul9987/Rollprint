@@ -274,23 +274,34 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ====================================================================
--- 14. STOCK BATCHES TABLE (Linear Code128 Batch Tracking)
+-- 14. STOCK BATCHES & BATCH ITEMS (Parent-Child Batch Tracking)
+-- 1 Invoice / Batch Barcode = Multiple Batch Item Lines
 -- ====================================================================
 CREATE TABLE IF NOT EXISTS stock_batches (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     batch_number VARCHAR(100) NOT NULL UNIQUE,
-    material_name VARCHAR(150) NOT NULL,
-    category VARCHAR(100),
-    variant_size VARCHAR(50) NOT NULL,
-    roll_length_mtr NUMERIC(10, 2) NOT NULL,
-    initial_roll_quantity INTEGER NOT NULL DEFAULT 1,
-    current_remaining_roll_quantity INTEGER NOT NULL DEFAULT 1,
     invoice_number VARCHAR(100) NOT NULL,
     stock_in_date DATE NOT NULL DEFAULT CURRENT_DATE,
     barcode_value VARCHAR(100),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS stock_batch_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    batch_id UUID NOT NULL REFERENCES stock_batches(id) ON DELETE CASCADE,
+    material_id VARCHAR(100),
+    material_name_snapshot VARCHAR(150) NOT NULL,
+    category_snapshot VARCHAR(100),
+    width VARCHAR(50) NOT NULL,
+    roll_length NUMERIC(10, 2) NOT NULL,
+    initial_roll_quantity INTEGER NOT NULL DEFAULT 1,
+    remaining_roll_quantity INTEGER NOT NULL DEFAULT 1,
+    area_m2 NUMERIC(12, 2) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_stock_batches_number ON stock_batches(batch_number);
 CREATE INDEX IF NOT EXISTS idx_stock_batches_invoice ON stock_batches(invoice_number);
+CREATE INDEX IF NOT EXISTS idx_stock_batch_items_batch_id ON stock_batch_items(batch_id);
+CREATE INDEX IF NOT EXISTS idx_stock_batch_items_material ON stock_batch_items(material_name_snapshot, width);
 

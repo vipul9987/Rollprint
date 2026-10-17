@@ -41,9 +41,12 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
   const [overallItemStock, setOverallItemStock] = useState<number>(0);
   const [notFound, setNotFound] = useState<boolean>(false);
 
+  // Selected item line inside multi-item batch
+  const [selectedBatchItemId, setSelectedBatchItemId] = useState<string>('');
+
   // Stock OUT state
   const [isStockOutOpen, setIsStockOutOpen] = useState<boolean>(false);
-  const [rollsOut, setRollsOut] = useState<number>(2);
+  const [rollsOut, setRollsOut] = useState<number>(1);
   const [stockOutSubmitting, setStockOutSubmitting] = useState<boolean>(false);
   const [stockOutError, setStockOutError] = useState<string>('');
   const [successMessage, setSuccessMessage] = useState<string>('');
@@ -69,13 +72,14 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
         setOverallItemStock(result.overallItemStock);
         setNotFound(false);
 
-        // Default rollsOut: 2 if available >= 2, else 1
-        if (result.liveBatchStock >= 2) {
-          setRollsOut(2);
-        } else if (result.liveBatchStock > 0) {
-          setRollsOut(1);
+        // Auto-select first available item line
+        const items = result.batch.items || [];
+        const firstAvailable = items.find((it) => it.remainingRollQuantity > 0) || items[0];
+        if (firstAvailable) {
+          setSelectedBatchItemId(firstAvailable.id);
+          setRollsOut(Math.min(1, Math.max(1, firstAvailable.remainingRollQuantity)));
         } else {
-          setRollsOut(0);
+          setRollsOut(1);
         }
       } else {
         setBatch(null);
@@ -94,6 +98,28 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
     loadBatchData();
   }, [loadBatchData]);
 
+  // Derived selected item line
+  const itemsList = batch?.items && batch.items.length > 0
+    ? batch.items
+    : (batch ? [
+        {
+          id: `item-${batch.id}`,
+          batchId: batch.id,
+          materialNameSnapshot: batch.materialName || 'Material',
+          categorySnapshot: batch.category || 'Roll Material',
+          width: batch.variantSize || '1.02',
+          rollLength: batch.rollLengthMtr || 50,
+          initialRollQuantity: batch.initialRollQuantity || 1,
+          remainingRollQuantity: batch.currentRemainingRollQuantity || 0,
+          areaM2: Number(((parseFloat(batch.variantSize || '1.02') || 1) * (batch.rollLengthMtr || 50) * (batch.initialRollQuantity || 1)).toFixed(2)),
+          createdAt: batch.createdAt
+        }
+      ] : []);
+
+  const selectedItem = itemsList.find((it) => it.id === selectedBatchItemId) || itemsList[0];
+  const targetStock = selectedItem ? selectedItem.remainingRollQuantity : liveStock;
+  const afterStock = Math.max(0, targetStock - rollsOut);
+
   // Handle Stock OUT confirmation
   const handleConfirmStockOut = async () => {
     if (!batch) return;
@@ -103,8 +129,8 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
       return;
     }
 
-    if (rollsOut > liveStock) {
-      setStockOutError(`Cannot stock out ${rollsOut} rolls. Only ${liveStock} rolls available.`);
+    if (rollsOut > targetStock) {
+      setStockOutError(`Cannot stock out ${rollsOut} rolls. Only ${targetStock} rolls available for this item.`);
       return;
     }
 
@@ -112,12 +138,14 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
     setStockOutError('');
 
     try {
-      const response = await executeStockOutTransaction(batch.batchNumber, rollsOut);
+      const response = await executeStockOutTransaction(batch.batchNumber, rollsOut, selectedItem?.id);
 
       if (response.success && response.updatedBatch) {
         setBatch(response.updatedBatch);
-        setLiveStock(response.newRemainingStock ?? (liveStock - rollsOut));
-        setSuccessMessage(`Stock OUT Confirmed! -${rollsOut} ${rollsOut === 1 ? 'Roll' : 'Rolls'} dispatched.`);
+        const newTotal = response.updatedBatch.currentRemainingRollQuantity ?? (liveStock - rollsOut);
+        setLiveStock(newTotal);
+        const itemName = selectedItem ? selectedItem.materialNameSnapshot : batch.materialName;
+        setSuccessMessage(`Stock OUT Confirmed! -${rollsOut} ${rollsOut === 1 ? 'Roll' : 'Rolls'} dispatched for ${itemName}.`);
         setIsStockOutOpen(false);
 
         // Notify parent to refresh background state if mounted
@@ -165,7 +193,7 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
     );
   }
 
-  // 2. Invalid Batch State (matches user requirement: "Batch not found." Do not crash or redirect silently)
+  // 2. Invalid Batch State
   if (notFound || !batch) {
     return (
       <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-6">
@@ -220,8 +248,6 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
   }
 
   // 3. Live Batch Found State
-  const afterStock = Math.max(0, liveStock - rollsOut);
-
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between">
       {/* Top Header Bar */}
@@ -245,7 +271,7 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
       </header>
 
       {/* Main Container */}
-      <main className="flex-1 max-w-lg w-full mx-auto p-4 sm:p-6 space-y-4">
+      <main className="flex-1 max-w-2xl w-full mx-auto p-4 sm:p-6 space-y-4">
         {/* Success Alert Banner */}
         {successMessage && (
           <div className="p-4 bg-emerald-500/15 border border-emerald-500/40 rounded-2xl text-emerald-300 flex items-start space-x-3 shadow-lg animate-in fade-in slide-in-from-top-2">
@@ -258,7 +284,7 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
         )}
 
         {/* Primary Batch Card */}
-        <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl">
+        <div className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden shadow-2xl space-y-0">
           {/* Card Title Banner */}
           <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 px-6 py-4 border-b border-slate-800 flex items-center justify-between">
             <div className="flex items-center space-x-2">
@@ -270,110 +296,185 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
             </span>
           </div>
 
-          <div className="p-6 space-y-6">
-            {/* Material Name */}
-            <div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                Material Name
-              </span>
-              <div className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-                {batch.materialName}
-              </div>
-              <span className="inline-block mt-1 text-xs font-semibold text-slate-400 bg-slate-800 px-2.5 py-0.5 rounded-md border border-slate-700/60">
-                {batch.category}
-              </span>
-            </div>
-
-            {/* Spec Grid: Size, Roll Length, Invoice, Batch */}
-            <div className="grid grid-cols-2 gap-3.5">
-              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3.5 space-y-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Size / Width
+          <div className="p-6 space-y-5">
+            {/* Top Batch Info: Batch Number, Invoice, Date, Total Rolls */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3 space-y-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Batch Number
                 </span>
-                <div className="text-lg font-black text-slate-100">
-                  {batch.variantSize} M
+                <div className="font-mono text-sm font-black text-amber-400 truncate" title={batch.batchNumber}>
+                  {batch.batchNumber}
                 </div>
               </div>
 
-              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3.5 space-y-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Roll Length
-                </span>
-                <div className="text-lg font-black text-slate-100">
-                  {batch.rollLengthMtr} M
-                </div>
-              </div>
-
-              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3.5 space-y-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
+              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3 space-y-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
                   Invoice
                 </span>
-                <div className="font-mono text-base font-black text-amber-400 truncate" title={batch.invoiceNumber}>
+                <div className="font-mono text-sm font-black text-slate-200 truncate" title={batch.invoiceNumber}>
                   {batch.invoiceNumber}
                 </div>
               </div>
 
-              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3.5 space-y-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 block">
-                  Batch
+              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3 space-y-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                  Date
                 </span>
-                <div className="font-mono text-base font-black text-amber-400 truncate" title={batch.batchNumber}>
-                  {batch.batchNumber}
+                <div className="font-mono text-sm font-bold text-slate-200">
+                  {batch.stockInDate || '—'}
+                </div>
+              </div>
+
+              <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-3 space-y-0.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 block">
+                  Available Rolls
+                </span>
+                <div className="font-mono text-base font-black text-emerald-400">
+                  {liveStock} Rolls
                 </div>
               </div>
             </div>
 
-            {/* Available Stock Display */}
-            <div className="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 border-2 border-emerald-500/40 rounded-2xl p-5 text-center shadow-inner relative overflow-hidden">
-              <div className="absolute top-2 right-2 flex items-center space-x-1 bg-emerald-500/20 text-emerald-300 text-[10px] font-black px-2 py-0.5 rounded-full border border-emerald-500/30">
-                <ShieldCheck className="w-3 h-3" />
-                <span>VERIFIED</span>
+            {/* ITEMS IN THIS BATCH (Table as per Client Specification) */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-black uppercase tracking-wider text-slate-200">
+                  ITEMS IN THIS BATCH ({itemsList.length} Lines)
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  Select an item line below to Stock OUT
+                </span>
               </div>
 
-              <span className="text-xs font-black uppercase tracking-widest text-slate-300 block mb-1">
-                AVAILABLE STOCK
-              </span>
-              <div className="text-4xl sm:text-5xl font-black text-emerald-400 tracking-tight font-mono">
-                {liveStock} <span className="text-xl sm:text-2xl text-slate-300 font-bold font-sans">Rolls</span>
+              <div className="border border-slate-800 rounded-2xl overflow-hidden bg-slate-950/60 shadow-inner">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-800/80 border-b border-slate-800 text-slate-400 font-semibold text-[10px] uppercase tracking-wider">
+                        <th className="py-2.5 px-3">Material</th>
+                        <th className="py-2.5 px-3">Size</th>
+                        <th className="py-2.5 px-3">Length</th>
+                        <th className="py-2.5 px-3 text-right">Available</th>
+                        <th className="py-2.5 px-3">Barcode</th>
+                        <th className="py-2.5 px-3 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60 font-mono">
+                      {itemsList.map((line) => {
+                        const isSelected = selectedBatchItemId === line.id;
+                        const isDepleted = line.remainingRollQuantity <= 0;
+
+                        return (
+                          <tr
+                            key={line.id}
+                            onClick={() => {
+                              if (!isDepleted) {
+                                setSelectedBatchItemId(line.id);
+                                setRollsOut(1);
+                                setIsStockOutOpen(true);
+                              }
+                            }}
+                            className={`transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'bg-amber-400/10 font-bold'
+                                : isDepleted
+                                ? 'opacity-40 bg-slate-900/40 cursor-not-allowed'
+                                : 'hover:bg-slate-800/40 text-slate-300'
+                            }`}
+                          >
+                            <td className="py-2.5 px-3 font-sans font-medium text-slate-200">
+                              <div className="font-bold">{line.materialNameSnapshot}</div>
+                              {line.categorySnapshot && (
+                                <div className="text-[10px] text-slate-500 font-sans">{line.categorySnapshot}</div>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-300">{line.width}M</td>
+                            <td className="py-2.5 px-3 text-slate-300">{line.rollLength}M</td>
+                            <td className="py-2.5 px-3 text-right font-black">
+                              <span
+                                className={`px-2 py-0.5 rounded ${
+                                  line.remainingRollQuantity > 0
+                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                    : 'bg-red-500/20 text-red-400'
+                                }`}
+                              >
+                                {line.remainingRollQuantity} {line.remainingRollQuantity === 1 ? 'Roll' : 'Rolls'}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-amber-400 font-bold text-[11px]">
+                              {batch.batchNumber}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <button
+                                type="button"
+                                disabled={isDepleted}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (!isDepleted) {
+                                    setSelectedBatchItemId(line.id);
+                                    setRollsOut(1);
+                                    setIsStockOutOpen(true);
+                                  }
+                                }}
+                                className={`px-2.5 py-1 rounded-lg text-[10px] font-sans font-bold transition-all cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-amber-400 text-slate-950 shadow-sm'
+                                    : isDepleted
+                                    ? 'bg-slate-800 text-slate-600 cursor-not-allowed'
+                                    : 'bg-slate-800 hover:bg-amber-400 hover:text-slate-950 text-slate-300'
+                                }`}
+                              >
+                                {isSelected ? 'Selected' : 'Select'}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-              <p className="text-[11px] text-slate-400 mt-2">
-                Initially received: <span className="text-slate-200 font-bold">{batch.initialRollQuantity} Rolls</span> &bull; Received on: <span className="text-slate-200">{batch.stockInDate || '2026-10-10'}</span>
-              </p>
             </div>
 
             {/* Primary Stock OUT Trigger Button */}
             {!isStockOutOpen && (
               <div>
-                {liveStock > 0 ? (
+                {targetStock > 0 ? (
                   <button
                     type="button"
                     onClick={() => {
                       setIsStockOutOpen(true);
-                      setRollsOut(liveStock >= 2 ? 2 : 1);
+                      setRollsOut(1);
                       setStockOutError('');
                     }}
-                    className="w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-2xl font-black text-base tracking-wide flex items-center justify-center space-x-2 shadow-lg shadow-emerald-500/20 transition-all active:scale-98 cursor-pointer"
+                    className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 shadow-lg shadow-emerald-500/20 transition-all active:scale-98 cursor-pointer"
                   >
-                    <ArrowUpFromLine className="w-5 h-5 stroke-[2.5]" />
-                    <span>STOCK OUT</span>
+                    <ArrowUpFromLine className="w-4 h-4 stroke-[2.5]" />
+                    <span>STOCK OUT: {selectedItem ? `${selectedItem.materialNameSnapshot} (${selectedItem.width}M)` : 'SELECTED ITEM'}</span>
                   </button>
                 ) : (
                   <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-2xl text-center text-xs text-red-300 font-bold">
-                    This batch is fully consumed (0 Rolls remaining).
+                    This item is fully consumed (0 Rolls remaining).
                   </div>
                 )}
               </div>
             )}
 
             {/* Stock OUT Workflow Panel */}
-            {isStockOutOpen && (
+            {isStockOutOpen && selectedItem && (
               <div className="bg-slate-950/90 border-2 border-amber-400/50 rounded-2xl p-5 space-y-4 animate-in fade-in slide-in-from-bottom-2">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                  <div className="flex items-center space-x-2">
-                    <ArrowUpFromLine className="w-4 h-4 text-amber-400" />
-                    <span className="text-xs font-black uppercase tracking-wider text-amber-400">
-                      Dispatch Rolls (Stock OUT)
-                    </span>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center space-x-2">
+                      <ArrowUpFromLine className="w-4 h-4 text-amber-400" />
+                      <span className="text-xs font-black uppercase tracking-wider text-amber-400">
+                        Stock OUT &bull; {selectedItem.materialNameSnapshot}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400">
+                      Size: <strong className="text-slate-200">{selectedItem.width}M</strong> &bull; Length: <strong className="text-slate-200">{selectedItem.rollLength}M</strong> &bull; Available: <strong className="text-emerald-400">{targetStock} Rolls</strong>
+                    </div>
                   </div>
                   <button
                     type="button"
@@ -409,12 +510,12 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
                     <input
                       type="number"
                       min={1}
-                      max={liveStock}
+                      max={targetStock}
                       value={rollsOut}
                       onChange={(e) => {
                         const val = parseInt(e.target.value, 10);
                         if (!isNaN(val)) {
-                          setRollsOut(Math.min(liveStock, Math.max(1, val)));
+                          setRollsOut(Math.min(targetStock, Math.max(1, val)));
                         }
                       }}
                       className="flex-1 bg-transparent text-center font-mono font-black text-2xl text-white outline-none focus:ring-0"
@@ -422,8 +523,8 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => setRollsOut((r) => Math.min(liveStock, r + 1))}
-                      disabled={rollsOut >= liveStock}
+                      onClick={() => setRollsOut((r) => Math.min(targetStock, r + 1))}
+                      disabled={rollsOut >= targetStock}
                       className="w-12 h-12 flex items-center justify-center bg-slate-800 hover:bg-slate-700 disabled:opacity-30 disabled:hover:bg-slate-800 text-white rounded-xl transition-colors cursor-pointer"
                     >
                       <Plus className="w-5 h-5" />
@@ -432,21 +533,21 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
                 </div>
 
                 {/* Before / After Calculation Display */}
-                <div className="grid grid-cols-2 gap-3 p-3.5 bg-slate-900/80 rounded-xl border border-slate-800">
+                <div className="grid grid-cols-2 gap-3 p-3.5 bg-slate-900/80 rounded-xl border border-slate-800 font-mono">
                   <div>
-                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block font-sans">
                       Before:
                     </span>
-                    <div className="text-base font-black text-slate-200 font-mono">
-                      {liveStock} Rolls
+                    <div className="text-base font-black text-slate-200">
+                      {targetStock} Rolls
                     </div>
                   </div>
 
                   <div>
-                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block">
+                    <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block font-sans">
                       After:
                     </span>
-                    <div className="text-base font-black text-emerald-400 font-mono">
+                    <div className="text-base font-black text-emerald-400">
                       {afterStock} Rolls
                     </div>
                   </div>
@@ -456,7 +557,7 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
                 <button
                   type="button"
                   onClick={handleConfirmStockOut}
-                  disabled={stockOutSubmitting || rollsOut <= 0 || rollsOut > liveStock}
+                  disabled={stockOutSubmitting || rollsOut <= 0 || rollsOut > targetStock}
                   className="w-full py-3.5 bg-amber-400 hover:bg-amber-300 disabled:bg-slate-700 disabled:text-slate-500 text-slate-950 rounded-xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 shadow-lg transition-all active:scale-98 cursor-pointer"
                 >
                   {stockOutSubmitting ? (
@@ -467,7 +568,7 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4" />
-                      <span>CONFIRM STOCK OUT</span>
+                      <span>CONFIRM STOCK OUT (-{rollsOut} {rollsOut === 1 ? 'Roll' : 'Rolls'})</span>
                     </>
                   )}
                 </button>

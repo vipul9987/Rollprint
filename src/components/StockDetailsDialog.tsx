@@ -113,19 +113,36 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
     return Array.from(set).sort((a, b) => a - b);
   }, [matchingItems]);
 
-  // Matching batches for this Material + Width
+  // Matching batches for this Material + Width (checks both batch level & child item lines)
   const matchingBatches = useMemo(() => {
     return batches.filter((b) => {
-      const matMatch = b.materialName.trim().toLowerCase() === targetMaterialLower;
+      if (b.items && b.items.length > 0) {
+        return b.items.some(
+          (it) =>
+            it.materialNameSnapshot?.trim().toLowerCase() === targetMaterialLower &&
+            normalizeNumericSize(it.width) === targetNormWidth
+        );
+      }
+      const matMatch = b.materialName?.trim().toLowerCase() === targetMaterialLower;
       if (!matMatch) return false;
-      return normalizeNumericSize(b.variantSize) === targetNormWidth;
+      return normalizeNumericSize(b.variantSize || '') === targetNormWidth;
     });
   }, [batches, targetMaterialLower, targetNormWidth, normalizeNumericSize]);
 
   // Available batches that currently have stock remaining > 0
   const activeBatchesWithStock = useMemo(() => {
-    return matchingBatches.filter((b) => b.currentRemainingRollQuantity > 0);
-  }, [matchingBatches]);
+    return matchingBatches.filter((b) => {
+      if (b.items && b.items.length > 0) {
+        const matchingItem = b.items.find(
+          (it) =>
+            it.materialNameSnapshot?.trim().toLowerCase() === targetMaterialLower &&
+            normalizeNumericSize(it.width) === targetNormWidth
+        );
+        return matchingItem ? matchingItem.remainingRollQuantity > 0 : b.currentRemainingRollQuantity > 0;
+      }
+      return b.currentRemainingRollQuantity > 0;
+    });
+  }, [matchingBatches, targetMaterialLower, targetNormWidth, normalizeNumericSize]);
 
   // 2. Filter transactions strictly for this Material + Size/Width
   // Uses normalized numeric values / IDs to avoid fragile display-string issues

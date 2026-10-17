@@ -25,7 +25,7 @@ import { findBatchesByBatchOrBarcode } from '../data/inventoryStore';
 interface BarcodeScannerViewProps {
   batches: MatrixBatch[];
   itemsWithStock: MatrixItemWithStock[];
-  onExecuteStockOut: (batch: MatrixBatch, rollsOut: number) => void;
+  onExecuteStockOut: (batch: MatrixBatch, rollsOut: number, batchItemId?: string) => void;
   onClose?: () => void;
   isModal?: boolean;
 }
@@ -46,12 +46,18 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   const [matchedItem, setMatchedItem] = useState<MatrixItemWithStock | null>(null);
   const [notFoundCode, setNotFoundCode] = useState<string>('');
   
+  // Selected Item Line inside Batch (Parent-Child)
+  const [selectedBatchItemId, setSelectedBatchItemId] = useState<string>('');
+  
   // Manual Input Fallback
   const [manualInput, setManualInput] = useState<string>('');
   
   // Stock OUT state
   const [rollsOut, setRollsOut] = useState<number>(1);
   const [lastDispatchedCount, setLastDispatchedCount] = useState<number>(1);
+  const [lastDispatchedItemName, setLastDispatchedItemName] = useState<string>('');
+  const [lastDispatchedSize, setLastDispatchedSize] = useState<string>('');
+  const [lastDispatchedLength, setLastDispatchedLength] = useState<number>(0);
   const [stockOutError, setStockOutError] = useState<string>('');
 
   // Camera & Stream State
@@ -144,25 +150,29 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         setMatchedBatch(found);
         setNotFoundCode('');
         
-        // Lookup matching item
-        const normSize = found.variantSize.trim();
-        const item = itemsWithStock.find(
-          (i) =>
-            i.materialName.toLowerCase() === found.materialName.toLowerCase() &&
-            i.variantSize.trim() === normSize
-        );
-        setMatchedItem(item || null);
-        setRollsOut(Math.min(1, Math.max(1, found.currentRemainingRollQuantity)));
+        // Auto-select first available item line in this batch
+        const availableItems = (found.items || []).filter((it) => it.remainingRollQuantity > 0);
+        const targetItem = availableItems[0] || found.items?.[0];
+        
+        if (targetItem) {
+          setSelectedBatchItemId(targetItem.id);
+          setRollsOut(Math.min(1, Math.max(1, targetItem.remainingRollQuantity)));
+        } else {
+          setSelectedBatchItemId('');
+          setRollsOut(Math.min(1, Math.max(1, found.currentRemainingRollQuantity)));
+        }
+        
         setStockOutError('');
         setPhase('FOUND');
       } else {
         setMatchedBatch(null);
         setMatchedItem(null);
+        setSelectedBatchItemId('');
         setNotFoundCode(clean);
         setPhase('NOT_FOUND');
       }
     },
-    [batches, itemsWithStock, stopCamera, triggerScanFeedback]
+    [batches, stopCamera, triggerScanFeedback]
   );
 
   // Start Camera with Dual Engine: Native BarcodeDetector (Chrome Android) + ZXing Fallback
@@ -359,20 +369,27 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   const handleConfirmStockOut = () => {
     if (!matchedBatch) return;
 
+    const currentItem = matchedBatch.items?.find((it) => it.id === selectedBatchItemId) || matchedBatch.items?.[0];
+    const available = currentItem ? currentItem.remainingRollQuantity : (matchedBatch.currentRemainingRollQuantity || 0);
+
     if (rollsOut <= 0) {
       setStockOutError('Please enter at least 1 roll.');
       return;
     }
 
-    if (rollsOut > matchedBatch.currentRemainingRollQuantity) {
+    if (rollsOut > available) {
       setStockOutError(
-        `Cannot remove ${rollsOut} rolls. Only ${matchedBatch.currentRemainingRollQuantity} rolls are available in this batch.`
+        `Cannot remove ${rollsOut} rolls. Only ${available} rolls are available for this item in this batch.`
       );
       return;
     }
 
     setLastDispatchedCount(rollsOut);
-    onExecuteStockOut(matchedBatch, rollsOut);
+    setLastDispatchedItemName(currentItem?.materialNameSnapshot || matchedBatch.materialName || 'Material');
+    setLastDispatchedSize(currentItem?.width || matchedBatch.variantSize || '');
+    setLastDispatchedLength(currentItem?.rollLength || matchedBatch.rollLengthMtr || 50);
+
+    onExecuteStockOut(matchedBatch, rollsOut, currentItem?.id);
     setPhase('SUCCESS');
   };
 
@@ -648,178 +665,296 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               </button>
             </div>
 
-            {/* Exact Required Batch Details Card */}
-            <div className="p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm space-y-4">
-              {/* Header: Material & Category */}
-              <div className="border-b border-slate-100 pb-3 flex items-start justify-between">
-                <div>
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                    Category: {matchedBatch.category || 'Roll'} &bull; Date: {matchedBatch.stockInDate}
-                  </span>
-                  <h3 className="text-xl font-black text-slate-900 tracking-tight mt-0.5">
-                    {matchedBatch.materialName}
-                  </h3>
-                </div>
+            {/* Batch Details & Multi-Item List Card */}
+            {(() => {
+              const itemsList = matchedBatch.items && matchedBatch.items.length > 0
+                ? matchedBatch.items
+                : [
+                    {
+                      id: `item-${matchedBatch.id}`,
+                      batchId: matchedBatch.id,
+                      materialNameSnapshot: matchedBatch.materialName || 'Material',
+                      categorySnapshot: matchedBatch.category || 'Roll Material',
+                      width: matchedBatch.variantSize || '1.02',
+                      rollLength: matchedBatch.rollLengthMtr || 50,
+                      initialRollQuantity: matchedBatch.initialRollQuantity || 1,
+                      remainingRollQuantity: matchedBatch.currentRemainingRollQuantity || 0,
+                      areaM2: Number(((parseFloat(matchedBatch.variantSize || '1.02') || 1) * (matchedBatch.rollLengthMtr || 50) * (matchedBatch.initialRollQuantity || 1)).toFixed(2)),
+                      createdAt: matchedBatch.createdAt
+                    }
+                  ];
 
-                <div className="text-right">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase block">Available in Batch</span>
-                  <span className="font-mono text-base font-black text-emerald-700">
-                    {matchedBatch.currentRemainingRollQuantity} {matchedBatch.currentRemainingRollQuantity === 1 ? 'Roll' : 'Rolls'}
-                  </span>
-                </div>
-              </div>
+              const totalAvailableRolls = itemsList.reduce((s, it) => s + it.remainingRollQuantity, 0);
+              const selectedItem = itemsList.find((it) => it.id === selectedBatchItemId) || itemsList[0];
 
-              {/* Grid of parameters */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 font-mono text-xs">
-                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-sans block uppercase font-bold">Size / Width</span>
-                  <strong className="text-slate-900 text-sm">{matchedBatch.variantSize} M</strong>
-                </div>
+              return (
+                <div className="p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm space-y-4">
+                  {/* Top Header: BATCH DETAILS */}
+                  <div className="border-b border-slate-100 pb-3 flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">
+                        BATCH DETAILS &bull; Date: {matchedBatch.stockInDate}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                        <span className="text-xl font-black text-slate-900 tracking-tight font-mono">
+                          Batch: {matchedBatch.batchNumber}
+                        </span>
+                        <span className="px-2 py-0.5 text-xs font-mono font-bold bg-slate-100 text-slate-800 rounded-md border border-slate-200">
+                          Invoice: {matchedBatch.invoiceNumber}
+                        </span>
+                      </div>
+                    </div>
 
-                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-sans block uppercase font-bold">Roll Length</span>
-                  <strong className="text-slate-900 text-sm">{matchedBatch.rollLengthMtr} M</strong>
-                </div>
+                    <div className="text-right">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase block">Total Batch Stock</span>
+                      <span className="font-mono text-base font-black text-emerald-700">
+                        {totalAvailableRolls} Rolls ({itemsList.length} Items)
+                      </span>
+                    </div>
+                  </div>
 
-                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-sans block uppercase font-bold">Invoice Number</span>
-                  <strong className="text-slate-900 text-sm">{matchedBatch.invoiceNumber}</strong>
-                </div>
+                  {/* ITEMS IN THIS BATCH (Table Display as per Client Specification) */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black uppercase tracking-wider text-slate-800">
+                        ITEMS IN THIS BATCH
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        Click an item line to select for Stock OUT
+                      </span>
+                    </div>
 
-                <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200">
-                  <span className="text-[10px] text-slate-500 font-sans block uppercase font-bold">Batch Number</span>
-                  <strong className="text-amber-800 text-sm font-black">{matchedBatch.batchNumber}</strong>
-                </div>
-              </div>
+                    <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold text-[11px] uppercase tracking-wider">
+                              <th className="py-2.5 px-3">Material</th>
+                              <th className="py-2.5 px-3">Size</th>
+                              <th className="py-2.5 px-3">Length</th>
+                              <th className="py-2.5 px-3 text-right">Available Rolls</th>
+                              <th className="py-2.5 px-3">Barcode</th>
+                              <th className="py-2.5 px-3 text-center">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {itemsList.map((line) => {
+                              const isSelected = selectedBatchItemId === line.id;
+                              const isDepleted = line.remainingRollQuantity <= 0;
 
-              {/* Area summary */}
-              <div className="p-3 bg-amber-50/70 rounded-xl border border-amber-200 font-mono text-xs flex items-center justify-between text-slate-700">
-                <span>Area Per Roll:</span>
-                <strong>
-                  {matchedBatch.variantSize} M &times; {matchedBatch.rollLengthMtr} M ={' '}
-                  {Number((parseFloat(matchedBatch.variantSize) * matchedBatch.rollLengthMtr).toFixed(2))} m²
-                </strong>
-              </div>
+                              return (
+                                <tr
+                                  key={line.id}
+                                  onClick={() => {
+                                    if (!isDepleted) {
+                                      setSelectedBatchItemId(line.id);
+                                      setRollsOut(1);
+                                      setStockOutError('');
+                                      setPhase('STOCK_OUT_CONFIRM');
+                                    }
+                                  }}
+                                  className={`transition-colors cursor-pointer ${
+                                    isSelected
+                                      ? 'bg-amber-50/70 border-l-4 border-l-amber-600'
+                                      : isDepleted
+                                      ? 'bg-slate-50/50 opacity-60'
+                                      : 'hover:bg-slate-50'
+                                  }`}
+                                >
+                                  <td className="py-2.5 px-3 font-bold text-slate-900">
+                                    <div className="flex items-center gap-1.5">
+                                      {isSelected && (
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
+                                      )}
+                                      <span>{line.materialNameSnapshot}</span>
+                                    </div>
+                                  </td>
+                                  <td className="py-2.5 px-3 font-mono font-bold text-slate-700 whitespace-nowrap">
+                                    {line.width} M
+                                  </td>
+                                  <td className="py-2.5 px-3 font-mono font-bold text-slate-700 whitespace-nowrap">
+                                    {line.rollLength} M
+                                  </td>
+                                  <td className="py-2.5 px-3 text-right font-mono font-black whitespace-nowrap">
+                                    <span className={isDepleted ? 'text-slate-400' : 'text-emerald-700'}>
+                                      {line.remainingRollQuantity} {line.remainingRollQuantity === 1 ? 'Roll' : 'Rolls'}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-3 font-mono text-indigo-700 font-bold whitespace-nowrap">
+                                    <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-200 rounded-md">
+                                      {matchedBatch.batchNumber}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                    {isDepleted ? (
+                                      <span className="text-[10px] font-semibold text-slate-400">
+                                        Depleted
+                                      </span>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedBatchItemId(line.id);
+                                          setRollsOut(1);
+                                          setStockOutError('');
+                                          setPhase('STOCK_OUT_CONFIRM');
+                                        }}
+                                        className="px-2.5 py-1 text-[11px] font-bold bg-amber-600 hover:bg-amber-700 text-white rounded-lg shadow-2xs transition-colors cursor-pointer"
+                                      >
+                                        Stock OUT
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
 
-              {/* PRIMARY ACTION BUTTON: STOCK OUT */}
-              {phase === 'FOUND' && (
-                <div className="pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setPhase('STOCK_OUT_CONFIRM')}
-                    className="w-full py-3.5 px-4 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-sm font-black flex items-center justify-center space-x-2 shadow-md transition-all active:scale-98 cursor-pointer"
-                  >
-                    <ArrowUpFromLine className="w-5 h-5 stroke-[2.5]" />
-                    <span>STOCK OUT</span>
-                  </button>
+                  {/* Stock OUT Action Area */}
+                  {phase === 'FOUND' && selectedItem && selectedItem.remainingRollQuantity > 0 && (
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setPhase('STOCK_OUT_CONFIRM')}
+                        className="w-full py-3 px-4 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black flex items-center justify-center space-x-2 shadow-md transition-all active:scale-98 cursor-pointer"
+                      >
+                        <ArrowUpFromLine className="w-4 h-4 stroke-[2.5]" />
+                        <span>STOCK OUT: {selectedItem.materialNameSnapshot} ({selectedItem.width}M &times; {selectedItem.rollLength}M)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()}
 
             {/* ======================================================= */}
-            {/* STOCK OUT CONFIRMATION PANEL (When STOCK OUT is clicked) */}
+            {/* STOCK OUT CONFIRMATION PANEL (When item is selected)    */}
             {/* ======================================================= */}
-            {phase === 'STOCK_OUT_CONFIRM' && (
-              <div className="p-5 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-300 shadow-md space-y-4 animate-in fade-in">
-                <div className="flex items-center justify-between border-b border-amber-200 pb-3">
-                  <div className="flex items-center space-x-2 text-slate-900 font-black text-sm">
-                    <ArrowUpFromLine className="w-4 h-4 text-amber-700" />
-                    <span>Confirm Stock OUT</span>
-                  </div>
-                  <span className="text-xs font-mono text-amber-900 font-bold">
-                    Batch: {matchedBatch.batchNumber}
-                  </span>
-                </div>
+            {phase === 'STOCK_OUT_CONFIRM' && (() => {
+              const itemsList = matchedBatch.items && matchedBatch.items.length > 0 ? matchedBatch.items : [];
+              const selectedItem = itemsList.find((it) => it.id === selectedBatchItemId) || itemsList[0] || {
+                materialNameSnapshot: matchedBatch.materialName || 'Material',
+                width: matchedBatch.variantSize || '1.02',
+                rollLength: matchedBatch.rollLengthMtr || 50,
+                remainingRollQuantity: matchedBatch.currentRemainingRollQuantity || 0
+              };
+              const itemAvailable = selectedItem.remainingRollQuantity;
 
-                {stockOutError && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-bold flex items-center space-x-2">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>{stockOutError}</span>
-                  </div>
-                )}
+              return (
+                <div className="p-5 bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-300 shadow-md space-y-4 animate-in fade-in">
+                  <div className="flex flex-wrap items-center justify-between border-b border-amber-200 pb-3 gap-2">
+                    <div>
+                      <div className="flex items-center space-x-2 text-slate-900 font-black text-sm">
+                        <ArrowUpFromLine className="w-4 h-4 text-amber-700" />
+                        <span>Confirm Stock OUT — {selectedItem.materialNameSnapshot}</span>
+                      </div>
+                      <div className="text-xs text-slate-600 font-mono mt-0.5">
+                        Size: {selectedItem.width} M &bull; Length: {selectedItem.rollLength} M &bull; Available: {itemAvailable} Rolls
+                      </div>
+                    </div>
 
-                {/* Rolls OUT Stepper Input */}
-                <div className="space-y-1.5">
-                  <label className="block text-xs font-bold text-slate-800">Rolls OUT</label>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => setRollsOut((c) => Math.max(1, c - 1))}
-                      className="p-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-amber-300 font-bold cursor-pointer"
-                    >
-                      <Minus className="w-4 h-4" />
-                    </button>
-
-                    <input
-                      type="number"
-                      min="1"
-                      max={matchedBatch.currentRemainingRollQuantity}
-                      value={rollsOut}
-                      onChange={(e) => {
-                        const val = parseInt(e.target.value, 10);
-                        if (!isNaN(val)) setRollsOut(val);
-                      }}
-                      className="flex-1 p-2.5 bg-white border border-amber-300 rounded-xl text-center font-mono font-black text-lg text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
-                    />
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setRollsOut((c) =>
-                          Math.min(matchedBatch.currentRemainingRollQuantity, c + 1)
-                        )
-                      }
-                      className="p-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-amber-300 font-bold cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Stock Transition Preview: Before -> After */}
-                <div className="grid grid-cols-3 gap-2 text-center font-mono text-xs">
-                  <div className="p-2.5 bg-white rounded-xl border border-amber-200">
-                    <span className="text-[10px] text-slate-500 font-sans block uppercase font-bold">Before</span>
-                    <span className="font-bold text-slate-900 text-sm">
-                      {matchedBatch.currentRemainingRollQuantity} {matchedBatch.currentRemainingRollQuantity === 1 ? 'Roll' : 'Rolls'}
+                    <span className="text-xs font-mono text-amber-900 font-bold bg-amber-100 px-2 py-0.5 rounded-md border border-amber-200">
+                      Batch: {matchedBatch.batchNumber}
                     </span>
                   </div>
 
-                  <div className="p-2.5 bg-white rounded-xl border border-amber-200">
-                    <span className="text-[10px] text-amber-700 font-sans block uppercase font-bold">Rolls OUT</span>
-                    <span className="font-bold text-amber-700 text-sm">-{rollsOut} Rolls</span>
+                  {stockOutError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-bold flex items-center space-x-2">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>{stockOutError}</span>
+                    </div>
+                  )}
+
+                  {/* Rolls OUT Stepper Input */}
+                  <div className="space-y-1.5">
+                    <label className="block text-xs font-bold text-slate-800">
+                      Rolls OUT for {selectedItem.materialNameSnapshot} ({selectedItem.width}M &times; {selectedItem.rollLength}M)
+                    </label>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => setRollsOut((c) => Math.max(1, c - 1))}
+                        className="p-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-amber-300 font-bold cursor-pointer"
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+
+                      <input
+                        type="number"
+                        min="1"
+                        max={itemAvailable}
+                        value={rollsOut}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value, 10);
+                          if (!isNaN(val)) setRollsOut(val);
+                        }}
+                        className="flex-1 p-2.5 bg-white border border-amber-300 rounded-xl text-center font-mono font-black text-lg text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setRollsOut((c) =>
+                            Math.min(itemAvailable, c + 1)
+                          )
+                        }
+                        className="p-2.5 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-amber-300 font-bold cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="p-2.5 bg-slate-900 text-white rounded-xl shadow-xs">
-                    <span className="text-[10px] text-slate-300 font-sans block uppercase font-bold">After</span>
-                    <span className="font-black text-white text-sm">
-                      {Math.max(0, matchedBatch.currentRemainingRollQuantity - rollsOut)}{' '}
-                      {Math.max(0, matchedBatch.currentRemainingRollQuantity - rollsOut) === 1 ? 'Roll' : 'Rolls'}
-                    </span>
+                  {/* Stock Transition Preview: Before -> After */}
+                  <div className="grid grid-cols-3 gap-2 text-center font-mono text-xs">
+                    <div className="p-2.5 bg-white rounded-xl border border-amber-200">
+                      <span className="text-[10px] text-slate-500 font-sans block uppercase font-bold">Before</span>
+                      <span className="font-bold text-slate-900 text-sm">
+                        {itemAvailable} {itemAvailable === 1 ? 'Roll' : 'Rolls'}
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 bg-white rounded-xl border border-amber-200">
+                      <span className="text-[10px] text-amber-700 font-sans block uppercase font-bold">Rolls OUT</span>
+                      <span className="font-bold text-amber-700 text-sm">-{rollsOut} Rolls</span>
+                    </div>
+
+                    <div className="p-2.5 bg-slate-900 text-white rounded-xl shadow-xs">
+                      <span className="text-[10px] text-slate-300 font-sans block uppercase font-bold">After</span>
+                      <span className="font-black text-white text-sm">
+                        {Math.max(0, itemAvailable - rollsOut)}{' '}
+                        {Math.max(0, itemAvailable - rollsOut) === 1 ? 'Roll' : 'Rolls'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Confirm Action Button */}
+                  <div className="pt-2 flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPhase('FOUND')}
+                      className="px-4 py-3 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold border border-slate-300 cursor-pointer"
+                    >
+                      Back to Items List
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleConfirmStockOut}
+                      className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center space-x-1.5 shadow-md active:scale-98 transition-all cursor-pointer"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>CONFIRM STOCK OUT (-{rollsOut} ROLLS)</span>
+                    </button>
                   </div>
                 </div>
-
-                {/* Confirm Action Button */}
-                <div className="pt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPhase('FOUND')}
-                    className="px-4 py-3 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold border border-slate-300 cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleConfirmStockOut}
-                    className="flex-1 py-3 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center justify-center space-x-1.5 shadow-md active:scale-98 transition-all cursor-pointer"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>CONFIRM STOCK OUT</span>
-                  </button>
-                </div>
-              </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
@@ -838,12 +973,12 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               </h3>
               <p className="text-xs text-emerald-800 mt-1 max-w-md mx-auto">
                 Dispatched <strong>{lastDispatchedCount} Roll(s)</strong> of{' '}
-                <strong>{matchedBatch.materialName}</strong> ({matchedBatch.variantSize}M &times; {matchedBatch.rollLengthMtr}M).
+                <strong>{lastDispatchedItemName || matchedBatch.materialName}</strong> ({lastDispatchedSize || matchedBatch.variantSize}M &times; {lastDispatchedLength || matchedBatch.rollLengthMtr}M).
               </p>
             </div>
 
             <div className="p-3 bg-white rounded-xl border border-emerald-200 inline-block font-mono text-xs text-slate-700">
-              <span>Batch {matchedBatch.batchNumber} Stock Remaining: </span>
+              <span>Batch {matchedBatch.batchNumber} Total Remaining: </span>
               <strong className="text-emerald-800 text-sm">
                 {Math.max(0, matchedBatch.currentRemainingRollQuantity - lastDispatchedCount)} Rolls
               </strong>

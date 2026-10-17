@@ -23,19 +23,35 @@ export interface MatrixInventoryItem {
   createdAt: string;
 }
 
+export interface MatrixBatchItem {
+  id: string; // Internal unique ID / UUID for this item line
+  batchId: string; // Foreign key to parent MatrixBatch.id
+  materialId?: string; // Reference to master inventory item if linked
+  materialNameSnapshot: string; // Material name (e.g. "Bronze (S Prints) N", "Flex Tufan")
+  categorySnapshot?: string; // Category snapshot (e.g. "Flex PVC")
+  width: string; // Size / Width in metres (e.g. "1.32", "1.63", "1.93")
+  rollLength: number; // Length per roll in metres (e.g. 70, 50, 45)
+  initialRollQuantity: number; // Initial received rolls for this item line
+  remainingRollQuantity: number; // Currently available rolls for this item line
+  areaM2: number; // Width × Length × Quantity
+  createdAt: string;
+}
+
 export interface MatrixBatch {
   id: string; // Internal unique ID / UUID
-  batchNumber: string; // e.g. 101026GT28728 (DDMMYY + 9-char cleaned invoice, max 15 chars)
-  materialName: string;
-  category: string;
-  variantSize: string; // e.g. "1.63"
-  rollLengthMtr: number; // e.g. 50
-  initialRollQuantity: number; // Initial received rolls in this batch
-  currentRemainingRollQuantity: number; // Remaining rolls in this batch
+  batchNumber: string; // e.g. 101026GT28728 (UNIQUE: DDMMYY + Cleaned Invoice)
   invoiceNumber: string; // Original, complete invoice number as entered
-  stockInDate: string; // Date received (YYYY-MM-DD or display date)
+  stockInDate: string; // Date received (YYYY-MM-DD)
   barcodeValue: string; // Exactly equal to batchNumber (e.g. 101026GT28728)
   createdAt: string;
+  items: MatrixBatchItem[]; // 1 Batch / Invoice -> Multiple Batch Item Lines
+  // Backwards compatibility / convenience fields:
+  materialName?: string;
+  category?: string;
+  variantSize?: string;
+  rollLengthMtr?: number;
+  initialRollQuantity?: number;
+  currentRemainingRollQuantity?: number;
 }
 
 export interface MatrixStockTransaction {
@@ -56,7 +72,8 @@ export interface MatrixStockTransaction {
   date: string;
   invoiceNumber?: string; // Original complete invoice number
   batchNumber?: string; // Generated batch number / barcode
-  batchId?: string; // Reference to batch
+  batchId?: string; // Reference to parent batch
+  batchItemId?: string; // Reference to specific batch item line
   createdAt: string;
 }
 

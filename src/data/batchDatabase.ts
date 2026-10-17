@@ -151,7 +151,8 @@ export async function queryBatchFromDatabase(rawBatchCode: string): Promise<Batc
  */
 export async function executeStockOutTransaction(
   rawBatchCode: string,
-  rollsOut: number
+  rollsOut: number,
+  batchItemId?: string
 ): Promise<{ success: boolean; error?: string; updatedBatch?: MatrixBatch; newRemainingStock?: number }> {
   if (rollsOut <= 0) {
     return { success: false, error: 'Rolls OUT must be at least 1 roll.' };
@@ -164,45 +165,85 @@ export async function executeStockOutTransaction(
 
   const { batch, item } = query;
 
-  if (rollsOut > batch.currentRemainingRollQuantity) {
+  // Determine target item line if batch has items
+  let targetItemLine = batch.items && batch.items.length > 0
+    ? (batchItemId ? batch.items.find((it) => it.id === batchItemId) : batch.items.find((it) => it.remainingRollQuantity >= rollsOut) || batch.items[0])
+    : undefined;
+
+  const availableRolls = targetItemLine ? targetItemLine.remainingRollQuantity : batch.currentRemainingRollQuantity;
+
+  if (rollsOut > availableRolls) {
+    const itemName = targetItemLine ? targetItemLine.materialNameSnapshot : batch.materialName;
     return {
       success: false,
-      error: `Cannot stock out ${rollsOut} rolls. Only ${batch.currentRemainingRollQuantity} rolls currently available in this batch.`
+      error: `Cannot stock out ${rollsOut} rolls. Only ${availableRolls} rolls currently available for ${itemName}.`
     };
   }
 
-  const newBatchRemaining = batch.currentRemainingRollQuantity - rollsOut;
-
   // 1. Update batch in batches list
   const batches = getStoredMatrixBatches();
+  let updatedBatchRecord: MatrixBatch | undefined;
+
   const updatedBatches = batches.map((b) => {
-    if (b.batchNumber === batch.batchNumber) {
-      return {
+    if (b.batchNumber === batch.batchNumber || b.id === batch.id) {
+      let updatedItems = b.items;
+      if (b.items && b.items.length > 0) {
+        updatedItems = b.items.map((it) => {
+          if (targetItemLine && it.id === targetItemLine.id) {
+            return {
+              ...it,
+              remainingRollQuantity: Math.max(0, it.remainingRollQuantity - rollsOut)
+            };
+          }
+          return it;
+        });
+      }
+
+      const newBatchRemaining = updatedItems && updatedItems.length > 0
+        ? updatedItems.reduce((sum, it) => sum + it.remainingRollQuantity, 0)
+        : Math.max(0, b.currentRemainingRollQuantity - rollsOut);
+
+      updatedBatchRecord = {
         ...b,
+        items: updatedItems,
         currentRemainingRollQuantity: newBatchRemaining
       };
+      return updatedBatchRecord;
     }
     return b;
   });
+
   saveStoredMatrixBatches(updatedBatches);
 
-  // 2. Calculate area
-  const widthNum = parseFloat(batch.variantSize) || 1.0;
-  const lengthNum = batch.rollLengthMtr || 50;
+  if (!updatedBatchRecord) {
+    updatedBatchRecord = {
+      ...batch,
+      currentRemainingRollQuantity: Math.max(0, batch.currentRemainingRollQuantity - rollsOut)
+    };
+  }
+
+  // 2. Calculate area & item attributes
+  const effectiveMatName = targetItemLine?.materialNameSnapshot || batch.materialName;
+  const effectiveCategory = targetItemLine?.categorySnapshot || batch.category;
+  const effectiveWidth = targetItemLine?.width || batch.variantSize;
+  const effectiveLength = targetItemLine?.rollLength || batch.rollLengthMtr || 50;
+
+  const widthNum = parseFloat(effectiveWidth) || 1.0;
+  const lengthNum = effectiveLength;
   const areaMtr2 = Number((widthNum * lengthNum * rollsOut).toFixed(2));
 
   // 3. Create OUT transaction
   const transactions = getStoredMatrixTransactions();
   const itemStockBefore = item ? item.currentStock : batch.currentRemainingRollQuantity;
-  const itemStockAfter = itemStockBefore - rollsOut;
+  const itemStockAfter = Math.max(0, itemStockBefore - rollsOut);
 
   const newTxn: MatrixStockTransaction = {
     id: `txn-out-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     itemId: item ? item.id : `item-${batch.batchNumber}`,
-    materialName: batch.materialName,
-    category: batch.category,
-    variantSize: batch.variantSize,
-    rollLengthMtr: batch.rollLengthMtr,
+    materialName: effectiveMatName,
+    category: effectiveCategory,
+    variantSize: effectiveWidth,
+    rollLengthMtr: effectiveLength,
     barcode: batch.batchNumber,
     type: 'OUT',
     quantity: rollsOut,
@@ -214,6 +255,7 @@ export async function executeStockOutTransaction(
     invoiceNumber: batch.invoiceNumber,
     batchNumber: batch.batchNumber,
     batchId: batch.id,
+    batchItemId: targetItemLine?.id,
     createdAt: new Date().toISOString()
   };
 
@@ -226,7 +268,7 @@ export async function executeStockOutTransaction(
 
   if (supabaseUrl && supabaseKey) {
     try {
-      // Patch batch
+      // Patch batch total
       const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/stock_batches?batch_number=eq.${encodeURIComponent(batch.batchNumber)}`;
       await fetch(endpoint, {
         method: 'PATCH',
@@ -237,9 +279,26 @@ export async function executeStockOutTransaction(
           Prefer: 'return=minimal'
         },
         body: JSON.stringify({
-          current_remaining_roll_quantity: newBatchRemaining
+          current_remaining_roll_quantity: updatedBatchRecord.currentRemainingRollQuantity
         })
       });
+
+      // Patch specific batch item if targetItemLine exists
+      if (targetItemLine) {
+        const itemEndpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/stock_batch_items?id=eq.${encodeURIComponent(targetItemLine.id)}`;
+        await fetch(itemEndpoint, {
+          method: 'PATCH',
+          headers: {
+            apikey: supabaseKey,
+            Authorization: `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+            Prefer: 'return=minimal'
+          },
+          body: JSON.stringify({
+            remaining_roll_quantity: Math.max(0, targetItemLine.remainingRollQuantity - rollsOut)
+          })
+        });
+      }
 
       // Insert transaction
       const txnEndpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/stock_transactions`;
@@ -256,7 +315,7 @@ export async function executeStockOutTransaction(
           quantity: rollsOut,
           unit: 'ROLL',
           reference_number: batch.invoiceNumber,
-          notes: `Batch ${batch.batchNumber} phone scan Stock OUT`
+          notes: `Batch ${batch.batchNumber} Stock OUT: ${effectiveMatName} (${effectiveWidth}M)`
         })
       });
     } catch (e) {
@@ -264,14 +323,13 @@ export async function executeStockOutTransaction(
     }
   }
 
-  const updatedBatchRecord: MatrixBatch = {
-    ...batch,
-    currentRemainingRollQuantity: newBatchRemaining
-  };
+  const remainingStock = targetItemLine
+    ? Math.max(0, targetItemLine.remainingRollQuantity - rollsOut)
+    : updatedBatchRecord.currentRemainingRollQuantity;
 
   return {
     success: true,
     updatedBatch: updatedBatchRecord,
-    newRemainingStock: newBatchRemaining
+    newRemainingStock: remainingStock
   };
 }

@@ -4,7 +4,8 @@ import {
   MatrixItemWithStock,
   MatrixDashboardMetrics,
   InventorySummaryGroup,
-  MatrixBatch
+  MatrixBatch,
+  MatrixBatchItem
 } from '../types/inventory';
 
 const STORAGE_KEY_ITEMS = 'rollprint_client_excel_matrix_v8';
@@ -204,83 +205,281 @@ export function findBatchesByBatchOrBarcode(batches: MatrixBatch[], code: string
 
 export const INITIAL_MATRIX_BATCHES: MatrixBatch[] = [
   {
-    id: 'bat-init-1',
+    id: 'bat-init-gt28728',
     batchNumber: '101026GT28728',
-    materialName: 'Bright FL 26',
-    category: 'Frontlit Flex',
-    variantSize: '1.63',
-    rollLengthMtr: 50,
-    initialRollQuantity: 10,
-    currentRemainingRollQuantity: 10,
     invoiceNumber: 'GT28728',
     stockInDate: '2026-10-10',
     barcodeValue: '101026GT28728',
-    createdAt: '2026-10-10T08:00:00Z'
+    createdAt: '2026-10-10T08:00:00Z',
+    items: [
+      {
+        id: 'it-gt28728-1',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Bronze (S Prints) N',
+        categorySnapshot: 'Flex PVC',
+        width: '1.32',
+        rollLength: 70,
+        initialRollQuantity: 1,
+        remainingRollQuantity: 1,
+        areaM2: 92.4,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-2',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Bronze (S Prints) N',
+        categorySnapshot: 'Flex PVC',
+        width: '1.63',
+        rollLength: 70,
+        initialRollQuantity: 1,
+        remainingRollQuantity: 1,
+        areaM2: 114.1,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-3',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Bronze (S Prints) N',
+        categorySnapshot: 'Flex PVC',
+        width: '1.93',
+        rollLength: 70,
+        initialRollQuantity: 2,
+        remainingRollQuantity: 2,
+        areaM2: 270.2,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-4',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Bronze (S Prints) N',
+        categorySnapshot: 'Flex PVC',
+        width: '2.54',
+        rollLength: 70,
+        initialRollQuantity: 2,
+        remainingRollQuantity: 2,
+        areaM2: 355.6,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-5',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Bronze (S Prints) N',
+        categorySnapshot: 'Flex PVC',
+        width: '3.20',
+        rollLength: 50,
+        initialRollQuantity: 2,
+        remainingRollQuantity: 2,
+        areaM2: 320.0,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-6',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Bronze (S Prints) N',
+        categorySnapshot: 'Flex PVC',
+        width: '3.20',
+        rollLength: 45,
+        initialRollQuantity: 1,
+        remainingRollQuantity: 1,
+        areaM2: 144.0,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-7',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Flex Tufan',
+        categorySnapshot: 'Flex PVC',
+        width: '1.93',
+        rollLength: 70,
+        initialRollQuantity: 3,
+        remainingRollQuantity: 3,
+        areaM2: 405.3,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-8',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Flex Tufan',
+        categorySnapshot: 'Flex PVC',
+        width: '2.54',
+        rollLength: 70,
+        initialRollQuantity: 2,
+        remainingRollQuantity: 2,
+        areaM2: 355.6,
+        createdAt: '2026-10-10T08:00:00Z'
+      },
+      {
+        id: 'it-gt28728-9',
+        batchId: 'bat-init-gt28728',
+        materialNameSnapshot: 'Flex Tufan',
+        categorySnapshot: 'Flex PVC',
+        width: '3.20',
+        rollLength: 70,
+        initialRollQuantity: 3,
+        remainingRollQuantity: 3,
+        areaM2: 672.0,
+        createdAt: '2026-10-10T08:00:00Z'
+      }
+    ],
+    materialName: 'Bronze (S Prints) N',
+    category: 'Flex PVC',
+    variantSize: '1.93',
+    rollLengthMtr: 70,
+    initialRollQuantity: 17,
+    currentRemainingRollQuantity: 17
   },
   {
     id: 'bat-init-2',
     batchNumber: '121026AB12345',
+    invoiceNumber: 'AB-12/345',
+    stockInDate: '2026-10-12',
+    barcodeValue: '121026AB12345',
+    createdAt: '2026-10-12T09:00:00Z',
+    items: [
+      {
+        id: 'it-ab12345-1',
+        batchId: 'bat-init-2',
+        materialNameSnapshot: 'Bright FL 26',
+        categorySnapshot: 'Frontlit Flex',
+        width: '1.63',
+        rollLength: 50,
+        initialRollQuantity: 5,
+        remainingRollQuantity: 5,
+        areaM2: 407.5,
+        createdAt: '2026-10-12T09:00:00Z'
+      }
+    ],
     materialName: 'Bright FL 26',
     category: 'Frontlit Flex',
     variantSize: '1.63',
     rollLengthMtr: 50,
     initialRollQuantity: 5,
-    currentRemainingRollQuantity: 5,
-    invoiceNumber: 'AB-12/345',
-    stockInDate: '2026-10-12',
-    barcodeValue: '121026AB12345',
-    createdAt: '2026-10-12T09:00:00Z'
+    currentRemainingRollQuantity: 5
   },
   {
     id: 'bat-init-3',
     batchNumber: '091026GT8812',
+    invoiceNumber: 'GT8812',
+    stockInDate: '2026-10-09',
+    barcodeValue: '091026GT8812',
+    createdAt: '2026-10-09T08:30:00Z',
+    items: [
+      {
+        id: 'it-gt8812-1',
+        batchId: 'bat-init-3',
+        materialNameSnapshot: 'Backlit Sunlex',
+        categorySnapshot: 'Backlit',
+        width: '1.63',
+        rollLength: 50,
+        initialRollQuantity: 5,
+        remainingRollQuantity: 5,
+        areaM2: 407.5,
+        createdAt: '2026-10-09T08:30:00Z'
+      }
+    ],
     materialName: 'Backlit Sunlex',
     category: 'Backlit',
     variantSize: '1.63',
     rollLengthMtr: 50,
     initialRollQuantity: 5,
-    currentRemainingRollQuantity: 5,
-    invoiceNumber: 'GT8812',
-    stockInDate: '2026-10-09',
-    barcodeValue: '091026GT8812',
-    createdAt: '2026-10-09T08:30:00Z'
+    currentRemainingRollQuantity: 5
   },
   {
     id: 'bat-init-hetax-ge23542',
     batchNumber: '101026GE23542',
+    invoiceNumber: 'GE23542',
+    stockInDate: '2026-10-10',
+    barcodeValue: '101026GE23542',
+    createdAt: '2026-10-10T10:00:00Z',
+    items: [
+      {
+        id: 'it-ge23542-1',
+        batchId: 'bat-init-hetax-ge23542',
+        materialNameSnapshot: 'Backlit Hetax',
+        categorySnapshot: 'Backlit',
+        width: '1.02',
+        rollLength: 12,
+        initialRollQuantity: 7,
+        remainingRollQuantity: 7,
+        areaM2: 85.68,
+        createdAt: '2026-10-10T10:00:00Z'
+      }
+    ],
     materialName: 'Backlit Hetax',
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 12,
     initialRollQuantity: 7,
-    currentRemainingRollQuantity: 7,
-    invoiceNumber: 'GE23542',
-    stockInDate: '2026-10-10',
-    barcodeValue: '101026GE23542',
-    createdAt: '2026-10-10T10:00:00Z'
+    currentRemainingRollQuantity: 7
   }
 ];
 
 export function getStoredMatrixBatches(): MatrixBatch[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_BATCHES);
-    if (!raw) return INITIAL_MATRIX_BATCHES;
-    const parsed: MatrixBatch[] = JSON.parse(raw);
-    const list = Array.isArray(parsed) && parsed.length > 0 ? parsed : INITIAL_MATRIX_BATCHES;
-    
-    // Auto-repair known development test case SDFSAF if saved with 50M
-    let hasChanged = false;
-    const sanitized = list.map((b) => {
-      if (
-        (b.invoiceNumber?.toUpperCase() === 'SDFSAF' || b.batchNumber?.toUpperCase() === '101026SDFSAF') &&
-        b.materialName === 'Backlit Hetax' &&
-        b.variantSize === '1.02' &&
-        b.rollLengthMtr === 50
-      ) {
-        hasChanged = true;
-        return { ...b, rollLengthMtr: 22 };
+    let list: MatrixBatch[] = INITIAL_MATRIX_BATCHES;
+    if (raw) {
+      const parsed: MatrixBatch[] = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        list = parsed;
       }
-      return b;
+    }
+
+    let hasChanged = false;
+
+    // Normalization & Parent-Child items guarantee
+    const sanitized = list.map((b) => {
+      let items = b.items;
+      if (!Array.isArray(items) || items.length === 0) {
+        hasChanged = true;
+        const initialQty = b.initialRollQuantity || 1;
+        const remainingQty = b.currentRemainingRollQuantity ?? initialQty;
+        const widthStr = b.variantSize || '1.02';
+        const lengthNum = b.rollLengthMtr || 50;
+        const widthNum = parseFloat(widthStr) || 1.0;
+        items = [
+          {
+            id: `item-${b.id || Math.random().toString(36).substr(2, 6)}`,
+            batchId: b.id,
+            materialNameSnapshot: b.materialName || 'Material',
+            categorySnapshot: b.category || 'Roll Material',
+            width: widthStr,
+            rollLength: lengthNum,
+            initialRollQuantity: initialQty,
+            remainingRollQuantity: remainingQty,
+            areaM2: Number((widthNum * lengthNum * initialQty).toFixed(2)),
+            createdAt: b.createdAt || new Date().toISOString()
+          }
+        ];
+      }
+
+      // Auto-repair known development test case SDFSAF if saved with 50M
+      if (
+        (b.invoiceNumber?.toUpperCase() === 'SDFSAF' || b.batchNumber?.toUpperCase() === '101026SDFSAF')
+      ) {
+        items = items.map((it) => {
+          if (it.materialNameSnapshot === 'Backlit Hetax' && it.width === '1.02' && it.rollLength === 50) {
+            hasChanged = true;
+            return { ...it, rollLength: 22 };
+          }
+          return it;
+        });
+      }
+
+      const totalInitial = items.reduce((sum, it) => sum + (it.initialRollQuantity || 0), 0);
+      const totalRemaining = items.reduce((sum, it) => sum + (it.remainingRollQuantity || 0), 0);
+      const firstItem = items[0];
+
+      return {
+        ...b,
+        items,
+        materialName: b.materialName || firstItem?.materialNameSnapshot || '',
+        category: b.category || firstItem?.categorySnapshot || '',
+        variantSize: b.variantSize || firstItem?.width || '',
+        rollLengthMtr: b.rollLengthMtr || firstItem?.rollLength || 50,
+        initialRollQuantity: totalInitial,
+        currentRemainingRollQuantity: totalRemaining
+      };
     });
 
     // Ensure test batch 101026GE23542 is always available with 7 rolls requirement
@@ -291,10 +490,16 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
         sanitized.push({ ...geBatch });
         hasChanged = true;
       }
-    } else if (sanitized[geBatchIndex].initialRollQuantity === 1 && sanitized[geBatchIndex].currentRemainingRollQuantity === 1) {
-      sanitized[geBatchIndex].initialRollQuantity = 7;
-      sanitized[geBatchIndex].currentRemainingRollQuantity = 7;
-      hasChanged = true;
+    } else {
+      const geBatch = sanitized[geBatchIndex];
+      const hetaxItem = geBatch.items.find((it) => it.materialNameSnapshot === 'Backlit Hetax');
+      if (hetaxItem && (hetaxItem.initialRollQuantity === 1 && hetaxItem.remainingRollQuantity === 1)) {
+        hetaxItem.initialRollQuantity = 7;
+        hetaxItem.remainingRollQuantity = 7;
+        geBatch.initialRollQuantity = 7;
+        geBatch.currentRemainingRollQuantity = 7;
+        hasChanged = true;
+      }
     }
 
     if (hasChanged) {
@@ -305,6 +510,7 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
     return INITIAL_MATRIX_BATCHES;
   }
 }
+
 
 export function saveStoredMatrixBatches(batches: MatrixBatch[]): void {
   try {
