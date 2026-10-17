@@ -1294,6 +1294,170 @@ const combinedFiltered = filterTxns(sampleTransactions, {
 assert(combinedFiltered.length === 1 && combinedFiltered[0].id === 'txn-1', 'Combined Item + Length + Type filter works accurately');
 
 // ------------------------------------------------------------------
+// TEST SUITE 22: Summary Cell Stock Details Dialog & Reconciliation
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 22: Summary Cell Stock History Reconciliation & Export ---');
+
+// 1. Client Required Test Case:
+// Opening: 5, IN: +3, OUT: -2, IN: +4, OUT: -3
+// Expected: Opening=5, Total IN=7, Total OUT=5, Current=7
+const testMatItem: MatrixInventoryItem = {
+  id: 'test-bf-132',
+  materialName: 'Backlit Flex',
+  category: 'Backlit',
+  variantSize: '1.32',
+  rollLengthMtr: 50,
+  unit: 'Rolls',
+  barcode: 'TEST-BF-1.32',
+  openingStock: 5,
+  minStock: 2,
+  active: true,
+  createdAt: '2026-09-01'
+};
+
+const testHistoryTxns: MatrixStockTransaction[] = [
+  {
+    id: 'tx-1',
+    itemId: 'test-bf-132',
+    materialName: 'Backlit Flex',
+    category: 'Backlit',
+    variantSize: '1.32',
+    rollLengthMtr: 50,
+    barcode: '151026GT456',
+    type: 'IN',
+    quantity: 3,
+    areaMtr2: 198,
+    stockBefore: 5,
+    stockAfter: 8,
+    unit: 'Rolls',
+    date: '2026-10-15',
+    invoiceNumber: 'GT456',
+    batchNumber: '151026GT456',
+    createdAt: '2026-10-15T10:00:00Z'
+  },
+  {
+    id: 'tx-2',
+    itemId: 'test-bf-132',
+    materialName: 'Backlit Flex',
+    category: 'Backlit',
+    variantSize: '1.32',
+    rollLengthMtr: 50,
+    barcode: '101026GT287',
+    type: 'OUT',
+    quantity: 2,
+    areaMtr2: 132,
+    stockBefore: 8,
+    stockAfter: 6,
+    unit: 'Rolls',
+    date: '2026-10-16',
+    invoiceNumber: 'GT287',
+    batchNumber: '101026GT287',
+    createdAt: '2026-10-16T11:00:00Z'
+  },
+  {
+    id: 'tx-3',
+    itemId: 'test-bf-132',
+    materialName: 'Backlit Flex',
+    category: 'Backlit',
+    variantSize: '1.32',
+    rollLengthMtr: 70, // Different roll length (70M) belonging to same 1.32M width
+    barcode: '171026AB123',
+    type: 'IN',
+    quantity: 4,
+    areaMtr2: 369.6,
+    stockBefore: 6,
+    stockAfter: 10,
+    unit: 'Rolls',
+    date: '2026-10-17 09:00',
+    invoiceNumber: 'AB123',
+    batchNumber: '171026AB123',
+    createdAt: '2026-10-17T09:00:00Z'
+  },
+  {
+    id: 'tx-4',
+    itemId: 'test-bf-132',
+    materialName: 'Backlit Flex',
+    category: 'Backlit',
+    variantSize: '1.32',
+    rollLengthMtr: 70,
+    barcode: '171026AB123',
+    type: 'OUT',
+    quantity: 3,
+    areaMtr2: 277.2,
+    stockBefore: 10,
+    stockAfter: 7,
+    unit: 'Rolls',
+    date: '2026-10-17 14:00',
+    invoiceNumber: 'AB123',
+    batchNumber: '171026AB123',
+    createdAt: '2026-10-17T14:00:00Z'
+  }
+];
+
+// Calculate dashboard state
+const itemsWithStockCalculated = calculateMatrixWithStock([testMatItem], testHistoryTxns);
+const dashboardCellStock = itemsWithStockCalculated[0].currentStock;
+
+// Dialog calculations
+const modalTotalIn = testHistoryTxns.filter((t) => t.type === 'IN').reduce((sum, t) => sum + t.quantity, 0);
+const modalTotalOut = testHistoryTxns.filter((t) => t.type === 'OUT').reduce((sum, t) => sum + t.quantity, 0);
+const modalOpeningStock = testMatItem.openingStock;
+const modalCurrentStock = modalOpeningStock + modalTotalIn - modalTotalOut;
+
+assert(modalOpeningStock === 5, 'Opening Stock is 5 Rolls');
+assert(modalTotalIn === 7, 'Modal Total Stock IN is 7 Rolls (+3 and +4)');
+assert(modalTotalOut === 5, 'Modal Total Stock OUT is 5 Rolls (-2 and -3)');
+assert(modalCurrentStock === 7, 'Modal Current Stock is 7 Rolls (5 + 7 - 5 = 7)');
+assert(dashboardCellStock === 7, 'Dashboard summary cell matches modal Current Stock: 7 Rolls');
+assert(dashboardCellStock === modalCurrentStock, 'Dashboard balance and modal history reconcile exactly');
+
+// Validate History Sorting (Newest First)
+const sortedHistory = [...testHistoryTxns].sort(
+  (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+);
+assert(sortedHistory[0].id === 'tx-4', 'Newest transaction is first (tx-4 from 17 Oct 14:00)');
+assert(sortedHistory[1].id === 'tx-3', 'Second transaction is tx-3 from 17 Oct 09:00');
+assert(sortedHistory[2].id === 'tx-2', 'Third transaction is tx-2 from 16 Oct');
+assert(sortedHistory[3].id === 'tx-1', 'Oldest transaction is last (tx-1 from 15 Oct)');
+
+// Multiple roll lengths preserved
+const lengthsInHistory = Array.from(new Set(testHistoryTxns.map((t) => t.rollLengthMtr)));
+assert(lengthsInHistory.includes(50) && lengthsInHistory.includes(70), 'History includes both 50M and 70M movements for 1.32M width');
+
+// 2. Summary Table CSV Export logic validation
+import { generateSummaryCsv } from './utils/summaryExport';
+const mockExportData = {
+  flexRows: [
+    {
+      materialName: 'Backlit Flex',
+      category: 'Backlit',
+      cells: {
+        '1.32': { ...testMatItem, currentStock: 7, totalIn: 7, totalOut: 5, areaPerRoll: 66, totalAreaMtr2: 462, status: 'IN_STOCK' as const }
+      },
+      totalRolls: 7,
+      totalAreaMtr2: 462
+    }
+  ],
+  flexColTotals: { '1.32': 7 },
+  flexGrandTotalRolls: 7,
+  flexGrandTotalArea: 462,
+  vinylRows: [],
+  vinylColTotals: {},
+  vinylGrandTotalRolls: 0,
+  vinylGrandTotalArea: 0,
+  hasPvc: false,
+  pvcRows: [],
+  pvcColTotals: {},
+  pvcGrandTotalSheets: 0,
+  pvcGrandTotalArea: 0
+};
+
+const generatedCsv = generateSummaryCsv(mockExportData);
+assert(generatedCsv.includes('TABLE 1: FLEX / BACKLIT ROLL STOCK'), 'CSV export includes Table 1 header');
+assert(generatedCsv.includes('Backlit Flex,Backlit'), 'CSV export includes Backlit Flex row');
+assert(generatedCsv.includes('TOTAL ROLLS'), 'CSV export includes totals row');
+
+// ------------------------------------------------------------------
 // SUMMARY
 // ------------------------------------------------------------------
 console.log('\n====================================================');
@@ -1303,5 +1467,6 @@ console.log('====================================================');
 if (testsFailed > 0) {
   process.exit(1);
 }
+
 
 

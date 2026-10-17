@@ -26,7 +26,10 @@ import {
   Calendar,
   FileText,
   Ruler,
-  RotateCcw
+  RotateCcw,
+  Download,
+  FileSpreadsheet,
+  Copy
 } from 'lucide-react';
 import {
   getStoredMatrixItems,
@@ -61,6 +64,8 @@ import { AppLogo } from './components/AppLogo';
 import { BarcodeDisplay } from './components/BarcodeDisplay';
 import { BarcodeScannerView } from './components/BarcodeScannerView';
 import { BatchDetailPage } from './components/BatchDetailPage';
+import { StockDetailsDialog } from './components/StockDetailsDialog';
+import { downloadSummaryCsvFile, copySummaryTsvForGoogleSheets } from './utils/summaryExport';
 
 type TabType = 'dashboard' | 'scan' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
 type DashboardViewMode = 'matrix' | 'table';
@@ -209,6 +214,7 @@ export default function App() {
 
   // Quick Stock Update Modal from Matrix Click
   const [modalItem, setModalItem] = useState<MatrixItemWithStock | null>(null);
+  const [exportMenuOpen, setExportMenuOpen] = useState<boolean>(false);
 
   // Camera Scanner Modal State
   const [cameraScannerOpen, setCameraScannerOpen] = useState<boolean>(false);
@@ -1632,28 +1638,30 @@ export default function App() {
         title={cameraScannerTarget === 'stock-in' ? 'Scan Barcode for Stock IN' : 'Scan Barcode for Stock OUT'}
       />
 
-      {/* Quick Stock Update Modal from Matrix Click */}
+      {/* Stock Details & Complete IN/OUT History Dialog from Matrix Cell Click */}
       {modalItem && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 print:hidden">
-          <div className="w-full max-w-md animate-in fade-in zoom-in duration-150">
-            <MobileItemView
-              item={modalItem}
-              isModal={true}
-              onClose={() => setModalItem(null)}
-              onStockChange={(itemId, type, qty) => {
-                executeStockTransaction(itemId, type, qty);
-                const refreshed = itemsWithStock.find((i) => i.id === itemId);
-                if (refreshed) {
-                  setModalItem({
-                    ...refreshed,
-                    currentStock:
-                      type === 'IN' ? refreshed.currentStock + qty : Math.max(0, refreshed.currentStock - qty)
-                  });
-                }
-              }}
-            />
-          </div>
-        </div>
+        <StockDetailsDialog
+          item={modalItem}
+          itemsWithStock={itemsWithStock}
+          transactions={transactions}
+          batches={batches}
+          onStockTransaction={({ itemId, type, quantity, dateStr, extraMeta }) => {
+            const res = executeStockTransaction(itemId, type, quantity, dateStr, extraMeta);
+            if (res.success) {
+              const refreshed = itemsWithStock.find((i) => i.id === itemId);
+              if (refreshed) {
+                setModalItem({
+                  ...refreshed,
+                  currentStock:
+                    type === 'IN' ? refreshed.currentStock + quantity : Math.max(0, refreshed.currentStock - quantity)
+                });
+              }
+            }
+            return res;
+          }}
+          onClose={() => setModalItem(null)}
+          normalizeNumericSize={normalizeNumericSize}
+        />
       )}
 
 
@@ -1901,9 +1909,62 @@ export default function App() {
                     </button>
                   </div>
 
+                  {/* Export Summary Table to Excel / Google Sheets */}
+                  <div className="relative inline-block text-left">
+                    <button
+                      type="button"
+                      onClick={() => setExportMenuOpen(!exportMenuOpen)}
+                      className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
+                      title="Export Summary Table to Excel or Google Sheets"
+                    >
+                      <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Export Summary</span>
+                    </button>
+
+                    {exportMenuOpen && (
+                      <div className="absolute right-0 mt-1 w-64 bg-white rounded-xl shadow-lg border border-slate-200 z-30 py-1 text-xs animate-in fade-in duration-100">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            downloadSummaryCsvFile(summaryTablesData);
+                            setExportMenuOpen(false);
+                            showNotification('Downloaded RollPrint_Summary_Stock.csv for Excel / Google Sheets!', 'success');
+                          }}
+                          className="w-full px-3 py-2 text-left font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 cursor-pointer"
+                        >
+                          <Download className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <div>
+                            <span className="block font-bold text-slate-900">Download Excel / CSV (.csv)</span>
+                            <span className="text-[10px] text-slate-500">Opens in Excel & Google Sheets</span>
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            copySummaryTsvForGoogleSheets(summaryTablesData)
+                              .then(() => {
+                                setExportMenuOpen(false);
+                                showNotification('Summary table copied! Press Ctrl+V (or Cmd+V) to paste into Google Sheets.', 'success');
+                              })
+                              .catch(() => {
+                                showNotification('Failed to copy to clipboard.', 'error');
+                              });
+                          }}
+                          className="w-full px-3 py-2 text-left font-medium text-slate-700 hover:bg-slate-50 flex items-center gap-2 border-t border-slate-100 cursor-pointer"
+                        >
+                          <Copy className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <div>
+                            <span className="block font-bold text-slate-900">Copy for Google Sheets</span>
+                            <span className="text-[10px] text-slate-500">Paste directly with rows & columns</span>
+                          </div>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
                   <button
                     onClick={() => setActiveTab('stock-in')}
-                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors"
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center space-x-1.5 shadow-xs transition-colors cursor-pointer"
                   >
                     <ArrowDownToLine className="w-3.5 h-3.5" />
                     <span>+ Stock IN</span>
@@ -1965,12 +2026,33 @@ export default function App() {
                                 </td>
 
                                 {FLEX_SUMMARY_WIDTHS.map((width) => {
-                                  const item = row.cells[width];
-                                  if (!item) {
+                                  const existingItem = row.cells[width];
+                                  const item = existingItem || {
+                                    id: `flex-${row.materialName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${width}`,
+                                    materialName: row.materialName,
+                                    category: row.category,
+                                    variantSize: width,
+                                    rollLengthMtr: 50,
+                                    unit: 'Rolls',
+                                    barcode: `${row.materialName}-${width}`,
+                                    openingStock: 0,
+                                    minStock: 2,
+                                    active: true,
+                                    createdAt: '2026-09-01',
+                                    totalIn: 0,
+                                    totalOut: 0,
+                                    currentStock: 0,
+                                    areaPerRoll: Number((parseFloat(width) * 50).toFixed(2)),
+                                    totalAreaMtr2: 0,
+                                    status: 'OUT_OF_STOCK' as const
+                                  };
+                                  if (!existingItem) {
                                     return (
                                       <td
                                         key={width}
-                                        className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none"
+                                        onClick={() => setModalItem(item)}
+                                        className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none cursor-pointer hover:bg-slate-100"
+                                        title={`Click to view stock details for ${row.materialName} (${width}M) - Current: 0 Rolls`}
                                       >
                                         -
                                       </td>
@@ -2085,12 +2167,33 @@ export default function App() {
                                 </td>
 
                                 {VINYL_SUMMARY_WIDTHS.map((width) => {
-                                  const item = row.cells[width];
-                                  if (!item) {
+                                  const existingItem = row.cells[width];
+                                  const item = existingItem || {
+                                    id: `vinyl-${row.materialName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${width}`,
+                                    materialName: row.materialName,
+                                    category: row.category,
+                                    variantSize: width,
+                                    rollLengthMtr: 50,
+                                    unit: 'Rolls',
+                                    barcode: `${row.materialName}-${width}`,
+                                    openingStock: 0,
+                                    minStock: 2,
+                                    active: true,
+                                    createdAt: '2026-09-01',
+                                    totalIn: 0,
+                                    totalOut: 0,
+                                    currentStock: 0,
+                                    areaPerRoll: Number((parseFloat(width) * 50).toFixed(2)),
+                                    totalAreaMtr2: 0,
+                                    status: 'OUT_OF_STOCK' as const
+                                  };
+                                  if (!existingItem) {
                                     return (
                                       <td
                                         key={width}
-                                        className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none"
+                                        onClick={() => setModalItem(item)}
+                                        className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none cursor-pointer hover:bg-slate-100"
+                                        title={`Click to view stock details for ${row.materialName} (${width}M) - Current: 0 Rolls`}
                                       >
                                         -
                                       </td>
