@@ -21,6 +21,22 @@ export const PVC_SHEET_SIZES = ['8×4', '6×3', '5×10'];
 export const PVC_THICKNESSES = ['2mm', '3mm', '4mm', '5mm'];
 
 /**
+ * Normalizes numeric dimension representations (e.g. "1.63M" -> "1.63", "1.630" -> "1.63")
+ */
+export function normalizeNumericSize(val: string | number): string {
+  if (typeof val === 'number') return String(val);
+  const cleaned = (val || '').trim().replace(/[Mm]$/, '').trim();
+  const num = parseFloat(cleaned);
+  if (!isNaN(num)) {
+    if (cleaned.includes('.') && cleaned.split('.')[1].length === 2 && cleaned.endsWith('0')) {
+      return cleaned;
+    }
+    return String(num);
+  }
+  return (val || '').trim();
+}
+
+/**
  * Client Excel Row Display Orders
  */
 export const CLIENT_FLEX_MATERIALS_ORDER = [
@@ -432,6 +448,8 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_BATCHES);
     let list: MatrixBatch[] = INITIAL_MATRIX_BATCHES;
+    let hasChanged = false;
+
     if (raw) {
       const parsed: MatrixBatch[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -457,8 +475,6 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
       }
     }
 
-    let hasChanged = false;
-
     // Normalization & Parent-Child items guarantee
     const sanitized = list.map((b) => {
       let items = b.items;
@@ -467,7 +483,7 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
         const initialQty = b.initialRollQuantity || 1;
         const remainingQty = b.currentRemainingRollQuantity ?? initialQty;
         const widthStr = b.variantSize || '1.02';
-        const lengthNum = b.rollLengthMtr || 50;
+        const lengthNum = b.rollLengthMtr || (b.items && b.items[0] ? b.items[0].rollLength : 0);
         const widthNum = parseFloat(widthStr) || 1.0;
         items = [
           {
@@ -508,7 +524,7 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
         materialName: b.materialName || firstItem?.materialNameSnapshot || '',
         category: b.category || firstItem?.categorySnapshot || '',
         variantSize: b.variantSize || firstItem?.width || '',
-        rollLengthMtr: b.rollLengthMtr || firstItem?.rollLength || 50,
+        rollLengthMtr: b.rollLengthMtr || firstItem?.rollLength || 0,
         initialRollQuantity: totalInitial,
         currentRemainingRollQuantity: totalRemaining
       };
@@ -519,7 +535,10 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
     if (geBatchIndex === -1) {
       const geBatch = INITIAL_MATRIX_BATCHES.find((b) => b.batchNumber === '101026GE23542');
       if (geBatch) {
-        sanitized.push({ ...geBatch });
+        sanitized.push({
+          ...geBatch,
+          items: geBatch.items || []
+        });
         hasChanged = true;
       }
     } else {
@@ -546,7 +565,9 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
 
 export function saveStoredMatrixBatches(batches: MatrixBatch[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_BATCHES, JSON.stringify(batches));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_BATCHES, JSON.stringify(batches));
+    }
   } catch (e) {
     console.error('Failed to save batches', e);
   }
@@ -710,7 +731,9 @@ export function getStoredMatrixItems(): MatrixInventoryItem[] {
 
 export function saveStoredMatrixItems(items: MatrixInventoryItem[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(items));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(items));
+    }
   } catch (e) {
     console.error('Failed to save items', e);
   }
@@ -718,6 +741,9 @@ export function saveStoredMatrixItems(items: MatrixInventoryItem[]): void {
 
 export function getStoredMatrixTransactions(): MatrixStockTransaction[] {
   try {
+    if (typeof localStorage === 'undefined') {
+      return INITIAL_MATRIX_TRANSACTIONS;
+    }
     const raw = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
     if (!raw) {
       localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(INITIAL_MATRIX_TRANSACTIONS));
@@ -759,7 +785,9 @@ export function getStoredMatrixTransactions(): MatrixStockTransaction[] {
 
 export function saveStoredMatrixTransactions(transactions: MatrixStockTransaction[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(transactions));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(transactions));
+    }
   } catch (e) {
     console.error('Failed to save transactions', e);
   }
@@ -767,14 +795,26 @@ export function saveStoredMatrixTransactions(transactions: MatrixStockTransactio
 
 /**
  * Calculates current stock dynamically in roll count and material area (m²):
- * Current Stock (Rolls) = Opening Stock + Total Stock IN - Total Stock OUT
+ * Physical Roll Source of Truth: COUNT(inventory_rolls WHERE status = 'IN_STOCK')
+ * Fallback for non-roll/sheet items: Opening Stock + Total Stock IN - Total Stock OUT
  * Area Per Roll (m²) = Width × Roll Length
  * Total Area (m²) = Current Stock × Area Per Roll
  */
 export function calculateMatrixWithStock(
   items: MatrixInventoryItem[],
-  transactions: MatrixStockTransaction[]
+  transactions: MatrixStockTransaction[],
+  rolls?: any[]
 ): MatrixItemWithStock[] {
+  let activeRolls: any[] | undefined = rolls;
+  if (!activeRolls && typeof localStorage !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('rollprint_inventory_rolls_v1');
+      if (raw) {
+        activeRolls = JSON.parse(raw);
+      }
+    } catch {}
+  }
+
   return items.map((item) => {
     const itemTxns = transactions.filter((t) => t.itemId === item.id);
     const totalIn = itemTxns
@@ -784,7 +824,24 @@ export function calculateMatrixWithStock(
       .filter((t) => t.type === 'OUT')
       .reduce((sum, t) => sum + t.quantity, 0);
 
-    const currentStock = item.openingStock + totalIn - totalOut;
+    const normItemSize = normalizeNumericSize(item.variantSize);
+    const matchingRolls = activeRolls && Array.isArray(activeRolls)
+      ? activeRolls.filter(
+          (r: any) =>
+            r.materialName?.trim().toLowerCase() === item.materialName.trim().toLowerCase() &&
+            normalizeNumericSize(r.size) === normItemSize
+        )
+      : [];
+
+    let currentStock: number;
+    if (matchingRolls.length > 0) {
+      // Physical roll state is the primary source of truth:
+      // COUNT(inventory_rolls WHERE status = 'IN_STOCK')
+      currentStock = matchingRolls.filter((r: any) => r.status === 'IN_STOCK').length;
+    } else {
+      // Fallback for sheet items or items without physical rolls
+      currentStock = Math.max(0, item.openingStock + totalIn - totalOut);
+    }
 
     // Calculate area
     let areaPerRoll = 0;
@@ -796,7 +853,7 @@ export function calculateMatrixWithStock(
       else areaPerRoll = 2.97;
     } else {
       const widthNum = parseFloat(item.variantSize) || 1.0;
-      const lengthNum = item.rollLengthMtr || 70;
+      const lengthNum = item.rollLengthMtr || 0;
       areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
     }
 
@@ -881,3 +938,18 @@ export function getItemWebUrl(itemId: string): string {
   const origin = window.location.origin;
   return `${origin}/item/${itemId}`;
 }
+
+// Re-export physical roll functions
+export {
+  STORAGE_KEY_ROLLS,
+  extractRollBarcode,
+  generateRollBarcode,
+  validateUniqueRollBarcode,
+  generateInitialRolls,
+  getStoredInventoryRolls,
+  saveStoredInventoryRolls,
+  createPhysicalRollRecords,
+  queryRollByExactBarcode,
+  executeRollStockOutTransaction
+} from './rollDatabase';
+export type { RollStockOutResult } from './rollDatabase';

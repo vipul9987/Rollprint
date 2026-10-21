@@ -13,7 +13,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
   isOpen,
   onClose,
   onScanSuccess,
-  title = 'Scan Batch Barcode'
+  title = 'Scan Physical Roll Barcode'
 }) => {
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
@@ -162,7 +162,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
           </div>
 
           <p className="text-center text-xs text-slate-500">
-            Point camera at the roll's CODE128 Batch Barcode sticker.
+            Point camera at the physical roll's unique barcode sticker.
           </p>
 
           {/* Error Message & Photo upload fallback */}

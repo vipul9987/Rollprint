@@ -108,10 +108,10 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
           materialNameSnapshot: batch.materialName || 'Material',
           categorySnapshot: batch.category || 'Roll Material',
           width: batch.variantSize || '1.02',
-          rollLength: batch.rollLengthMtr || 50,
+          rollLength: batch.rollLengthMtr || 0,
           initialRollQuantity: batch.initialRollQuantity || 1,
           remainingRollQuantity: batch.currentRemainingRollQuantity || 0,
-          areaM2: Number(((parseFloat(batch.variantSize || '1.02') || 1) * (batch.rollLengthMtr || 50) * (batch.initialRollQuantity || 1)).toFixed(2)),
+          areaM2: Number(((parseFloat(batch.variantSize || '1.02') || 1) * (batch.rollLengthMtr || 0) * (batch.initialRollQuantity || 1)).toFixed(2)),
           createdAt: batch.createdAt
         }
       ] : []);
@@ -444,14 +444,16 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      setIsStockOutOpen(true);
-                      setRollsOut(1);
-                      setStockOutError('');
+                      if (onNavigateToScanner) {
+                        onNavigateToScanner();
+                      } else {
+                        window.location.href = '/?tab=stock-out';
+                      }
                     }}
-                    className="w-full py-3.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 shadow-lg shadow-emerald-500/20 transition-all active:scale-98 cursor-pointer"
+                    className="w-full py-3.5 bg-[#C59B3F] hover:bg-[#b58b33] text-zinc-950 rounded-2xl font-black text-sm tracking-wide flex items-center justify-center space-x-2 shadow-lg transition-all active:scale-98 cursor-pointer"
                   >
                     <ArrowUpFromLine className="w-4 h-4 stroke-[2.5]" />
-                    <span>STOCK OUT: {selectedItem ? `${selectedItem.materialNameSnapshot} (${selectedItem.width}M)` : 'SELECTED ITEM'}</span>
+                    <span>POS STOCK OUT: SCAN PHYSICAL ROLLS</span>
                   </button>
                 ) : (
                   <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-2xl text-center text-xs text-red-300 font-bold">

@@ -135,11 +135,19 @@ CREATE TABLE IF NOT EXISTS jobs_or_orders (
 );
 
 -- 10. INVENTORY ROLLS TABLE (Track each physical roll)
+-- CRITICAL RULE: inventory_rolls.roll_barcode must be UNIQUE.
+-- Every physical roll has its OWN unique barcode. One barcode must NEVER represent multiple physical rolls.
 CREATE TABLE IF NOT EXISTS inventory_rolls (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     material_variant_id UUID NOT NULL REFERENCES material_variants(id) ON DELETE RESTRICT,
-    barcode VARCHAR(100) NOT NULL UNIQUE,
+    roll_barcode VARCHAR(100) NOT NULL UNIQUE,
+    barcode VARCHAR(100) NOT NULL,
     batch_number VARCHAR(100),
+    invoice_number VARCHAR(100),
+    roll_number INTEGER DEFAULT 1,
+    material_name VARCHAR(150),
+    size VARCHAR(50),
+    roll_length NUMERIC(10, 2),
     supplier_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
     initial_length NUMERIC(10, 2) NOT NULL,
     remaining_length NUMERIC(10, 2) NOT NULL,
@@ -149,6 +157,7 @@ CREATE TABLE IF NOT EXISTS inventory_rolls (
     notes TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_inventory_rolls_roll_barcode UNIQUE (roll_barcode),
     CONSTRAINT chk_positive_initial_length CHECK (initial_length > 0),
     CONSTRAINT chk_non_negative_remaining CHECK (remaining_length >= 0),
     CONSTRAINT chk_valid_remaining_bounds CHECK (remaining_length <= initial_length + 50.00) -- allows minor positive adjustment

@@ -43,6 +43,7 @@ interface StockDetailsDialogProps {
   }) => { success: boolean; batch?: MatrixBatch };
   onClose: () => void;
   normalizeNumericSize: (val: string | number) => string;
+  onOpenScanner?: () => void;
 }
 
 export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
@@ -52,7 +53,8 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
   batches,
   onStockTransaction,
   onClose,
-  normalizeNumericSize
+  normalizeNumericSize,
+  onOpenScanner
 }) => {
   // Simple history filter: All | Stock IN | Stock OUT (Default: All)
   const [historyFilter, setHistoryFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
@@ -209,6 +211,8 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
     setQuickError(null);
     setQuickSuccess(null);
 
+    if (actionDrawerMode === 'NONE') return;
+
     const qty = parseInt(quickQty, 10);
     if (isNaN(qty) || qty <= 0) {
       setQuickError('Please enter a valid roll quantity (at least 1).');
@@ -224,7 +228,11 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
       }
     }
 
-    const lengthNum = parseFloat(quickRollLength) || (item.rollLengthMtr || 50);
+    const lengthNum = parseFloat(quickRollLength) || (item.rollLengthMtr || 0);
+    if (lengthNum <= 0) {
+      setQuickError('Roll length must be specified and greater than 0.');
+      return;
+    }
 
     const selectedBatch = matchingBatches.find((b) => b.id === quickSelectedBatchId);
 
@@ -621,6 +629,7 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
                       <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[11px]">
                         <th className="py-2.5 px-3">Date</th>
                         <th className="py-2.5 px-3 text-center">Type</th>
+                        <th className="py-2.5 px-3">Roll Barcode</th>
                         <th className="py-2.5 px-3 text-right">Rolls</th>
                         <th className="py-2.5 px-3">Length</th>
                         <th className="py-2.5 px-3">Batch Number</th>
@@ -657,6 +666,17 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
                               </span>
                             </td>
 
+                            {/* Roll Barcode */}
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-800 whitespace-nowrap">
+                              {tx.rollBarcode || tx.barcode ? (
+                                <span className="px-1.5 py-0.5 bg-slate-100 border border-slate-200 rounded font-bold text-[11px] text-slate-900">
+                                  {tx.rollBarcode || tx.barcode}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-normal">-</span>
+                              )}
+                            </td>
+
                             {/* Rolls (+X / -X) */}
                             <td className="py-2.5 px-3 text-right font-black font-mono whitespace-nowrap">
                               <span className={isIn ? 'text-emerald-700' : 'text-amber-700'}>
@@ -685,9 +705,20 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
 
                             {/* Invoice Number */}
                             <td className="py-2.5 px-3 font-mono text-slate-700 whitespace-nowrap">
-                              {tx.invoiceNumber ? (
-                                <span className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-800 font-semibold">
-                                  {tx.invoiceNumber}
+                              {tx.type === 'OUT' ? (
+                                <div className="space-y-0.5">
+                                  <span className="px-1.5 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 rounded font-semibold text-[11px] block">
+                                    OUT: {tx.stockOutInvoiceNumber || tx.invoiceNumber || '-'}
+                                  </span>
+                                  {tx.originalStockInInvoiceNumber && (
+                                    <span className="text-[10px] text-slate-400 font-sans block">
+                                      IN: <span className="font-mono">{tx.originalStockInInvoiceNumber}</span>
+                                    </span>
+                                  )}
+                                </div>
+                              ) : tx.invoiceNumber ? (
+                                <span className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-800 font-semibold text-[11px]">
+                                  IN: {tx.invoiceNumber}
                                 </span>
                               ) : (
                                 <span className="text-slate-400 font-normal">-</span>
@@ -740,20 +771,24 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
               <span>+ Stock IN</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                setActionDrawerMode('OUT');
-                setQuickQty('1');
-                setQuickError(null);
-                setQuickSuccess(null);
-              }}
-              disabled={currentStock <= 0}
-              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 active:scale-95 disabled:opacity-40 disabled:pointer-events-none text-white font-black text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
-            >
-              <Minus className="w-3.5 h-3.5 stroke-[3]" />
-              <span>- Stock OUT</span>
-            </button>
+            {onOpenScanner ? (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenScanner();
+                }}
+                className="px-4 py-2 bg-[#C59B3F] hover:bg-[#b58b33] active:scale-95 text-zinc-950 font-black text-xs rounded-xl shadow-xs transition-all flex items-center gap-1.5 cursor-pointer"
+                title="Stock OUT must scan physical roll barcodes"
+              >
+                <ArrowUpFromLine className="w-3.5 h-3.5 stroke-[2.5]" />
+                <span>POS Roll Stock OUT (Scanner)</span>
+              </button>
+            ) : (
+              <span className="text-[11px] font-mono font-bold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-xl border border-amber-200">
+                Stock OUT requires barcode scan
+              </span>
+            )}
           </div>
         </div>
       </div>

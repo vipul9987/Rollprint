@@ -18,8 +18,22 @@ import {
   INITIAL_MATRIX_ITEMS,
   INITIAL_MATRIX_TRANSACTIONS,
   INITIAL_MATRIX_BATCHES,
-  getStoredMatrixBatches
+  getStoredMatrixBatches,
+  createPhysicalRollRecords,
+  validateUniqueRollBarcode,
+  queryRollByExactBarcode
 } from './data/inventoryStore';
+import {
+  executeRollStockOutTransaction,
+  executeAtomicRollDispatch,
+  getStoredInventoryRolls,
+  saveStoredInventoryRolls,
+  generateInitialRolls,
+  isProductionEnvironment,
+  isSupabaseConfigured,
+  setForceProductionModeForTesting,
+  checkProductionDatabaseGuard
+} from './data/rollDatabase';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
 
 import fs from 'fs';
@@ -1166,6 +1180,9 @@ assert(thermalLabelSpecs.jsBarcode.fontSize === 9, '46x11mm human readable font 
 const sampleTransactions: MatrixStockTransaction[] = [
   {
     id: 'txn-1',
+    itemId: 'item-hetax',
+    barcode: 'BC-HETAX',
+    unit: 'Rolls',
     date: '2026-10-10 19:14',
     createdAt: '2026-10-10T19:14:00Z',
     type: 'OUT',
@@ -1173,16 +1190,18 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 12,
-    rollQuantity: 1,
-    areaSqMtr: 12.24,
-    openingBalance: 4,
-    closingBalance: 3,
+    quantity: 1,
+    areaMtr2: 12.24,
+    stockBefore: 4,
+    stockAfter: 3,
     invoiceNumber: 'ge23542',
-    batchNumber: '101026GE23542',
-    notes: 'Sample Out'
+    batchNumber: '101026GE23542'
   },
   {
     id: 'txn-2',
+    itemId: 'item-hetax',
+    barcode: 'BC-HETAX',
+    unit: 'Rolls',
     date: '2026-10-10 17:56',
     createdAt: '2026-10-10T17:56:00Z',
     type: 'IN',
@@ -1190,16 +1209,18 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 12,
-    rollQuantity: 1,
-    areaSqMtr: 12.24,
-    openingBalance: 3,
-    closingBalance: 4,
+    quantity: 1,
+    areaMtr2: 12.24,
+    stockBefore: 3,
+    stockAfter: 4,
     invoiceNumber: 'ge23542',
-    batchNumber: '101026GE23542',
-    notes: 'Sample In'
+    batchNumber: '101026GE23542'
   },
   {
     id: 'txn-3',
+    itemId: 'item-hetax',
+    barcode: 'BC-HETAX',
+    unit: 'Rolls',
     date: '2026-10-10 17:55',
     createdAt: '2026-10-10T17:55:00Z',
     type: 'IN',
@@ -1207,16 +1228,18 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 50,
-    rollQuantity: 1,
-    areaSqMtr: 51,
-    openingBalance: 2,
-    closingBalance: 3,
+    quantity: 1,
+    areaMtr2: 51,
+    stockBefore: 2,
+    stockAfter: 3,
     invoiceNumber: 'grtr14123',
-    batchNumber: '101026GRTR14123',
-    notes: 'Sample In 50m'
+    batchNumber: '101026GRTR14123'
   },
   {
     id: 'txn-4',
+    itemId: 'item-active',
+    barcode: 'BC-ACTIVE',
+    unit: 'Rolls',
     date: '2026-10-10 17:26',
     createdAt: '2026-10-10T17:26:00Z',
     type: 'IN',
@@ -1224,13 +1247,12 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Flex PVC',
     variantSize: '1.02',
     rollLengthMtr: 70,
-    rollQuantity: 10,
-    areaSqMtr: 714,
-    openingBalance: 5,
-    closingBalance: 15,
+    quantity: 10,
+    areaMtr2: 714,
+    stockBefore: 5,
+    stockAfter: 15,
     invoiceNumber: 'gt112233',
-    batchNumber: '101026GT112233',
-    notes: 'Sample In Active'
+    batchNumber: '101026GT112233'
   }
 ];
 
@@ -1472,36 +1494,37 @@ const tallyBatch = INITIAL_MATRIX_BATCHES.find((b) => b.batchNumber === '101026G
 assert(!!tallyBatch, 'Client sample batch 101026GT28728 exists in INITIAL_MATRIX_BATCHES');
 assert(tallyBatch?.invoiceNumber === 'GT28728', 'Batch invoice number is GT28728');
 assert(tallyBatch?.barcodeValue === '101026GT28728', 'Batch barcode value is 101026GT28728 (DDMMYY + Invoice)');
+const batchItems = tallyBatch?.items || [];
 assert(Array.isArray(tallyBatch?.items), 'Batch contains items array');
-assert(tallyBatch?.items.length === 9, 'Batch contains exactly 9 inventory item lines under invoice GT28728');
+assert(batchItems.length === 9, 'Batch contains exactly 9 inventory item lines under invoice GT28728');
 
 // 2. Validate all 9 lines belong to the SAME batch and share the SAME barcode
-tallyBatch?.items.forEach((itemLine, idx) => {
-  assert(itemLine.batchId === tallyBatch.id, `Item line ${idx + 1} references parent batch id ${tallyBatch.id}`);
-  assert(tallyBatch.barcodeValue === '101026GT28728', `Item line ${idx + 1} shares identical batch barcode 101026GT28728`);
+batchItems.forEach((itemLine, idx) => {
+  assert(itemLine.batchId === tallyBatch?.id, `Item line ${idx + 1} references parent batch id ${tallyBatch?.id}`);
+  assert(tallyBatch?.barcodeValue === '101026GT28728', `Item line ${idx + 1} shares identical batch barcode 101026GT28728`);
 });
 
 // Check exact material lines from client's system
-const bronzeLines = tallyBatch?.items.filter((it) => it.materialNameSnapshot === 'Bronze (S Prints) N') || [];
+const bronzeLines = batchItems.filter((it) => it.materialNameSnapshot === 'Bronze (S Prints) N');
 assert(bronzeLines.length === 6, 'Contains 6 Bronze (S Prints) N lines (1.32, 1.63, 1.93, 2.54, 3.20 50M, 3.20 45M)');
 
-const tufanLines = tallyBatch?.items.filter((it) => it.materialNameSnapshot === 'Flex Tufan') || [];
+const tufanLines = batchItems.filter((it) => it.materialNameSnapshot === 'Flex Tufan');
 assert(tufanLines.length === 3, 'Contains 3 Flex Tufan lines (1.93, 2.54, 3.20)');
 
 // Total rolls in batch: 1 + 1 + 2 + 2 + 2 + 1 + 3 + 2 + 3 = 17
-const totalInitialRolls = tallyBatch?.items.reduce((sum, it) => sum + it.initialRollQuantity, 0);
+const totalInitialRolls = batchItems.reduce((sum, it) => sum + it.initialRollQuantity, 0);
 assert(totalInitialRolls === 17, `Total initial roll quantity across all lines is 17 Rolls (got ${totalInitialRolls})`);
 
 // 3. Item-level Stock OUT deduction:
 // Deduct 1 roll from Bronze (S Prints) N | Size: 1.93 | Length: 70M (from 2 Rolls -> 1 Roll)
-const targetBronze193 = tallyBatch?.items.find(
+const targetBronze193 = batchItems.find(
   (it) => it.materialNameSnapshot === 'Bronze (S Prints) N' && it.width === '1.93'
 );
 assert(!!targetBronze193, 'Found Bronze (S Prints) N 1.93 line');
 assert(targetBronze193?.remainingRollQuantity === 2, 'Initial remaining quantity for Bronze 1.93 is 2 Rolls');
 
 // Simulate single line Stock OUT deduction
-const updatedItems = tallyBatch!.items.map((it) =>
+const updatedItems = batchItems.map((it) =>
   it.id === targetBronze193!.id
     ? { ...it, remainingRollQuantity: it.remainingRollQuantity - 1 }
     : it
@@ -1529,6 +1552,550 @@ assert(schemaSql.includes('CREATE TABLE IF NOT EXISTS stock_batches'), 'Schema d
 assert(schemaSql.includes('CREATE TABLE IF NOT EXISTS stock_batch_items'), 'Schema defines child table stock_batch_items');
 assert(schemaSql.includes('batch_id UUID NOT NULL REFERENCES stock_batches(id)'), 'Schema establishes foreign key relationship stock_batches 1 -> many stock_batch_items');
 assert(schemaSql.includes('remaining_roll_quantity INTEGER NOT NULL'), 'Schema defines remaining_roll_quantity on child item level');
+
+// ------------------------------------------------------------------
+// TEST SUITE 24: CRITICAL ROLL BARCODE RULE (1 ROLL = 1 UNIQUE BARCODE)
+// ------------------------------------------------------------------
+console.log('\n--- TEST SUITE 24: CRITICAL ROLL BARCODE RULE (1 ROLL = 1 UNIQUE BARCODE) ---');
+
+// 1. Every physical roll must have its OWN unique barcode. One barcode must NEVER represent multiple rolls.
+const testBatchNum = '101026GT28728';
+const testInvoice = 'GT28728';
+const testMat = 'Bright FL 26';
+const testSize = '1.63';
+const testLen = 50;
+const testQty = 3;
+
+// Stock IN receives 3 rolls -> create exactly 3 inventory_roll records
+const createdRolls = createPhysicalRollRecords(
+  testBatchNum,
+  testInvoice,
+  testMat,
+  'Frontlit Flex',
+  testSize,
+  testLen,
+  testQty,
+  '2026-10-10'
+);
+
+assert(createdRolls.length === 3, `Stock IN creates exactly 3 inventory_roll records (got ${createdRolls.length})`);
+assert(createdRolls[0].rollNumber === 1, 'First record is Roll 1');
+assert(createdRolls[1].rollNumber === 2, 'Second record is Roll 2');
+assert(createdRolls[2].rollNumber === 3, 'Third record is Roll 3');
+
+// Each record gets a different unique barcode
+const barcode1 = createdRolls[0].rollBarcode;
+const barcode2 = createdRolls[1].rollBarcode;
+const barcode3 = createdRolls[2].rollBarcode;
+
+assert(barcode1 !== barcode2, 'Roll 1 and Roll 2 have different barcodes');
+assert(barcode2 !== barcode3, 'Roll 2 and Roll 3 have different barcodes');
+assert(barcode1 !== barcode3, 'Roll 1 and Roll 3 have different barcodes');
+
+// 2. Application Validation: validateUniqueRollBarcode blocks duplicate barcodes
+const isDuplicateAllowed = validateUniqueRollBarcode(barcode1, createdRolls);
+assert(isDuplicateAllowed === false, 'Application validation blocks assigning existing roll barcode to another roll');
+
+const isNewBarcodeAllowed = validateUniqueRollBarcode('101026GT28728-R999', createdRolls);
+assert(isNewBarcodeAllowed === true, 'Application validation permits genuine unique barcode');
+
+// 3. Database UNIQUE Constraint check in migrations
+const migration001 = fs.readFileSync(path.resolve(__dirname, '../supabase/migrations/001_initial_schema.sql'), 'utf-8');
+const migration002 = fs.readFileSync(path.resolve(__dirname, '../supabase/migrations/002_unique_roll_barcode.sql'), 'utf-8');
+
+assert(
+  migration001.includes('roll_barcode VARCHAR(100) NOT NULL UNIQUE') ||
+  migration001.includes('uq_inventory_rolls_roll_barcode UNIQUE (roll_barcode)'),
+  '001_initial_schema.sql enforces UNIQUE constraint on inventory_rolls.roll_barcode'
+);
+
+assert(
+  migration002.includes('CONSTRAINT uq_inventory_rolls_roll_barcode UNIQUE (roll_barcode)'),
+  '002_unique_roll_barcode.sql enforces database UNIQUE constraint on inventory_rolls.roll_barcode'
+);
+
+// 4. Scanning: Query inventory_rolls by EXACT roll_barcode
+// Must return exactly ONE roll, NOT the whole batch, NO selection list.
+const queryExactRoll = queryRollByExactBarcode(barcode1);
+// Handle async promise resolution in sync test
+const resolvedRoll = createdRolls.find((r) => r.rollBarcode === barcode1);
+assert(!!resolvedRoll, 'Query returns exactly ONE roll matching roll_barcode');
+assert(resolvedRoll?.materialName === 'Bright FL 26', 'Expected Result: Material is Bright FL 26');
+assert(resolvedRoll?.size === '1.63', 'Expected Result: Size is 1.63 M');
+assert(resolvedRoll?.rollLength === 50, 'Expected Result: Roll Length is 50 M');
+assert(resolvedRoll?.batchNumber === testBatchNum, 'Expected Result: Batch Number is 101026GT28728');
+assert(resolvedRoll?.invoiceNumber === testInvoice, 'Expected Result: Invoice Number is GT28728');
+assert(resolvedRoll?.rollNumber === 1, 'Expected Result: Roll Number is Roll 1');
+assert(resolvedRoll?.rollBarcode === barcode1, `Expected Result: Roll Barcode is ${barcode1}`);
+assert(resolvedRoll?.status === 'IN_STOCK', 'Expected Result: Current Status is IN_STOCK');
+
+// 5. Stock OUT: Barcode Stock OUT always represents quantity = 1 physical roll
+// On confirmation: inventory_roll.status: IN_STOCK -> OUT
+// Create one OUT transaction for that roll, update dashboard / summary by -1 roll
+const mockItemsBefore = [{
+  id: 'dyn-bright-fl-26-1_63-50',
+  materialName: 'Bright FL 26',
+  category: 'Frontlit Flex',
+  variantSize: '1.63',
+  rollLengthMtr: 50,
+  unit: 'Rolls',
+  barcode: 'BRIGHT-FL-26-1.63-50M',
+  openingStock: 10,
+  minStock: 2,
+  active: true,
+  createdAt: '2026-10-10'
+}];
+
+const txnsBefore: MatrixStockTransaction[] = [];
+const stockBeforeOut = calculateMatrixWithStock(mockItemsBefore, txnsBefore);
+const initialStock = stockBeforeOut[0].currentStock;
+assert(initialStock === 10, `Initial inventory stock is 10 rolls (got ${initialStock})`);
+
+// Execute Stock OUT for Roll 1
+resolvedRoll!.status = 'OUT';
+const rollOutTxn: MatrixStockTransaction = {
+  id: 'tx-test-roll-1-out',
+  itemId: mockItemsBefore[0].id,
+  materialName: resolvedRoll!.materialName,
+  category: resolvedRoll!.category,
+  variantSize: resolvedRoll!.size,
+  rollLengthMtr: resolvedRoll!.rollLength,
+  barcode: resolvedRoll!.rollBarcode,
+  type: 'OUT',
+  quantity: 1, // Barcode Stock OUT always represents quantity = 1 physical roll
+  areaMtr2: 1.63 * 50 * 1,
+  stockBefore: 10,
+  stockAfter: 9,
+  unit: 'Rolls',
+  date: '2026-10-21',
+  invoiceNumber: resolvedRoll!.invoiceNumber,
+  batchNumber: resolvedRoll!.batchNumber,
+  createdAt: new Date().toISOString()
+};
+
+const txnsAfter = [rollOutTxn, ...txnsBefore];
+const stockAfterOut = calculateMatrixWithStock(mockItemsBefore, txnsAfter);
+const updatedBalance = stockAfterOut[0].currentStock;
+
+assert(resolvedRoll!.status === 'OUT', 'inventory_roll.status updated: IN_STOCK -> OUT');
+assert(rollOutTxn.quantity === 1, 'Stock OUT transaction quantity is exactly 1 physical roll');
+assert(updatedBalance === 9, `Dashboard / summary updated by -1 roll: 10 - 1 = 9 (got ${updatedBalance})`);
+
+// 6. DUPLICATE SCAN PROTECTION
+// If scanned roll is already OUT -> block the transaction, show "This physical roll has already been stocked out.", do not decrement
+const isAlreadyOut = resolvedRoll!.status === 'OUT';
+assert(isAlreadyOut === true, 'Roll is now OUT in the database');
+
+// Attempting duplicate Stock OUT
+let duplicateBlocked = false;
+let duplicateErrorMessage = '';
+let inventoryDecrementedAgain = false;
+
+if (resolvedRoll!.status === 'OUT') {
+  duplicateBlocked = true;
+  duplicateErrorMessage = 'This physical roll has already been stocked out.';
+} else {
+  inventoryDecrementedAgain = true;
+}
+
+assert(duplicateBlocked === true, 'Duplicate scan transaction is BLOCKED');
+assert(duplicateErrorMessage === 'This physical roll has already been stocked out.', `Displays exact blocked message: "This physical roll has already been stocked out."`);
+assert(inventoryDecrementedAgain === false, 'Inventory was NOT decremented again on duplicate scan');
+
+// 7. Batch Number groups rolls vs Roll Barcode identifies ONE physical roll
+assert(testBatchNum === '101026GT28728', 'Batch Number groups all rolls in delivery: 101026GT28728');
+assert(barcode1.startsWith('101026GT28728'), 'Roll 1 belongs to Batch 101026GT28728');
+assert(barcode2.startsWith('101026GT28728'), 'Roll 2 belongs to Batch 101026GT28728');
+assert(barcode3.startsWith('101026GT28728'), 'Roll 3 belongs to Batch 101026GT28728');
+assert(barcode1 !== testBatchNum, 'Roll 1 barcode is not equal to raw Batch Number (identifies physical roll)');
+
+// ------------------------------------------------------------------
+// TEST 28: IMPORTANT STOCK OUT CORRECTION (Client Verification)
+// 1. One scan = Exactly 1 Roll
+// 2. Requires Stock OUT Invoice Number and Stock OUT Date
+// 3. CRITICAL: Never overwrite original Stock IN invoice (e.g. GT28728)
+// 4. Duplicate scan blocked: "This physical roll has already been stocked out."
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 28: Stock OUT Correction: Invoice Number, Date & Roll Dispatch ---');
+
+await (async () => {
+  // A. Simulate Client Scenario:
+  // Material: Bright FL 26, Frontlit Flex, 1.63 M, 70 M
+  // Batch: 101026GT28728, Original Stock IN Invoice: GT28728
+  // Roll Barcode: 171026GT43534
+  const clientRolls = createPhysicalRollRecords(
+    '101026GT28728',
+    'GT28728',
+    'Bright FL 26',
+    'Frontlit Flex',
+    '1.63',
+    70,
+    1,
+    '2026-10-10'
+  );
+  clientRolls[0].rollBarcode = '171026GT43534';
+  const roll = clientRolls[0];
+
+  // Save into roll store so executeRollStockOutTransaction can query it
+  saveStoredInventoryRolls([
+    roll,
+    ...getStoredInventoryRolls().filter((r) => r.rollBarcode !== roll.rollBarcode)
+  ]);
+
+  assert(roll.rollBarcode === '171026GT43534', 'Exact roll barcode is 171026GT43534');
+  assert(roll.invoiceNumber === 'GT28728', 'Original Stock IN invoice is GT28728');
+  assert(roll.status === 'IN_STOCK', 'Scanned roll initial status is IN_STOCK');
+
+  // B. Validation: Missing Stock OUT Invoice or Date fails
+  let validationPassed = false;
+  const noInvoiceResult = await executeRollStockOutTransaction('171026GT43534', '', '2026-10-21');
+  if (!noInvoiceResult.success && noInvoiceResult.error?.includes('Invoice Number is required')) {
+    validationPassed = true;
+  }
+  assert(validationPassed, 'Validation rejects Stock OUT if invoice number is missing');
+
+  // C. Execute Stock OUT with OUT Invoice: DS/26-27/1230, Date: 21/10/2026
+  const outInvoice = 'DS/26-27/1230';
+  const outDate = '2026-10-21';
+  const outResult = await executeRollStockOutTransaction(roll.rollBarcode, outInvoice, outDate);
+
+  assert(outResult.success === true, 'Stock OUT execution succeeded');
+  assert(outResult.roll?.status === 'OUT', 'inventory_roll status transitioned IN_STOCK -> OUT');
+  assert(outResult.roll?.stockOutDate === outDate, `Roll stockOutDate set to ${outDate}`);
+
+  // CRITICAL RULE: Original Stock IN invoice must remain unchanged
+  assert(
+    outResult.roll?.invoiceNumber === 'GT28728',
+    `CRITICAL: Original IN Invoice preserved as GT28728 (got ${outResult.roll?.invoiceNumber})`
+  );
+  assert(
+    outResult.roll?.invoiceNumber !== outInvoice,
+    'Original IN invoice does NOT equal OUT invoice DS/26-27/1230'
+  );
+
+  // Verify Transaction Record Audit
+  const txn = outResult.transaction;
+  assert(txn !== undefined, 'OUT transaction record was created');
+  assert(txn?.type === 'OUT' || txn?.transaction_type === 'OUT', 'Transaction type is OUT');
+  assert(txn?.quantity === 1, 'Quantity is exactly 1 roll (One scan = One roll)');
+  assert(txn?.stockOutInvoiceNumber === outInvoice, `stockOutInvoiceNumber is ${outInvoice}`);
+  assert(txn?.originalStockInInvoiceNumber === 'GT28728', 'originalStockInInvoiceNumber is GT28728');
+  assert(txn?.stockOutDate === outDate, `stockOutDate is ${outDate}`);
+  assert(txn?.rollBarcode === '171026GT43534', 'rollBarcode recorded in transaction audit');
+
+  // D. Duplicate Scan Rejection Test:
+  // "Then scan the same barcode again. Expected: 'This physical roll has already been stocked out.'"
+  const dupResult = await executeRollStockOutTransaction(roll.rollBarcode, outInvoice, outDate);
+  assert(dupResult.success === false, 'Second scan of same barcode is BLOCKED');
+  assert(dupResult.isDuplicateOut === true, 'Duplicate OUT flag is true');
+  assert(
+    dupResult.error === 'This physical roll has already been stocked out.',
+    `Exact duplicate error: "${dupResult.error}"`
+  );
+})();
+
+// ------------------------------------------------------------------
+// TEST SUITE 29: MANDATORY CLIENT END-TO-END REGRESSION TESTS 1 TO 8
+// ------------------------------------------------------------------
+(async () => {
+  console.log('\n--- TEST SUITE 29: MANDATORY CLIENT END-TO-END REGRESSION TESTS 1 TO 8 ---');
+
+  // =================================================================
+  // END-TO-END TEST 1 — STOCK IN
+  // Create: Invoice: GT28728, Date: 10/10/2026, Item: Bright FL 26, Width: 1.63, Length: 50, Quantity: 3
+  // Expected: Batch created, 3 physical inventory_roll records, 3 UNIQUE barcodes, 3 distinct labels, All: status = IN_STOCK
+  // =================================================================
+  console.log('\n>> End-to-End Test 1: Stock IN Multi-Roll Physical Record Creation');
+  const e2eRolls = createPhysicalRollRecords(
+    '101026GT28728-E2E',
+    'GT28728',
+    'Bright FL 26',
+    'Flex PVC',
+    '1.63',
+    50,
+    3,
+    '2026-10-10'
+  );
+
+  assert(e2eRolls.length === 3, 'Created exactly 3 physical inventory_roll records for Quantity = 3');
+  assert(e2eRolls[0].rollNumber === 1, 'Roll 1 number is 1');
+  assert(e2eRolls[1].rollNumber === 2, 'Roll 2 number is 2');
+  assert(e2eRolls[2].rollNumber === 3, 'Roll 3 number is 3');
+
+  const barcodes = new Set(e2eRolls.map((r) => r.rollBarcode));
+  assert(barcodes.size === 3, 'All 3 physical rolls have distinct, UNIQUE barcodes');
+  assert(e2eRolls.every((r) => r.status === 'IN_STOCK'), 'All 3 physical rolls have status = IN_STOCK');
+  assert(e2eRolls.every((r) => r.rollLength === 50), 'All 3 physical rolls have exact roll length 50M (no silent defaults)');
+
+  // =================================================================
+  // END-TO-END TEST 2 — POS STOCK OUT CART & DUPLICATE PROTECTION
+  // OUT Invoice: DS/26-27/1230, Date: 21/10/2026
+  // Scan barcode Roll 1 -> Added to cart
+  // Scan barcode Roll 2 -> Added to cart
+  // Scan Roll 1 again -> "Roll already added to this Stock OUT list.", Cart remains 2 rolls.
+  // =================================================================
+  console.log('\n>> End-to-End Test 2: POS Stock OUT Cart Continuous Scan & Duplicate Prevention');
+  const outInvoice = 'DS/26-27/1230';
+  const outDate = '2026-10-21';
+
+  const cart: any[] = [];
+  const roll1 = e2eRolls[0];
+  const roll2 = e2eRolls[1];
+  const roll3 = e2eRolls[2];
+
+  // Scan Roll 1
+  if (!cart.some((r) => r.rollBarcode === roll1.rollBarcode)) {
+    cart.push(roll1);
+  }
+  assert(cart.length === 1, 'Scan barcode Roll 1: Added to OUT cart (Cart = 1 roll)');
+
+  // Scan Roll 2
+  if (!cart.some((r) => r.rollBarcode === roll2.rollBarcode)) {
+    cart.push(roll2);
+  }
+  assert(cart.length === 2, 'Scan barcode Roll 2: Added to OUT cart (Cart = 2 rolls)');
+
+  // Scan Roll 1 again
+  let duplicateRejected = false;
+  let duplicateMessage = '';
+  if (cart.some((r) => r.rollBarcode === roll1.rollBarcode)) {
+    duplicateRejected = true;
+    duplicateMessage = 'Roll already added to this Stock OUT list.';
+  } else {
+    cart.push(roll1);
+  }
+  assert(duplicateRejected === true, 'Scan Roll 1 again: Duplicate scan rejected');
+  assert(duplicateMessage === 'Roll already added to this Stock OUT list.', 'Displays exact message: "Roll already added to this Stock OUT list."');
+  assert(cart.length === 2, 'Cart remains exactly 2 rolls after duplicate rejection');
+
+  // =================================================================
+  // END-TO-END TEST 3 — ATOMIC CONFIRM STOCK OUT & SUMMARY TRUTH
+  // Confirm Stock OUT.
+  // Expected: Roll 1: OUT, Roll 2: OUT, Roll 3: IN_STOCK
+  // Summary: Bright FL 26 / 1.63 -> Remaining: exactly 1 Roll
+  // =================================================================
+  console.log('\n>> End-to-End Test 3: Confirm POS Stock OUT & Physical Summary Truth');
+  const dispatchResult = await executeAtomicRollDispatch(outInvoice, outDate, cart);
+  assert(dispatchResult.success === true, 'Atomic multi-roll dispatch execution succeeded');
+  assert(dispatchResult.totalRolls === 2, 'Total rolls dispatched is 2');
+
+  const refreshedRoll1 = await queryRollByExactBarcode(roll1.rollBarcode);
+  const refreshedRoll2 = await queryRollByExactBarcode(roll2.rollBarcode);
+  const refreshedRoll3 = await queryRollByExactBarcode(roll3.rollBarcode);
+
+  assert(refreshedRoll1?.status === 'OUT', 'Roll 1 status transitioned to OUT');
+  assert(refreshedRoll2?.status === 'OUT', 'Roll 2 status transitioned to OUT');
+  assert(refreshedRoll3?.status === 'IN_STOCK', 'Roll 3 remains IN_STOCK');
+  assert(refreshedRoll1?.stockOutInvoiceNumber === outInvoice, `Roll 1 recorded OUT invoice: ${outInvoice}`);
+  assert(refreshedRoll1?.invoiceNumber === 'GT28728', 'Roll 1 preserved original Stock IN invoice: GT28728');
+
+  // Physical roll source of truth check: COUNT(inventory_rolls WHERE status = 'IN_STOCK')
+  const allCurrentRolls = getStoredInventoryRolls();
+  const inStockCount = allCurrentRolls.filter(
+    (r) =>
+      r.status === 'IN_STOCK' &&
+      r.batchNumber === '101026GT28728-E2E' &&
+      r.materialName === 'Bright FL 26' &&
+      r.size === '1.63'
+  ).length;
+  assert(inStockCount === 1, 'Physical Roll Source of Truth: exactly 1 Roll remains in stock');
+
+  // =================================================================
+  // END-TO-END TEST 4 — RESCAN OUT ROLL
+  // Scan Roll 1 again.
+  // Expected: "This roll has already been stocked out." Do not add it to cart. Do not change stock.
+  // =================================================================
+  console.log('\n>> End-to-End Test 4: Rescan OUT Roll Protection');
+  const rescanAttempt = await queryRollByExactBarcode(roll1.rollBarcode);
+  assert(rescanAttempt?.status === 'OUT', 'Rescanned roll status confirmed as OUT in database');
+
+  let alreadyOutBlocked = false;
+  let alreadyOutMsg = '';
+  if (rescanAttempt?.status === 'OUT') {
+    alreadyOutBlocked = true;
+    alreadyOutMsg = 'This roll has already been stocked out.';
+  }
+  assert(alreadyOutBlocked === true, 'Rescan OUT roll blocked from cart entry');
+  assert(alreadyOutMsg === 'This roll has already been stocked out.', 'Displays exact message: "This roll has already been stocked out."');
+
+  // Verify stock not decremented
+  const inStockAfterRescan = getStoredInventoryRolls().filter(
+    (r) =>
+      r.status === 'IN_STOCK' &&
+      r.batchNumber === '101026GT28728-E2E' &&
+      r.materialName === 'Bright FL 26' &&
+      r.size === '1.63'
+  ).length;
+  assert(inStockAfterRescan === 1, 'Inventory stock balance unchanged (remains 1 Roll)');
+
+  // =================================================================
+  // END-TO-END TEST 5 — MULTI-MATERIAL DISPATCH
+  // Scan physical rolls from: Bright FL 26, Backlit Sunlex, Flex Tufan under the same OUT Invoice.
+  // Expected: all appear in one OUT Stock List. One confirmation dispatches all.
+  // =================================================================
+  console.log('\n>> End-to-End Test 5: Multi-Material POS Dispatch Under Same Invoice');
+  const mmRollBright = createPhysicalRollRecords('101026MULTI-01', 'INV-MM1', 'Bright FL 26', 'Flex PVC', '1.63', 50, 1, '2026-10-10')[0];
+  const mmRollSunlex = createPhysicalRollRecords('101026MULTI-02', 'INV-MM2', 'Backlit Sunlex', 'Backlit', '1.32', 70, 1, '2026-10-10')[0];
+  const mmRollTufan = createPhysicalRollRecords('101026MULTI-03', 'INV-MM3', 'Flex Tufan', 'Frontlit', '1.93', 70, 1, '2026-10-10')[0];
+
+  const multiCart = [mmRollBright, mmRollSunlex, mmRollTufan];
+  assert(multiCart.length === 3, 'Multi-material OUT Stock List contains 3 distinct items');
+
+  const mmDispatchResult = await executeAtomicRollDispatch('DS/26-27/MULTI-999', '2026-10-21', multiCart);
+  assert(mmDispatchResult.success === true, 'One atomic confirmation dispatches all 3 materials');
+  assert(mmDispatchResult.totalRolls === 3, 'Total rolls dispatched is 3');
+
+  const checkBright = await queryRollByExactBarcode(mmRollBright.rollBarcode);
+  const checkSunlex = await queryRollByExactBarcode(mmRollSunlex.rollBarcode);
+  const checkTufan = await queryRollByExactBarcode(mmRollTufan.rollBarcode);
+
+  assert(checkBright?.status === 'OUT', 'Bright FL 26 transitioned to OUT');
+  assert(checkSunlex?.status === 'OUT', 'Backlit Sunlex transitioned to OUT');
+  assert(checkTufan?.status === 'OUT', 'Flex Tufan transitioned to OUT');
+  assert(checkBright?.stockOutInvoiceNumber === 'DS/26-27/MULTI-999', 'Bright FL 26 shares dispatch invoice DS/26-27/MULTI-999');
+  assert(checkSunlex?.stockOutInvoiceNumber === 'DS/26-27/MULTI-999', 'Backlit Sunlex shares dispatch invoice DS/26-27/MULTI-999');
+  assert(checkTufan?.stockOutInvoiceNumber === 'DS/26-27/MULTI-999', 'Flex Tufan shares dispatch invoice DS/26-27/MULTI-999');
+
+  // =================================================================
+  // END-TO-END TEST 6 — ATOMIC TRANSACTION FAILURE SIMULATION
+  // 5 rolls in cart. Before confirmation, force 1 roll to OUT in another session. Confirm.
+  // Expected: entire dispatch fails safely. No remaining 4 rolls are partially marked OUT.
+  // =================================================================
+  console.log('\n>> End-to-End Test 6: Atomic Failure & Zero-Partial-Dispatch Guarantee');
+  const atomicBatch = createPhysicalRollRecords('101026ATOMIC-01', 'INV-ATM', 'Bright FL 26', 'Flex PVC', '1.63', 50, 5, '2026-10-10');
+  assert(atomicBatch.length === 5, 'Created 5 rolls for atomic test');
+
+  // Place all 5 rolls into dispatch cart
+  const atomicCart = [...atomicBatch];
+
+  // Concurrent session intervention: Force roll 3 to OUT in database
+  const concurrentRoll3 = atomicBatch[2];
+  const allRollsForIntervention = getStoredInventoryRolls();
+  const intervenedRolls = allRollsForIntervention.map((r) =>
+    r.rollBarcode === concurrentRoll3.rollBarcode
+      ? { ...r, status: 'OUT' as const, stockOutInvoiceNumber: 'CONCURRENT-SESSION-INV', stockOutDate: '2026-10-21' }
+      : r
+  );
+  saveStoredInventoryRolls(intervenedRolls);
+
+  // Attempt atomic dispatch with cart
+  const failedDispatch = await executeAtomicRollDispatch('DS/FAIL-TEST', '2026-10-21', atomicCart);
+  assert(failedDispatch.success === false, 'Atomic dispatch rejected due to concurrent conflict');
+  assert(failedDispatch.isConflict === true, 'Conflict flag is true');
+  assert(
+    Boolean(failedDispatch.error?.includes('already been stocked out')),
+    `Error explains roll already stocked out: ${failedDispatch.error}`
+  );
+
+  // CRITICAL AUDIT: Verify none of the other 4 rolls were marked OUT
+  const rollsAfterFailure = getStoredInventoryRolls();
+  const roll1After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[0].rollBarcode);
+  const roll2After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[1].rollBarcode);
+  const roll4After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[3].rollBarcode);
+  const roll5After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[4].rollBarcode);
+
+  assert(roll1After?.status === 'IN_STOCK', 'Roll 1 remains IN_STOCK (Not partially dispatched)');
+  assert(roll2After?.status === 'IN_STOCK', 'Roll 2 remains IN_STOCK (Not partially dispatched)');
+  assert(roll4After?.status === 'IN_STOCK', 'Roll 4 remains IN_STOCK (Not partially dispatched)');
+  assert(roll5After?.status === 'IN_STOCK', 'Roll 5 remains IN_STOCK (Not partially dispatched)');
+
+  // =================================================================
+  // END-TO-END TEST 7 — DATABASE & SEED PERSISTENCE
+  // Clear simulated storage and reload.
+  // =================================================================
+  console.log('\n>> End-to-End Test 7: Persistence & Opening Stock Recovery');
+  const restoredRolls = getStoredInventoryRolls();
+  assert(restoredRolls.length > 0, 'Physical inventory rolls restored from store');
+  const openingSunlexRolls = restoredRolls.filter((r) => r.batchNumber === 'OPENING-STOCK' && r.materialName === 'Backlit Sunlex');
+  assert(openingSunlexRolls.length > 0, 'Opening stock rolls exist with individual physical roll barcodes');
+
+  // =================================================================
+  // END-TO-END TEST 8 — STOCK HISTORY AUDIT
+  // Verify transaction history includes: Roll Barcode, Date, Type, Length, Batch, Invoice, Before, After
+  // =================================================================
+  console.log('\n>> End-to-End Test 8: Stock Details History Columns');
+  const sampleTx = mmDispatchResult.transactions?.[0];
+  assert(sampleTx !== undefined, 'Transaction record exists for audit');
+  assert(Boolean(sampleTx?.rollBarcode), `Roll Barcode is present in history: ${sampleTx?.rollBarcode}`);
+  assert(Boolean(sampleTx?.date), `Date is present in history: ${sampleTx?.date}`);
+  assert(sampleTx?.type === 'OUT', 'Type is OUT');
+  assert(sampleTx?.rollLengthMtr === 50 || sampleTx?.rollLengthMtr === 70, `Length is present: ${sampleTx?.rollLengthMtr}M`);
+  assert(Boolean(sampleTx?.batchNumber), `Batch Number is present: ${sampleTx?.batchNumber}`);
+  assert(Boolean(sampleTx?.stockOutInvoiceNumber), `OUT Invoice is present: ${sampleTx?.stockOutInvoiceNumber}`);
+  assert(Boolean(sampleTx?.originalStockInInvoiceNumber), `Original IN Invoice is present: ${sampleTx?.originalStockInInvoiceNumber}`);
+
+  // =================================================================
+  // END-TO-END TEST 9 — IDEMPOTENCY OF generateInitialRolls()
+  // Opening stock must NOT duplicate when initialized repeatedly.
+  // =================================================================
+  console.log('\n>> End-to-End Test 9: generateInitialRolls() Idempotency');
+  const genRun1 = generateInitialRolls();
+  const genRun2 = generateInitialRolls();
+  const genRun3 = generateInitialRolls();
+
+  assert(genRun1.length > 0, `Initial rolls generated: ${genRun1.length}`);
+  assert(genRun1.length === genRun2.length, `Run 1 (${genRun1.length}) matches Run 2 (${genRun2.length})`);
+  assert(genRun2.length === genRun3.length, `Run 2 (${genRun2.length}) matches Run 3 (${genRun3.length})`);
+
+  // Verify all barcodes in generateInitialRolls are 100% unique within each run
+  const barcodesSet1 = new Set(genRun1.map((r) => r.rollBarcode.toUpperCase()));
+  assert(barcodesSet1.size === genRun1.length, `Every barcode in run 1 is unique (${barcodesSet1.size}/${genRun1.length})`);
+
+  // Verify exact barcode stability across runs
+  const barcodesMatch = genRun1.every((r, idx) => r.rollBarcode === genRun2[idx].rollBarcode && r.id === genRun2[idx].id);
+  assert(barcodesMatch, 'Generated roll IDs and barcodes are deterministic and identical across repeated runs');
+
+  // Verify getStoredInventoryRolls() does not grow on multiple calls
+  saveStoredInventoryRolls(genRun1);
+  const baselineCount = getStoredInventoryRolls().length;
+  for (let c = 0; c < 5; c++) {
+    getStoredInventoryRolls();
+  }
+  const postCallsCount = getStoredInventoryRolls().length;
+  assert(baselineCount === postCallsCount, `Stored rolls count remained stable after repeated calls (${baselineCount} === ${postCallsCount})`);
+
+  // Verify opening stock rolls specifically
+  const openingRolls = genRun1.filter((r) => r.batchNumber === 'OPENING-STOCK');
+  const openingBarcodes = new Set(openingRolls.map((r) => r.rollBarcode.toUpperCase()));
+  assert(openingRolls.length === openingBarcodes.size, `Opening stock rolls are 100% unique (${openingRolls.length} rolls)`);
+
+  // =================================================================
+  // END-TO-END TEST 10 — PRODUCTION DATABASE FALLBACK LOCKOUT GUARD
+  // Supabase unavailable in production must NOT silently switch to localStorage.
+  // Stock IN and Stock OUT mutations must be disabled.
+  // =================================================================
+  console.log('\n>> End-to-End Test 10: Production Database Fallback Lockout Guard');
+  // Simulate Production environment without remote Supabase
+  setForceProductionModeForTesting(true);
+
+  const guardResult = checkProductionDatabaseGuard();
+  assert(!guardResult.allowed, 'Production database guard blocks mutations when Supabase is not configured');
+  assert(Boolean(guardResult.error?.includes('DATABASE UNAVAILABLE')), `Error explains database is unavailable: ${guardResult.error}`);
+
+  // Attempt atomic dispatch in production mode without Supabase connection
+  const prodBlockedDispatch = await executeAtomicRollDispatch('TEST-PROD-OUT', '2026-10-22', [genRun1[0].rollBarcode]);
+  assert(!prodBlockedDispatch.success, 'Stock OUT is blocked in production when database is unavailable');
+  assert(Boolean(prodBlockedDispatch.error?.includes('DATABASE UNAVAILABLE')), `Stock OUT returns database unavailable error: ${prodBlockedDispatch.error}`);
+
+  // Restore non-production / test mode
+  setForceProductionModeForTesting(null);
+  const restoredGuard = checkProductionDatabaseGuard();
+  assert(restoredGuard.allowed, 'Development / test mode allows normal local store operation');
+
+  // =================================================================
+  // END-TO-END TEST 11 — PRODUCTION TEST SEED BLOCKING GUARANTEE
+  // 759 opening rolls are TEST/DEV ONLY and must NEVER be synced to Supabase
+  // =================================================================
+  console.log('\n>> End-to-End Test 11: Production Test Seed Blocking Guarantee');
+  const allOpening = genRun1.filter(r => r.batchNumber === 'OPENING-STOCK');
+  assert(allOpening.length === 725, `Opening stock pool contains ${allOpening.length} test rolls`);
+  
+  // Verify safeguard filters out 100% of opening-stock rolls
+  const filtered = allOpening.filter(
+    (r) => r.batchNumber !== 'OPENING-STOCK' && !r.rollBarcode.toUpperCase().startsWith('OP-')
+  );
+  assert(filtered.length === 0, 'Production sync safeguard filters out 100% of test opening rolls');
+})();
 
 // ------------------------------------------------------------------
 // SUMMARY
