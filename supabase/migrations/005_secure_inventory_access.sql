@@ -152,6 +152,9 @@ CREATE POLICY "authenticated_stock_out_dispatch_items_select"
     TO authenticated
     USING (auth.uid() IS NOT NULL);
 
+-- Ensure updated_at column exists on stock_batches
+ALTER TABLE public.stock_batches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 -- --------------------------------------------------------------------
 -- 6. HARDEN POS STOCK OUT RPC: execute_roll_dispatch
 -- - Checks authenticated caller: auth.uid() IS NOT NULL
@@ -181,6 +184,17 @@ BEGIN
     IF v_user_id IS NULL THEN
         RAISE EXCEPTION 'Unauthorized: authenticated staff session required.';
     END IF;
+
+    -- Ensure user exists in user_profiles to satisfy foreign key constraint on stock_transactions
+    INSERT INTO public.user_profiles (id, email, full_name, role)
+    SELECT
+        v_user_id,
+        COALESCE(u.email, 'staff@rollprint.com'),
+        COALESCE(u.raw_user_meta_data->>'full_name', 'Warehouse Staff'),
+        'OPERATOR'::user_role
+    FROM auth.users u
+    WHERE u.id = v_user_id
+    ON CONFLICT (id) DO NOTHING;
 
     -- 2. Validation checks
     IF p_out_invoice IS NULL OR TRIM(p_out_invoice) = '' THEN
@@ -288,13 +302,6 @@ BEGIN
             WHERE id = v_roll.batch_item_id;
         END IF;
 
-        -- Decrement master batch remaining rolls if present
-        IF v_roll.batch_id IS NOT NULL THEN
-            UPDATE public.stock_batches
-            SET updated_at = NOW()
-            WHERE id = v_roll.batch_id;
-        END IF;
-
         -- Create Audit Stock Transaction
         INSERT INTO public.stock_transactions (
             transaction_number,
@@ -383,6 +390,17 @@ BEGIN
     IF v_user_id IS NULL THEN
         RAISE EXCEPTION 'Unauthorized: authenticated staff session required to perform Stock IN.';
     END IF;
+
+    -- Ensure user exists in user_profiles to satisfy foreign key constraint on stock_transactions
+    INSERT INTO public.user_profiles (id, email, full_name, role)
+    SELECT
+        v_user_id,
+        COALESCE(u.email, 'staff@rollprint.com'),
+        COALESCE(u.raw_user_meta_data->>'full_name', 'Warehouse Staff'),
+        'OPERATOR'::user_role
+    FROM auth.users u
+    WHERE u.id = v_user_id
+    ON CONFLICT (id) DO NOTHING;
 
     -- 2. Validate Invoice Number
     IF p_invoice_number IS NULL OR TRIM(p_invoice_number) = '' THEN
@@ -583,13 +601,22 @@ REVOKE EXECUTE ON FUNCTION public.execute_stock_in_batch(VARCHAR, DATE, JSONB) F
 GRANT EXECUTE ON FUNCTION public.execute_stock_in_batch(VARCHAR, DATE, JSONB) TO authenticated;
 
 -- --------------------------------------------------------------------
--- 8. AUTO-CONFIRM STAFF ACCOUNTS IN SUPABASE AUTH
+-- 8. AUTO-CONFIRM STAFF ACCOUNTS & SYNC USER PROFILES
 -- Ensures internal warehouse staff can sign in immediately without
 -- requiring external email delivery configuration.
 -- --------------------------------------------------------------------
 UPDATE auth.users
 SET email_confirmed_at = COALESCE(email_confirmed_at, NOW())
 WHERE email IS NOT NULL;
+
+INSERT INTO public.user_profiles (id, email, full_name, role)
+SELECT
+    id,
+    COALESCE(email, 'staff@rollprint.com'),
+    COALESCE(raw_user_meta_data->>'full_name', 'Warehouse Staff'),
+    'OPERATOR'::user_role
+FROM auth.users
+ON CONFLICT (id) DO NOTHING;
 
 -- ====================================================================
 -- END OF MIGRATION 005
