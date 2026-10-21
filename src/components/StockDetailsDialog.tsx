@@ -685,9 +685,20 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
 
                             {/* Invoice Number */}
                             <td className="py-2.5 px-3 font-mono text-slate-700 whitespace-nowrap">
-                              {tx.invoiceNumber ? (
-                                <span className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-800 font-semibold">
-                                  {tx.invoiceNumber}
+                              {tx.type === 'OUT' ? (
+                                <div className="space-y-0.5">
+                                  <span className="px-1.5 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 rounded font-semibold text-[11px] block">
+                                    OUT: {tx.stockOutInvoiceNumber || tx.invoiceNumber || '-'}
+                                  </span>
+                                  {tx.originalStockInInvoiceNumber && (
+                                    <span className="text-[10px] text-slate-400 font-sans block">
+                                      IN: <span className="font-mono">{tx.originalStockInInvoiceNumber}</span>
+                                    </span>
+                                  )}
+                                </div>
+                              ) : tx.invoiceNumber ? (
+                                <span className="px-1.5 py-0.5 bg-slate-100 rounded text-slate-800 font-semibold text-[11px]">
+                                  IN: {tx.invoiceNumber}
                                 </span>
                               ) : (
                                 <span className="text-slate-400 font-normal">-</span>

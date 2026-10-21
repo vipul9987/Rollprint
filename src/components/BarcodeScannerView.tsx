@@ -56,6 +56,10 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   const [isSubmittingStockOut, setIsSubmittingStockOut] = useState<boolean>(false);
   const [stockOutError, setStockOutError] = useState<string>('');
 
+  // Required Stock OUT Inputs (Client Specification)
+  const [stockOutInvoice, setStockOutInvoice] = useState<string>('');
+  const [stockOutDate, setStockOutDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+
   // Manual Input Fallback
   const [manualInput, setManualInput] = useState<string>('');
 
@@ -356,17 +360,29 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
 
   // CONFIRM STOCK OUT FOR SCANNED ROLL
   // RULE: Barcode Stock OUT always represents quantity = 1 physical roll.
-  // Do not ask for "Roll Quantity OUT" after scanning one roll.
+  // User enters Stock OUT Invoice Number and Stock OUT Date.
   // On confirmation:
   // inventory_roll.status: IN_STOCK -> OUT
-  // Create one OUT transaction for that roll.
+  // Create one OUT transaction for that roll storing Stock OUT invoice and date.
   // Update dashboard / summary by -1 roll.
   const handleConfirmStockOut = async () => {
     if (!matchedRoll) return;
 
     // DUPLICATE SCAN PROTECTION
     if (matchedRoll.status === 'OUT') {
-      setStockOutError('This roll has already been stocked out.');
+      setStockOutError('This physical roll has already been stocked out.');
+      return;
+    }
+
+    const cleanInvoice = stockOutInvoice.trim();
+    if (!cleanInvoice) {
+      setStockOutError('Stock OUT Invoice Number is required.');
+      return;
+    }
+
+    const cleanDate = stockOutDate.trim();
+    if (!cleanDate) {
+      setStockOutError('Stock OUT Date is required.');
       return;
     }
 
@@ -374,7 +390,11 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     setStockOutError('');
 
     try {
-      const result = await executeRollStockOutTransaction(matchedRoll.rollBarcode);
+      const result = await executeRollStockOutTransaction(
+        matchedRoll.rollBarcode,
+        cleanInvoice,
+        cleanDate
+      );
 
       if (!result.success) {
         setStockOutError(result.error || 'Failed to stock out this roll.');
@@ -382,7 +402,11 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         return;
       }
 
-      const updatedRoll = result.roll || { ...matchedRoll, status: 'OUT' as const };
+      const updatedRoll = result.roll || {
+        ...matchedRoll,
+        status: 'OUT' as const,
+        stockOutDate: cleanDate
+      };
       setMatchedRoll(updatedRoll);
 
       if (onRollStockOut) {
@@ -412,6 +436,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     setNotFoundCode('');
     setManualInput('');
     setStockOutError('');
+    setStockOutInvoice('');
+    setStockOutDate(new Date().toISOString().split('T')[0]);
     setPhase('SCANNING');
   };
 
@@ -425,13 +451,13 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
           </div>
           <div>
             <h2 className="text-base font-black tracking-tight text-white flex items-center space-x-2">
-              <span>Scan Roll Barcode</span>
+              <span>SCAN PHYSICAL ROLL BARCODE</span>
               <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-[#C59B3F]/20 text-[#D4A84B] border border-[#C59B3F]/40 rounded-full">
                 1 ROLL = 1 BARCODE
               </span>
             </h2>
             <p className="text-xs text-zinc-400">
-              Point camera at physical roll barcode sticker to identify roll &amp; stock out
+              Point camera at physical roll barcode sticker to identify roll, record invoice &amp; stock out
             </p>
           </div>
         </div>
@@ -690,7 +716,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                 <ShieldAlert className="w-6 h-6 text-red-600 shrink-0 mt-0.5" />
                 <div className="space-y-1">
                   <h4 className="text-sm font-black text-red-950">
-                    This roll has already been stocked out.
+                    This physical roll has already been stocked out.
                   </h4>
                   <p className="text-xs text-red-700">
                     Duplicate scan blocked. Roll <strong>{matchedRoll.rollBarcode}</strong> has already been marked as <strong>OUT</strong>.
@@ -700,7 +726,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               </div>
             )}
 
-            {/* EXACT SINGLE ROLL DETAILS CARD */}
+            {/* EXACT SINGLE ROLL DETAILS CARD & STOCK OUT FORM */}
             <div className="p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm space-y-5">
               <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
                 <div>
@@ -728,7 +754,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                 </div>
               </div>
 
-              {/* Specification Grid: Exactly 1 Roll Metadata */}
+              {/* Specification Grid: Exactly 1 Roll Metadata (All Auto-filled & Read-only) */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {/* 1. Material */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
@@ -740,17 +766,27 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   </span>
                 </div>
 
-                {/* 2. Size */}
+                {/* 2. Category */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                    Size
+                    Category
+                  </span>
+                  <span className="font-bold text-slate-700 text-sm block truncate mt-0.5">
+                    {matchedRoll.category}
+                  </span>
+                </div>
+
+                {/* 3. Size / Width */}
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
+                    Size / Width
                   </span>
                   <span className="font-mono font-bold text-slate-900 text-sm block mt-0.5">
                     {matchedRoll.size} M
                   </span>
                 </div>
 
-                {/* 3. Roll Length */}
+                {/* 4. Roll Length */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
                     Roll Length
@@ -760,7 +796,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   </span>
                 </div>
 
-                {/* 4. Roll Number */}
+                {/* 5. Roll Number */}
                 <div className="p-3 bg-amber-50 rounded-xl border border-amber-200">
                   <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">
                     Roll Number
@@ -770,7 +806,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   </span>
                 </div>
 
-                {/* 5. Batch Number */}
+                {/* 6. Batch Number */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
                     Batch Number
@@ -780,18 +816,18 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   </span>
                 </div>
 
-                {/* 6. Invoice Number */}
+                {/* 7. Original Stock IN Invoice (Read-only, Unchanged) */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                    Invoice Number
+                    Original IN Invoice
                   </span>
-                  <span className="font-mono font-bold text-slate-800 text-xs block truncate mt-0.5">
+                  <span className="font-mono font-bold text-slate-800 text-xs block truncate mt-0.5" title="Original receiving invoice remains unchanged">
                     {matchedRoll.invoiceNumber}
                   </span>
                 </div>
 
-                {/* 7. Roll Barcode */}
-                <div className="p-3 bg-slate-900 text-white rounded-xl col-span-2">
+                {/* 8. Roll Barcode */}
+                <div className="p-3 bg-slate-900 text-white rounded-xl">
                   <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider block">
                     Roll Barcode (Unique)
                   </span>
@@ -800,6 +836,57 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   </span>
                 </div>
               </div>
+
+              {/* STOCK OUT DISPATCH INPUTS (REQUIRED MANUAL INPUT) */}
+              {matchedRoll.status === 'IN_STOCK' && (
+                <div className="p-4 bg-gradient-to-r from-amber-50/80 to-orange-50/80 border border-amber-200 rounded-xl space-y-3">
+                  <div className="flex items-center space-x-2 text-amber-950 font-bold text-xs uppercase tracking-wide">
+                    <FileText className="w-4 h-4 text-amber-600" />
+                    <span>Stock OUT Dispatch Details</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        Stock OUT Invoice Number <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={stockOutInvoice}
+                        onChange={(e) => {
+                          setStockOutInvoice(e.target.value);
+                          if (stockOutError) setStockOutError('');
+                        }}
+                        placeholder="e.g. DS/26-27/1230"
+                        className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 rounded-xl text-xs font-mono font-bold text-slate-900 outline-none uppercase shadow-2xs"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                        Original Stock IN invoice ({matchedRoll.invoiceNumber}) will remain unchanged.
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        Stock OUT Date <span className="text-red-500 font-black">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={stockOutDate}
+                        onChange={(e) => {
+                          setStockOutDate(e.target.value);
+                          if (stockOutError) setStockOutError('');
+                        }}
+                        className="w-full px-3 py-2 bg-white border border-amber-300 focus:border-amber-500 focus:ring-2 focus:ring-amber-200 rounded-xl text-xs font-mono font-bold text-slate-900 outline-none shadow-2xs"
+                      />
+                      <span className="text-[10px] text-slate-400 mt-0.5 block">
+                        Dispatch date for audit log &amp; transaction history.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Error Alert */}
               {stockOutError && (
@@ -820,11 +907,11 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   <button
                     type="button"
                     onClick={handleConfirmStockOut}
-                    disabled={isSubmittingStockOut}
+                    disabled={isSubmittingStockOut || !stockOutInvoice.trim() || !stockOutDate.trim()}
                     className="w-full sm:w-auto px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-98 disabled:opacity-50 text-white rounded-xl text-sm font-black flex items-center justify-center space-x-2 shadow-md transition-all cursor-pointer"
                   >
                     <ArrowUpFromLine className="w-4 h-4" />
-                    <span>{isSubmittingStockOut ? 'Processing...' : 'STOCK OUT'}</span>
+                    <span>{isSubmittingStockOut ? 'Processing...' : 'CONFIRM STOCK OUT'}</span>
                   </button>
                 </div>
               ) : (
@@ -864,16 +951,31 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               </p>
             </div>
 
-            <div className="p-3.5 bg-white rounded-xl border border-emerald-200 inline-block font-mono text-xs text-slate-800 space-y-1">
+            <div className="p-3.5 bg-white rounded-xl border border-emerald-200 inline-block font-mono text-xs text-slate-800 space-y-1.5 text-left">
               <div>
                 <span className="text-slate-500">Roll Barcode: </span>
-                <strong className="text-slate-900">{matchedRoll.rollBarcode}</strong>
+                <strong className="text-slate-900 font-bold">{matchedRoll.rollBarcode}</strong>
               </div>
               <div>
                 <span className="text-slate-500">Batch: </span>
                 <strong>{matchedRoll.batchNumber}</strong> &bull;{' '}
                 <span className="text-slate-500">Roll: </span>
                 <strong>#{matchedRoll.rollNumber}</strong>
+              </div>
+              <div className="pt-1 border-t border-slate-100 flex flex-wrap gap-4">
+                <div>
+                  <span className="text-slate-500">Stock OUT Invoice: </span>
+                  <strong className="text-amber-800 font-bold">{stockOutInvoice}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-500">Date: </span>
+                  <strong className="text-slate-900">{stockOutDate}</strong>
+                </div>
+              </div>
+              <div>
+                <span className="text-slate-500">Original IN Invoice: </span>
+                <strong className="text-slate-700">{matchedRoll.invoiceNumber}</strong>
+                <span className="text-emerald-700 text-[11px] ml-1.5 font-sans font-semibold">(Unchanged)</span>
               </div>
               <div className="text-emerald-700 font-bold pt-1">
                 inventory_roll.status updated: IN_STOCK &rarr; OUT (-1 Roll)

@@ -74,6 +74,29 @@ export interface MatrixStockTransaction {
   batchId?: string; // Reference to parent batch
   batchItemId?: string; // Reference to specific batch item line
   createdAt: string;
+
+  // Dedicated Physical Roll Stock OUT Fields:
+  inventoryRollId?: string;
+  rollBarcode?: string;
+  stockOutInvoiceNumber?: string;
+  stockOutDate?: string;
+  originalStockInInvoiceNumber?: string;
+
+  // DB snake_case aliases for direct Supabase compatibility:
+  inventory_roll_id?: string;
+  roll_barcode?: string;
+  batch_id?: string;
+  batch_number?: string;
+  material_id?: string;
+  material_name_snapshot?: string;
+  category_snapshot?: string;
+  width?: string;
+  roll_length?: number;
+  transaction_type?: 'IN' | 'OUT';
+  stock_out_invoice_number?: string;
+  stock_out_date?: string;
+  original_stock_in_invoice_number?: string;
+  created_at?: string;
 }
 
 export interface MatrixItemWithStock extends MatrixInventoryItem {

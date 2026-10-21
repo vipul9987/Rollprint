@@ -23,6 +23,11 @@ import {
   validateUniqueRollBarcode,
   queryRollByExactBarcode
 } from './data/inventoryStore';
+import {
+  executeRollStockOutTransaction,
+  getStoredInventoryRolls,
+  saveStoredInventoryRolls
+} from './data/rollDatabase';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
 
 import fs from 'fs';
@@ -1670,7 +1675,7 @@ assert(rollOutTxn.quantity === 1, 'Stock OUT transaction quantity is exactly 1 p
 assert(updatedBalance === 9, `Dashboard / summary updated by -1 roll: 10 - 1 = 9 (got ${updatedBalance})`);
 
 // 6. DUPLICATE SCAN PROTECTION
-// If scanned roll is already OUT -> block the transaction, show "This roll has already been stocked out", do not decrement
+// If scanned roll is already OUT -> block the transaction, show "This physical roll has already been stocked out.", do not decrement
 const isAlreadyOut = resolvedRoll!.status === 'OUT';
 assert(isAlreadyOut === true, 'Roll is now OUT in the database');
 
@@ -1681,13 +1686,13 @@ let inventoryDecrementedAgain = false;
 
 if (resolvedRoll!.status === 'OUT') {
   duplicateBlocked = true;
-  duplicateErrorMessage = 'This roll has already been stocked out.';
+  duplicateErrorMessage = 'This physical roll has already been stocked out.';
 } else {
   inventoryDecrementedAgain = true;
 }
 
 assert(duplicateBlocked === true, 'Duplicate scan transaction is BLOCKED');
-assert(duplicateErrorMessage === 'This roll has already been stocked out.', `Displays exact blocked message: "This roll has already been stocked out."`);
+assert(duplicateErrorMessage === 'This physical roll has already been stocked out.', `Displays exact blocked message: "This physical roll has already been stocked out."`);
 assert(inventoryDecrementedAgain === false, 'Inventory was NOT decremented again on duplicate scan');
 
 // 7. Batch Number groups rolls vs Roll Barcode identifies ONE physical roll
@@ -1696,6 +1701,91 @@ assert(barcode1.startsWith('101026GT28728'), 'Roll 1 belongs to Batch 101026GT28
 assert(barcode2.startsWith('101026GT28728'), 'Roll 2 belongs to Batch 101026GT28728');
 assert(barcode3.startsWith('101026GT28728'), 'Roll 3 belongs to Batch 101026GT28728');
 assert(barcode1 !== testBatchNum, 'Roll 1 barcode is not equal to raw Batch Number (identifies physical roll)');
+
+// ------------------------------------------------------------------
+// TEST 28: IMPORTANT STOCK OUT CORRECTION (Client Verification)
+// 1. One scan = Exactly 1 Roll
+// 2. Requires Stock OUT Invoice Number and Stock OUT Date
+// 3. CRITICAL: Never overwrite original Stock IN invoice (e.g. GT28728)
+// 4. Duplicate scan blocked: "This physical roll has already been stocked out."
+// ------------------------------------------------------------------
+console.log('\n--- Test Suite 28: Stock OUT Correction: Invoice Number, Date & Roll Dispatch ---');
+
+await (async () => {
+  // A. Simulate Client Scenario:
+  // Material: Bright FL 26, Frontlit Flex, 1.63 M, 70 M
+  // Batch: 101026GT28728, Original Stock IN Invoice: GT28728
+  // Roll Barcode: 171026GT43534
+  const clientRolls = createPhysicalRollRecords(
+    '101026GT28728',
+    'GT28728',
+    'Bright FL 26',
+    'Frontlit Flex',
+    '1.63',
+    70,
+    1,
+    '2026-10-10'
+  );
+  clientRolls[0].rollBarcode = '171026GT43534';
+  const roll = clientRolls[0];
+
+  // Save into roll store so executeRollStockOutTransaction can query it
+  saveStoredInventoryRolls([
+    roll,
+    ...getStoredInventoryRolls().filter((r) => r.rollBarcode !== roll.rollBarcode)
+  ]);
+
+  assert(roll.rollBarcode === '171026GT43534', 'Exact roll barcode is 171026GT43534');
+  assert(roll.invoiceNumber === 'GT28728', 'Original Stock IN invoice is GT28728');
+  assert(roll.status === 'IN_STOCK', 'Scanned roll initial status is IN_STOCK');
+
+  // B. Validation: Missing Stock OUT Invoice or Date fails
+  let validationPassed = false;
+  const noInvoiceResult = await executeRollStockOutTransaction('171026GT43534', '', '2026-10-21');
+  if (!noInvoiceResult.success && noInvoiceResult.error?.includes('Invoice Number is required')) {
+    validationPassed = true;
+  }
+  assert(validationPassed, 'Validation rejects Stock OUT if invoice number is missing');
+
+  // C. Execute Stock OUT with OUT Invoice: DS/26-27/1230, Date: 21/10/2026
+  const outInvoice = 'DS/26-27/1230';
+  const outDate = '2026-10-21';
+  const outResult = await executeRollStockOutTransaction(roll.rollBarcode, outInvoice, outDate);
+
+  assert(outResult.success === true, 'Stock OUT execution succeeded');
+  assert(outResult.roll?.status === 'OUT', 'inventory_roll status transitioned IN_STOCK -> OUT');
+  assert(outResult.roll?.stockOutDate === outDate, `Roll stockOutDate set to ${outDate}`);
+
+  // CRITICAL RULE: Original Stock IN invoice must remain unchanged
+  assert(
+    outResult.roll?.invoiceNumber === 'GT28728',
+    `CRITICAL: Original IN Invoice preserved as GT28728 (got ${outResult.roll?.invoiceNumber})`
+  );
+  assert(
+    outResult.roll?.invoiceNumber !== outInvoice,
+    'Original IN invoice does NOT equal OUT invoice DS/26-27/1230'
+  );
+
+  // Verify Transaction Record Audit
+  const txn = outResult.transaction;
+  assert(txn !== undefined, 'OUT transaction record was created');
+  assert(txn?.type === 'OUT' || txn?.transaction_type === 'OUT', 'Transaction type is OUT');
+  assert(txn?.quantity === 1, 'Quantity is exactly 1 roll (One scan = One roll)');
+  assert(txn?.stockOutInvoiceNumber === outInvoice, `stockOutInvoiceNumber is ${outInvoice}`);
+  assert(txn?.originalStockInInvoiceNumber === 'GT28728', 'originalStockInInvoiceNumber is GT28728');
+  assert(txn?.stockOutDate === outDate, `stockOutDate is ${outDate}`);
+  assert(txn?.rollBarcode === '171026GT43534', 'rollBarcode recorded in transaction audit');
+
+  // D. Duplicate Scan Rejection Test:
+  // "Then scan the same barcode again. Expected: 'This physical roll has already been stocked out.'"
+  const dupResult = await executeRollStockOutTransaction(roll.rollBarcode, outInvoice, outDate);
+  assert(dupResult.success === false, 'Second scan of same barcode is BLOCKED');
+  assert(dupResult.isDuplicateOut === true, 'Duplicate OUT flag is true');
+  assert(
+    dupResult.error === 'This physical roll has already been stocked out.',
+    `Exact duplicate error: "${dupResult.error}"`
+  );
+})();
 
 // ------------------------------------------------------------------
 // SUMMARY

@@ -546,7 +546,9 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
 
 export function saveStoredMatrixBatches(batches: MatrixBatch[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_BATCHES, JSON.stringify(batches));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_BATCHES, JSON.stringify(batches));
+    }
   } catch (e) {
     console.error('Failed to save batches', e);
   }
@@ -710,7 +712,9 @@ export function getStoredMatrixItems(): MatrixInventoryItem[] {
 
 export function saveStoredMatrixItems(items: MatrixInventoryItem[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(items));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(items));
+    }
   } catch (e) {
     console.error('Failed to save items', e);
   }
@@ -718,6 +722,9 @@ export function saveStoredMatrixItems(items: MatrixInventoryItem[]): void {
 
 export function getStoredMatrixTransactions(): MatrixStockTransaction[] {
   try {
+    if (typeof localStorage === 'undefined') {
+      return INITIAL_MATRIX_TRANSACTIONS;
+    }
     const raw = localStorage.getItem(STORAGE_KEY_TRANSACTIONS);
     if (!raw) {
       localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(INITIAL_MATRIX_TRANSACTIONS));
@@ -759,7 +766,9 @@ export function getStoredMatrixTransactions(): MatrixStockTransaction[] {
 
 export function saveStoredMatrixTransactions(transactions: MatrixStockTransaction[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(transactions));
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_TRANSACTIONS, JSON.stringify(transactions));
+    }
   } catch (e) {
     console.error('Failed to save transactions', e);
   }

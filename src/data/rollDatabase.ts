@@ -365,7 +365,11 @@ export interface RollStockOutResult {
  *   Create one OUT transaction for that roll.
  *   Update dashboard / summary by -1 roll.
  */
-export async function executeRollStockOutTransaction(rawRollBarcode: string): Promise<RollStockOutResult> {
+export async function executeRollStockOutTransaction(
+  rawRollBarcode: string,
+  stockOutInvoiceNumber?: string,
+  stockOutDate?: string
+): Promise<RollStockOutResult> {
   const targetCode = extractRollBarcode(rawRollBarcode);
   if (!targetCode) {
     return { success: false, error: 'Invalid barcode provided.' };
@@ -384,17 +388,36 @@ export async function executeRollStockOutTransaction(rawRollBarcode: string): Pr
     return {
       success: false,
       isDuplicateOut: true,
-      error: 'This roll has already been stocked out.',
+      error: 'This physical roll has already been stocked out.',
       roll
     };
   }
 
+  // VALIDATION: Stock OUT Invoice Number and Date are REQUIRED
+  const cleanOutInvoice = (stockOutInvoiceNumber || '').trim();
+  if (!cleanOutInvoice) {
+    return {
+      success: false,
+      error: 'Stock OUT Invoice Number is required.'
+    };
+  }
+
+  const cleanOutDate = (stockOutDate || '').trim() || new Date().toISOString().split('T')[0];
+  if (!cleanOutDate) {
+    return {
+      success: false,
+      error: 'Stock OUT Date is required.'
+    };
+  }
+
   // 1. Update roll status: IN_STOCK -> OUT
+  // CRITICAL RULE: DO NOT OVERWRITE STOCK IN INVOICE.
+  // The original invoice associated with the roll when it came IN (roll.invoiceNumber) must remain unchanged!
   const rolls = getStoredInventoryRolls();
   const updatedRoll: InventoryRoll = {
     ...roll,
     status: 'OUT',
-    stockOutDate: new Date().toISOString().split('T')[0],
+    stockOutDate: cleanOutDate,
     updatedAt: new Date().toISOString()
   };
 
@@ -466,6 +489,11 @@ export async function executeRollStockOutTransaction(rawRollBarcode: string): Pr
   const stockAfter = Math.max(0, stockBefore - 1);
 
   // 4. Create one OUT transaction for that roll (quantity = 1 physical roll)
+  // Preserves original Stock IN invoice and stores Stock OUT invoice and date
+  const parentBatch = batches.find(
+    (b) => b.batchNumber.toUpperCase() === roll.batchNumber.toUpperCase()
+  );
+
   const txnId = `tx-out-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
   const txn: MatrixStockTransaction = {
     id: txnId,
@@ -481,10 +509,34 @@ export async function executeRollStockOutTransaction(rawRollBarcode: string): Pr
     stockBefore,
     stockAfter,
     unit: 'Rolls',
-    date: new Date().toISOString().split('T')[0],
-    invoiceNumber: roll.invoiceNumber,
+    date: cleanOutDate,
+    invoiceNumber: cleanOutInvoice,
     batchNumber: roll.batchNumber,
-    createdAt: new Date().toISOString()
+    batchId: parentBatch?.id,
+    createdAt: new Date().toISOString(),
+
+    // Roll-level Stock OUT Audit Fields:
+    inventoryRollId: roll.id,
+    rollBarcode: roll.rollBarcode,
+    stockOutInvoiceNumber: cleanOutInvoice,
+    stockOutDate: cleanOutDate,
+    originalStockInInvoiceNumber: roll.invoiceNumber,
+
+    // Snake_case aliases:
+    inventory_roll_id: roll.id,
+    roll_barcode: roll.rollBarcode,
+    batch_id: parentBatch?.id,
+    batch_number: roll.batchNumber,
+    material_id: matchedItem?.id,
+    material_name_snapshot: roll.materialName,
+    category_snapshot: roll.category,
+    width: roll.size,
+    roll_length: roll.rollLength,
+    transaction_type: 'OUT',
+    stock_out_invoice_number: cleanOutInvoice,
+    stock_out_date: cleanOutDate,
+    original_stock_in_invoice_number: roll.invoiceNumber,
+    created_at: new Date().toISOString()
   };
 
   const updatedTxns = [txn, ...transactions];

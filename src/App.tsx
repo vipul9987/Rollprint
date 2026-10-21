@@ -1717,11 +1717,15 @@ export default function App() {
         if (!matchesDate) return false;
       }
 
-      // 3. Invoice No Filter
+      // 3. Invoice No Filter (matches standard invoice, stock OUT invoice, or original stock IN invoice)
       if (txnInvoiceFilter.trim()) {
         const queryInv = txnInvoiceFilter.trim().toLowerCase();
         const txnInv = (t.invoiceNumber || '').toLowerCase();
-        if (!txnInv.includes(queryInv)) return false;
+        const outInv = (t.stockOutInvoiceNumber || '').toLowerCase();
+        const origInInv = (t.originalStockInInvoiceNumber || '').toLowerCase();
+        if (!txnInv.includes(queryInv) && !outInv.includes(queryInv) && !origInInv.includes(queryInv)) {
+          return false;
+        }
       }
 
       // 4. Item / Material Filter
@@ -3410,7 +3414,7 @@ export default function App() {
                   <div className="flex items-center space-x-2">
                     <BarcodeIcon className="w-4 h-4 text-amber-700" />
                     <span className="font-black text-slate-900 text-xs uppercase tracking-wide">
-                      Scan Batch Barcode (Quick Dispatch)
+                      SCAN PHYSICAL ROLL BARCODE
                     </span>
                   </div>
                   <button
@@ -3426,7 +3430,7 @@ export default function App() {
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    placeholder="Enter or scan Batch Barcode (e.g. 101026GT28728)..."
+                    placeholder="Enter or scan Physical Roll Barcode (e.g. 171026GT43534)..."
                     value={stockOutBatchSearchInput}
                     onChange={(e) => {
                       const val = e.target.value;
@@ -4295,16 +4299,38 @@ export default function App() {
                             </span>
                           </td>
                           <td className="py-3 px-4 font-mono font-bold text-slate-900">
-                            {tx.invoiceNumber ? (
-                              <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
-                                {tx.invoiceNumber}
+                            {tx.type === 'OUT' ? (
+                              <div className="space-y-0.5">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-200 text-[11px]">
+                                  OUT: {tx.stockOutInvoiceNumber || tx.invoiceNumber || '—'}
+                                </span>
+                                {tx.originalStockInInvoiceNumber && (
+                                  <span className="block text-[10px] text-slate-500 font-medium font-sans">
+                                    IN: <span className="font-mono">{tx.originalStockInInvoiceNumber}</span>
+                                  </span>
+                                )}
+                              </div>
+                            ) : tx.invoiceNumber ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 text-[11px]">
+                                IN: {tx.invoiceNumber}
                               </span>
                             ) : (
                               <span className="text-slate-400">—</span>
                             )}
                           </td>
                           <td className="py-3 px-4 font-mono font-bold text-slate-800">
-                            {tx.batchNumber ? (
+                            {tx.rollBarcode ? (
+                              <div className="space-y-0.5">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 text-indigo-900 border border-indigo-200 text-[11px]">
+                                  Roll: {tx.rollBarcode}
+                                </span>
+                                {tx.batchNumber && (
+                                  <span className="block text-[10px] text-slate-500 font-medium font-sans">
+                                    Batch: <span className="font-mono">{tx.batchNumber}</span>
+                                  </span>
+                                )}
+                              </div>
+                            ) : tx.batchNumber ? (
                               <span className="inline-flex items-center px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px]">
                                 {tx.batchNumber}
                               </span>
