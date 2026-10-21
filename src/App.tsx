@@ -71,7 +71,8 @@ import {
   createPhysicalRollRecords,
   queryRollByExactBarcode,
   executeRollStockOutTransaction,
-  checkProductionDatabaseGuard
+  checkProductionDatabaseGuard,
+  fetchRollsFromSupabase
 } from './data/rollDatabase';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
@@ -132,6 +133,16 @@ export default function App() {
       setNotification(null);
     }, 4500);
   };
+
+  // Synchronize inventory rolls from remote Supabase on initial load
+  useEffect(() => {
+    fetchRollsFromSupabase().then((remoteRolls) => {
+      if (remoteRolls && remoteRolls.length > 0) {
+        setInventoryRolls(remoteRolls);
+        saveStoredInventoryRolls(remoteRolls);
+      }
+    });
+  }, []);
 
   // Distinct Material Names (displays ONLY material names in dropdowns)
   const uniqueMaterialNames = useMemo(() => {

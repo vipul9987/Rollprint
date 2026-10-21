@@ -101,10 +101,12 @@ BEGIN
 
     -- 2. Lock all requested rolls to prevent concurrent dispatch race conditions
     -- Verify every single barcode exists in inventory_rolls
-    SELECT COUNT(*) INTO v_locked_count
+    PERFORM id
     FROM inventory_rolls
     WHERE roll_barcode = ANY(p_roll_barcodes)
     FOR UPDATE;
+
+    GET DIAGNOSTICS v_locked_count = ROW_COUNT;
 
     IF v_locked_count <> v_total_requested THEN
         RAISE EXCEPTION 'One or more scanned roll barcodes do not exist in the database.';

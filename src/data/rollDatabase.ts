@@ -291,6 +291,7 @@ export function createPhysicalRollRecords(
       rollBarcode: candidateBarcode,
       batchNumber,
       invoiceNumber,
+      originalStockInInvoiceNumber: invoiceNumber,
       rollNumber: i,
       materialName,
       category,
@@ -330,11 +331,16 @@ export async function syncRollsToSupabase(rolls: InventoryRoll[]): Promise<void>
       barcode: r.rollBarcode,
       batch_number: r.batchNumber,
       invoice_number: r.invoiceNumber,
+      original_stock_in_invoice_number: r.originalStockInInvoiceNumber || r.invoiceNumber,
+      stock_out_invoice_number: r.stockOutInvoiceNumber || null,
+      stock_in_date: r.receivedDate || new Date().toISOString().split('T')[0],
+      stock_out_date: r.stockOutDate || null,
       roll_number: r.rollNumber,
       material_name: r.materialName,
+      category_snapshot: r.category,
       size: r.size,
       roll_length: r.rollLength,
-      status: r.status === 'IN_STOCK' ? 'AVAILABLE' : 'CONSUMED',
+      status: r.status === 'IN_STOCK' ? 'IN_STOCK' : 'OUT',
       initial_length: r.rollLength,
       remaining_length: r.status === 'IN_STOCK' ? r.rollLength : 0,
       received_date: r.receivedDate,
@@ -342,7 +348,7 @@ export async function syncRollsToSupabase(rolls: InventoryRoll[]): Promise<void>
       updated_at: r.updatedAt
     }));
 
-    await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls`, {
+    const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls`, {
       method: 'POST',
       headers: {
         apikey: supabaseKey,
@@ -352,8 +358,61 @@ export async function syncRollsToSupabase(rolls: InventoryRoll[]): Promise<void>
       },
       body: JSON.stringify(payload)
     });
+
+    if (!res.ok) {
+      const errTxt = await res.text();
+      console.warn('Failed to insert rolls into Supabase:', res.status, errTxt);
+    }
   } catch (err) {
     console.warn('Failed to insert rolls into Supabase:', err);
+  }
+}
+
+/**
+ * Fetch remote rolls directly from Supabase
+ */
+export async function fetchRollsFromSupabase(): Promise<InventoryRoll[] | null> {
+  const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+  const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+  if (!supabaseUrl || !supabaseKey) return null;
+
+  try {
+    const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls?select=*&order=created_at.desc`, {
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`
+      }
+    });
+
+    if (!res.ok) {
+      console.warn('fetchRollsFromSupabase failed:', res.status, res.statusText);
+      return null;
+    }
+
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return null;
+
+    return rows.map((row) => ({
+      id: row.id,
+      rollBarcode: row.roll_barcode || row.barcode,
+      batchNumber: row.batch_number || '',
+      invoiceNumber: row.invoice_number || '',
+      originalStockInInvoiceNumber: row.original_stock_in_invoice_number || row.invoice_number || '',
+      stockOutInvoiceNumber: row.stock_out_invoice_number || undefined,
+      rollNumber: row.roll_number || 1,
+      materialName: row.material_name || '',
+      category: row.category_snapshot || row.category || 'Flex PVC',
+      size: String(row.size || ''),
+      rollLength: Number(row.roll_length || row.initial_length) || 0,
+      status: (row.status === 'IN_STOCK' || row.status === 'AVAILABLE' || row.status === 'OPEN') ? 'IN_STOCK' : 'OUT',
+      receivedDate: row.stock_in_date || row.received_date || '',
+      stockOutDate: row.stock_out_date || undefined,
+      createdAt: row.created_at || new Date().toISOString(),
+      updatedAt: row.updated_at || new Date().toISOString()
+    }));
+  } catch (err) {
+    console.warn('fetchRollsFromSupabase network error:', err);
+    return null;
   }
 }
 
