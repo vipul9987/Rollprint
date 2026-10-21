@@ -25,7 +25,9 @@ import {
   extractRollBarcode,
   queryRollByExactBarcode,
   executeAtomicRollDispatch,
-  AtomicRollDispatchResult
+  AtomicRollDispatchResult,
+  isProductionEnvironment,
+  isSupabaseConfigured
 } from '../data/rollDatabase';
 
 interface BarcodeScannerViewProps {
@@ -412,6 +414,11 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       return;
     }
 
+    if (isProductionEnvironment() && !isSupabaseConfigured()) {
+      setDispatchError('DATABASE UNAVAILABLE: Supabase database connection is not configured. Stock OUT mutations are disabled in production to prevent device stock divergence.');
+      return;
+    }
+
     setIsSubmitting(true);
     setDispatchError('');
 
@@ -590,6 +597,21 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
           </div>
         ) : (
           <div className="p-5 sm:p-6 space-y-6">
+            {/* Database unavailable banner in production */}
+            {isProductionEnvironment() && !isSupabaseConfigured() && (
+              <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl flex items-center space-x-3 text-rose-900 text-xs font-bold">
+                <ShieldAlert className="w-6 h-6 text-rose-600 shrink-0" />
+                <div>
+                  <span className="font-black uppercase tracking-wider block text-rose-800">
+                    Database Connection Required (Production Mode)
+                  </span>
+                  <span>
+                    Remote Supabase database is not connected. In production, Stock OUT mutations are locked to prevent warehouse inventory divergence between devices.
+                  </span>
+                </div>
+              </div>
+            )}
+
             {/* ========================================================= */}
             {/* STEP 1: TOP DISPATCH HEADER INPUTS                        */}
             {/* Entered ONCE for the whole dispatch                       */}
@@ -967,7 +989,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button
                   type="button"
-                  disabled={cartRolls.length === 0 || isSubmitting}
+                  disabled={cartRolls.length === 0 || isSubmitting || (isProductionEnvironment() && !isSupabaseConfigured())}
                   onClick={handleConfirmStockOut}
                   className="w-full sm:w-auto px-6 py-3 bg-[#C59B3F] hover:bg-[#b58b33] disabled:opacity-40 disabled:pointer-events-none text-zinc-950 font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer"
                 >

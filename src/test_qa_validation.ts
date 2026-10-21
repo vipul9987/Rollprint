@@ -27,7 +27,12 @@ import {
   executeRollStockOutTransaction,
   executeAtomicRollDispatch,
   getStoredInventoryRolls,
-  saveStoredInventoryRolls
+  saveStoredInventoryRolls,
+  generateInitialRolls,
+  isProductionEnvironment,
+  isSupabaseConfigured,
+  setForceProductionModeForTesting,
+  checkProductionDatabaseGuard
 } from './data/rollDatabase';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
 
@@ -2017,6 +2022,64 @@ await (async () => {
   assert(Boolean(sampleTx?.batchNumber), `Batch Number is present: ${sampleTx?.batchNumber}`);
   assert(Boolean(sampleTx?.stockOutInvoiceNumber), `OUT Invoice is present: ${sampleTx?.stockOutInvoiceNumber}`);
   assert(Boolean(sampleTx?.originalStockInInvoiceNumber), `Original IN Invoice is present: ${sampleTx?.originalStockInInvoiceNumber}`);
+
+  // =================================================================
+  // END-TO-END TEST 9 — IDEMPOTENCY OF generateInitialRolls()
+  // Opening stock must NOT duplicate when initialized repeatedly.
+  // =================================================================
+  console.log('\n>> End-to-End Test 9: generateInitialRolls() Idempotency');
+  const genRun1 = generateInitialRolls();
+  const genRun2 = generateInitialRolls();
+  const genRun3 = generateInitialRolls();
+
+  assert(genRun1.length > 0, `Initial rolls generated: ${genRun1.length}`);
+  assert(genRun1.length === genRun2.length, `Run 1 (${genRun1.length}) matches Run 2 (${genRun2.length})`);
+  assert(genRun2.length === genRun3.length, `Run 2 (${genRun2.length}) matches Run 3 (${genRun3.length})`);
+
+  // Verify all barcodes in generateInitialRolls are 100% unique within each run
+  const barcodesSet1 = new Set(genRun1.map((r) => r.rollBarcode.toUpperCase()));
+  assert(barcodesSet1.size === genRun1.length, `Every barcode in run 1 is unique (${barcodesSet1.size}/${genRun1.length})`);
+
+  // Verify exact barcode stability across runs
+  const barcodesMatch = genRun1.every((r, idx) => r.rollBarcode === genRun2[idx].rollBarcode && r.id === genRun2[idx].id);
+  assert(barcodesMatch, 'Generated roll IDs and barcodes are deterministic and identical across repeated runs');
+
+  // Verify getStoredInventoryRolls() does not grow on multiple calls
+  saveStoredInventoryRolls(genRun1);
+  const baselineCount = getStoredInventoryRolls().length;
+  for (let c = 0; c < 5; c++) {
+    getStoredInventoryRolls();
+  }
+  const postCallsCount = getStoredInventoryRolls().length;
+  assert(baselineCount === postCallsCount, `Stored rolls count remained stable after repeated calls (${baselineCount} === ${postCallsCount})`);
+
+  // Verify opening stock rolls specifically
+  const openingRolls = genRun1.filter((r) => r.batchNumber === 'OPENING-STOCK');
+  const openingBarcodes = new Set(openingRolls.map((r) => r.rollBarcode.toUpperCase()));
+  assert(openingRolls.length === openingBarcodes.size, `Opening stock rolls are 100% unique (${openingRolls.length} rolls)`);
+
+  // =================================================================
+  // END-TO-END TEST 10 — PRODUCTION DATABASE FALLBACK LOCKOUT GUARD
+  // Supabase unavailable in production must NOT silently switch to localStorage.
+  // Stock IN and Stock OUT mutations must be disabled.
+  // =================================================================
+  console.log('\n>> End-to-End Test 10: Production Database Fallback Lockout Guard');
+  // Simulate Production environment without remote Supabase
+  setForceProductionModeForTesting(true);
+
+  const guardResult = checkProductionDatabaseGuard();
+  assert(!guardResult.allowed, 'Production database guard blocks mutations when Supabase is not configured');
+  assert(Boolean(guardResult.error?.includes('DATABASE UNAVAILABLE')), `Error explains database is unavailable: ${guardResult.error}`);
+
+  // Attempt atomic dispatch in production mode without Supabase connection
+  const prodBlockedDispatch = await executeAtomicRollDispatch('TEST-PROD-OUT', '2026-10-22', [genRun1[0].rollBarcode]);
+  assert(!prodBlockedDispatch.success, 'Stock OUT is blocked in production when database is unavailable');
+  assert(Boolean(prodBlockedDispatch.error?.includes('DATABASE UNAVAILABLE')), `Stock OUT returns database unavailable error: ${prodBlockedDispatch.error}`);
+
+  // Restore non-production / test mode
+  setForceProductionModeForTesting(null);
+  const restoredGuard = checkProductionDatabaseGuard();
+  assert(restoredGuard.allowed, 'Development / test mode allows normal local store operation');
 })();
 
 // ------------------------------------------------------------------

@@ -140,7 +140,13 @@ export function generateInitialRolls(): InventoryRoll[] {
 // In-memory fallback for non-browser environments (e.g. Node.js QA tests)
 let memoryRollStore: InventoryRoll[] | null = null;
 
-function getEnvVar(key: string): string | undefined {
+let forceProductionModeForTesting: boolean | null = null;
+
+export function setForceProductionModeForTesting(val: boolean | null): void {
+  forceProductionModeForTesting = val;
+}
+
+export function getEnvVar(key: string): string | undefined {
   try {
     if (typeof import.meta !== 'undefined' && (import.meta as any).env && (import.meta as any).env[key]) {
       return (import.meta as any).env[key];
@@ -152,6 +158,41 @@ function getEnvVar(key: string): string | undefined {
     }
   } catch {}
   return undefined;
+}
+
+export function isProductionEnvironment(): boolean {
+  if (forceProductionModeForTesting !== null) {
+    return forceProductionModeForTesting;
+  }
+  try {
+    if (typeof import.meta !== 'undefined' && (import.meta as any).env) {
+      if ((import.meta as any).env.PROD === true) return true;
+      if ((import.meta as any).env.MODE === 'production') return true;
+    }
+  } catch {}
+  try {
+    if (typeof process !== 'undefined' && process.env) {
+      if (process.env.NODE_ENV === 'production') return true;
+      if (process.env.VITE_APP_ENV === 'production') return true;
+    }
+  } catch {}
+  return false;
+}
+
+export function isSupabaseConfigured(): boolean {
+  const url = getEnvVar('VITE_SUPABASE_URL');
+  const key = getEnvVar('VITE_SUPABASE_ANON_KEY');
+  return Boolean(url && url.trim() && key && key.trim() && !url.includes('placeholder') && !url.includes('YOUR_'));
+}
+
+export function checkProductionDatabaseGuard(): { allowed: boolean; error?: string } {
+  if (isProductionEnvironment() && !isSupabaseConfigured()) {
+    return {
+      allowed: false,
+      error: 'DATABASE UNAVAILABLE: Supabase database connection is not configured. Inventory mutations are disabled in production to prevent device divergence.'
+    };
+  }
+  return { allowed: true };
 }
 
 /**
@@ -684,8 +725,18 @@ export async function executeAtomicRollDispatch(
   // 2. Validate against Database (Supabase RPC if available)
   const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
   const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+  const hasSupabase = isSupabaseConfigured();
 
-  if (supabaseUrl && supabaseKey) {
+  // PRODUCTION SAFETY RULE:
+  // Supabase unavailable must NOT silently switch inventory operations to localStorage in production.
+  if (isProductionEnvironment() && !hasSupabase) {
+    return {
+      success: false,
+      error: 'DATABASE UNAVAILABLE: Supabase database connection is not configured. Stock OUT mutations are disabled in production to prevent warehouse stock divergence between devices.'
+    };
+  }
+
+  if (hasSupabase && supabaseUrl && supabaseKey) {
     try {
       const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/execute_roll_dispatch`, {
         method: 'POST',
@@ -710,7 +761,14 @@ export async function executeAtomicRollDispatch(
         };
       }
     } catch (e: any) {
-      console.warn('Supabase RPC call failed, falling back to local atomic transaction:', e);
+      console.warn('Supabase RPC call failed:', e);
+      if (isProductionEnvironment()) {
+        return {
+          success: false,
+          error: `DATABASE UNAVAILABLE: Remote Supabase database is unreachable (${e?.message || 'Network error'}). Stock OUT mutations are disabled in production to prevent warehouse stock divergence between devices.`
+        };
+      }
+      // In development/test mode, fallback to local atomic transaction
     }
   }
 

@@ -70,7 +70,8 @@ import {
   saveStoredInventoryRolls,
   createPhysicalRollRecords,
   queryRollByExactBarcode,
-  executeRollStockOutTransaction
+  executeRollStockOutTransaction,
+  checkProductionDatabaseGuard
 } from './data/rollDatabase';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
@@ -1234,6 +1235,12 @@ export default function App() {
     if (!rawInvoice) {
       setStockInError('Invoice Number is required for Stock IN.');
       stockInInvoiceInputRef.current?.focus();
+      return;
+    }
+
+    const dbGuard = checkProductionDatabaseGuard();
+    if (!dbGuard.allowed) {
+      setStockInError(dbGuard.error || 'DATABASE UNAVAILABLE: Stock IN is disabled in production to prevent device stock divergence.');
       return;
     }
 
