@@ -29,8 +29,11 @@ import {
   RotateCcw,
   Download,
   FileSpreadsheet,
-  Copy
+  Copy,
+  LogOut
 } from 'lucide-react';
+import { StaffLoginView } from './components/StaffLoginView';
+import { getStaffSession, signOutStaff, onStaffAuthStateChange, isSupabaseConfigured } from './lib/supabase';
 import {
   getStoredMatrixItems,
   saveStoredMatrixItems,
@@ -72,7 +75,8 @@ import {
   queryRollByExactBarcode,
   executeRollStockOutTransaction,
   checkProductionDatabaseGuard,
-  fetchRollsFromSupabase
+  fetchRollsFromSupabase,
+  executeAtomicStockInRpc
 } from './data/rollDatabase';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
@@ -134,15 +138,38 @@ export default function App() {
     }, 4500);
   };
 
-  // Synchronize inventory rolls from remote Supabase on initial load
+  // Staff Authentication State (Supabase Auth)
+  const [staffSession, setStaffSession] = useState<any>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured());
+
+  // Listen for Staff Auth changes
   useEffect(() => {
-    fetchRollsFromSupabase().then((remoteRolls) => {
-      if (remoteRolls !== null) {
-        setInventoryRolls(remoteRolls);
-        saveStoredInventoryRolls(remoteRolls);
-      }
-    });
+    if (isSupabaseConfigured()) {
+      getStaffSession().then((sess) => {
+        setStaffSession(sess);
+        setAuthLoading(false);
+      });
+      const unsub = onStaffAuthStateChange((sess) => {
+        setStaffSession(sess);
+        setAuthLoading(false);
+      });
+      return () => unsub();
+    } else {
+      setAuthLoading(false);
+    }
   }, []);
+
+  // Synchronize inventory rolls from remote Supabase on initial load and when staff logs in
+  useEffect(() => {
+    if (!isSupabaseConfigured() || staffSession) {
+      fetchRollsFromSupabase().then((remoteRolls) => {
+        if (remoteRolls !== null) {
+          setInventoryRolls(remoteRolls);
+          saveStoredInventoryRolls(remoteRolls);
+        }
+      });
+    }
+  }, [staffSession]);
 
   // Distinct Material Names (displays ONLY material names in dropdowns)
   const uniqueMaterialNames = useMemo(() => {
@@ -1238,7 +1265,7 @@ export default function App() {
   };
 
   // Save Complete Stock IN Batch (Creates 1 Batch, Multiple Batch Items, and IN Transactions)
-  const handleSaveStockInBatch = (e?: React.FormEvent) => {
+  const handleSaveStockInBatch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setStockInError('');
 
@@ -1286,6 +1313,15 @@ export default function App() {
         rollQuantity: qty,
         areaM2
       });
+    }
+
+    // Phase 7: Atomic Stock IN RPC Execution on Supabase
+    if (isSupabaseConfigured()) {
+      const rpcResult = await executeAtomicStockInRpc(rawInvoice.toUpperCase(), stockInDate, linesToSave);
+      if (!rpcResult.success) {
+        setStockInError(rpcResult.error || 'Stock IN failed in database.');
+        return;
+      }
     }
 
     const batchId = `bat-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
@@ -1930,6 +1966,33 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
+  // AUTHENTICATION GATE (Phase 1 & Phase 12 Security Rule)
+  // When Supabase is configured:
+  // Unauthenticated users are strictly barred from all views/routes.
+  // Must authenticate with valid staff credentials.
+  // -------------------------------------------------------------
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-center items-center">
+        <div className="w-8 h-8 border-2 border-amber-500 border-t-transparent rounded-full animate-spin mb-3 shadow-lg shadow-amber-500/20" />
+        <p className="text-xs uppercase tracking-widest text-slate-400 font-semibold font-mono">
+          Verifying warehouse staff credentials...
+        </p>
+      </div>
+    );
+  }
+
+  if (isSupabaseConfigured() && !staffSession) {
+    return (
+      <StaffLoginView
+        onLoginSuccess={() => {
+          getStaffSession().then((sess) => setStaffSession(sess));
+        }}
+      />
+    );
+  }
+
+  // -------------------------------------------------------------
   // STANDALONE BATCH VIEW (If URL is /b/:batchNumber)
   // Example: https://rollprint.vercel.app/b/101026GE23542
   // -------------------------------------------------------------
@@ -2158,6 +2221,28 @@ export default function App() {
                 <span>Roll Barcode Labels</span>
               </button>
             </nav>
+
+            {/* Staff User & Logout Action */}
+            {staffSession && (
+              <div className="flex items-center gap-2 pl-2 border-l border-zinc-800">
+                <span className="text-xs text-zinc-400 font-mono hidden xl:inline max-w-[150px] truncate">
+                  {staffSession.user?.email}
+                </span>
+                <button
+                  id="staff-logout-btn"
+                  onClick={async () => {
+                    await signOutStaff();
+                    setStaffSession(null);
+                    showNotification('Staff logged out successfully.', 'success');
+                  }}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all text-zinc-300 hover:text-rose-300 hover:bg-rose-950/40 border border-zinc-700 hover:border-rose-500/40 cursor-pointer shadow-sm"
+                  title="Logout from RollPrint"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Logout</span>
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </header>
