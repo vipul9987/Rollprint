@@ -112,10 +112,10 @@ export default function App() {
   // Show inactive materials toggle in Material Master
   const [showInactive, setShowInactive] = useState<boolean>(false);
 
-  // Synchronize derived stock values & areas
+  // Synchronize derived stock values & areas with physical roll source of truth
   const itemsWithStock: MatrixItemWithStock[] = useMemo(() => {
-    return calculateMatrixWithStock(items, transactions);
-  }, [items, transactions]);
+    return calculateMatrixWithStock(items, transactions, inventoryRolls);
+  }, [items, transactions, inventoryRolls]);
 
   // Dashboard Metrics
   const dashboardMetrics = useMemo(() => {
@@ -1122,6 +1122,18 @@ export default function App() {
     );
   };
 
+  // Handler for atomic multi-roll POS dispatch
+  const handleDispatchComplete = (result: any) => {
+    setItems(getStoredMatrixItems());
+    setBatches(getStoredMatrixBatches());
+    setTransactions(getStoredMatrixTransactions());
+    setInventoryRolls(getStoredInventoryRolls());
+    showNotification(
+      `Stock OUT Complete: ${result.totalRolls || 0} rolls dispatched under Invoice ${result.dispatchInvoiceNumber || ''}`,
+      'success'
+    );
+  };
+
   // Add Item to Current Draft Batch
   const handleAddOrUpdateItemToBatch = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -2014,6 +2026,7 @@ export default function App() {
           }}
           onClose={() => setModalItem(null)}
           normalizeNumericSize={normalizeNumericSize}
+          onOpenScanner={() => setActiveTab('stock-out')}
         />
       )}
 
@@ -2124,7 +2137,7 @@ export default function App() {
                 }`}
               >
                 <BarcodeIcon className="w-3.5 h-3.5" />
-                <span>Barcode Labels</span>
+                <span>Roll Barcode Labels</span>
               </button>
             </nav>
           </div>
@@ -2143,6 +2156,7 @@ export default function App() {
               itemsWithStock={itemsWithStock}
               onExecuteStockOut={handleScannerStockOut}
               onRollStockOut={handleRollStockOut}
+              onDispatchComplete={handleDispatchComplete}
             />
           </div>
         )}
@@ -3384,727 +3398,19 @@ export default function App() {
         )}
 
         {/* ========================================================= */}
-        {/* TAB 4: STOCK OUT (Exact Blueprint Order) */}
+        {/* TAB 4: STOCK OUT (Retail POS Continuous Scanner Cart)     */}
         {/* ========================================================= */}
         {activeTab === 'stock-out' && (
-          <div className="max-w-xl mx-auto space-y-5">
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
-              <div className="flex items-center space-x-3 border-b border-slate-100 pb-4">
-                <div className="p-2.5 rounded-xl bg-amber-50 text-amber-700">
-                  <ArrowUpFromLine className="w-6 h-6 stroke-[2.5]" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-black text-slate-900 tracking-tight">Stock OUT</h2>
-                  <p className="text-xs text-slate-500">
-                    Remove rolls from inventory balance according to blueprint.
-                  </p>
-                </div>
-              </div>
-
-              {stockOutError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center space-x-2 font-medium">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                  <span>{stockOutError}</span>
-                </div>
-              )}
-
-              {/* Quick Batch Barcode Scan (Client Specification: Stock OUT scans batch barcode to identify material, size, roll length & batch) */}
-              <div className="p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border border-amber-200 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <BarcodeIcon className="w-4 h-4 text-amber-700" />
-                    <span className="font-black text-slate-900 text-xs uppercase tracking-wide">
-                      SCAN PHYSICAL ROLL BARCODE
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('scan')}
-                    className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-amber-300 rounded-lg text-amber-900 font-bold text-xs flex items-center space-x-1 shadow-xs cursor-pointer"
-                  >
-                    <Camera className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Open Scanner</span>
-                  </button>
-                </div>
-
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    placeholder="Enter or scan Physical Roll Barcode (e.g. 171026GT43534)..."
-                    value={stockOutBatchSearchInput}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setStockOutBatchSearchInput(val);
-                      handleBatchSelectOrScan(val);
-                    }}
-                    className="flex-1 p-2 bg-white border border-amber-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-amber-500"
-                  />
-                  {stockOutSelectedBatchId && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setStockOutSelectedBatchId('');
-                        setStockOutBatchSearchInput('');
-                        setStockOutBarcodeCode('');
-                        setStockOutVerificationStatus('IDLE');
-                      }}
-                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold"
-                    >
-                      Clear Batch
-                    </button>
-                  )}
-                </div>
-
-                {/* DUPLICATE BATCH RESOLUTION UI */}
-                {duplicateBatchMatches.length > 1 && (
-                  <div className="p-3.5 bg-amber-50/90 border-2 border-amber-400 rounded-xl space-y-2">
-                    <div className="flex items-center space-x-2 text-amber-950 font-black text-xs">
-                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                      <span>Multiple Lines Found for Batch {duplicateBatchMatches[0].batchNumber} (Invoice {duplicateBatchMatches[0].invoiceNumber})</span>
-                    </div>
-                    <p className="text-[11px] text-slate-700">
-                      Invoice <strong>{duplicateBatchMatches[0].invoiceNumber}</strong> includes {duplicateBatchMatches.length} material lines under this batch code. Please select the specific material you are dispatching:
-                    </p>
-                    <div className="space-y-1.5 pt-1">
-                      {duplicateBatchMatches.map((batch) => (
-                        <button
-                          key={batch.id}
-                          type="button"
-                          onClick={() => selectSingleStockOutBatch(batch)}
-                          className="w-full p-2.5 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg text-left flex items-center justify-between transition-all shadow-xs cursor-pointer"
-                        >
-                          <div>
-                            <span className="font-black text-slate-900 text-xs block">{batch.materialName}</span>
-                            <span className="text-[11px] font-mono text-slate-600">
-                              Width: {batch.variantSize}M &bull; Length: {batch.rollLengthMtr}M &bull; {batch.category}
-                            </span>
-                          </div>
-                          <div className="text-right">
-                            <span className="font-mono font-black text-amber-800 text-sm block">
-                              {batch.currentRemainingRollQuantity} Rolls
-                            </span>
-                            <span className="text-[10px] text-slate-500 uppercase font-bold">Available in Batch</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {selectedStockOutBatch ? (
-                  <div className="p-3.5 bg-white rounded-2xl border-2 border-amber-300 shadow-xs space-y-3">
-                    {/* BATCH DETAILS HEADER */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-100 pb-2.5">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-black text-slate-900">
-                            Batch: {selectedStockOutBatch.batchNumber}
-                          </span>
-                          <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-mono text-[10px] font-bold">
-                            Invoice: {selectedStockOutBatch.invoiceNumber}
-                          </span>
-                        </div>
-                        <span className="text-[11px] text-slate-500 font-medium">
-                          Stock IN Date: {selectedStockOutBatch.stockInDate}
-                        </span>
-                      </div>
-                      <div className="text-right">
-                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Batch Stock</span>
-                        <span className="font-mono text-sm font-black text-emerald-700">
-                          {selectedStockOutBatch.currentRemainingRollQuantity} Rolls ({ (selectedStockOutBatch.items || []).length } Items)
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* ITEMS IN THIS BATCH TABLE (Client Specification) */}
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-black uppercase tracking-wider text-slate-800">
-                          ITEMS IN THIS BATCH
-                        </span>
-                        <span className="text-[10px] text-slate-500">
-                          Click row to select item line
-                        </span>
-                      </div>
-
-                      <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-left text-xs">
-                            <thead>
-                              <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold text-[10px] uppercase tracking-wider">
-                                <th className="py-2 px-2.5">Material</th>
-                                <th className="py-2 px-2">Size</th>
-                                <th className="py-2 px-2">Length</th>
-                                <th className="py-2 px-2 text-right">Available</th>
-                                <th className="py-2 px-2">Barcode</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                              {(selectedStockOutBatch.items && selectedStockOutBatch.items.length > 0
-                                ? selectedStockOutBatch.items
-                                : [
-                                    {
-                                      id: `item-${selectedStockOutBatch.id}`,
-                                      batchId: selectedStockOutBatch.id,
-                                      materialNameSnapshot: selectedStockOutBatch.materialName || 'Material',
-                                      categorySnapshot: selectedStockOutBatch.category || 'Roll Material',
-                                      width: selectedStockOutBatch.variantSize || '1.02',
-                                      rollLength: selectedStockOutBatch.rollLengthMtr || 0,
-                                      initialRollQuantity: selectedStockOutBatch.initialRollQuantity || 1,
-                                      remainingRollQuantity: selectedStockOutBatch.currentRemainingRollQuantity || 0,
-                                      areaM2: 0,
-                                      createdAt: selectedStockOutBatch.createdAt
-                                    }
-                                  ]
-                              ).map((line) => {
-                                const isSelected = stockOutSelectedBatchItemId === line.id;
-                                const isDepleted = line.remainingRollQuantity <= 0;
-                                return (
-                                  <tr
-                                    key={line.id}
-                                    onClick={() => {
-                                      if (!isDepleted) {
-                                        selectSingleStockOutBatch(selectedStockOutBatch, line.id);
-                                      }
-                                    }}
-                                    className={`transition-colors cursor-pointer text-[11px] ${
-                                      isSelected
-                                        ? 'bg-amber-100/80 font-bold border-l-4 border-l-amber-600'
-                                        : isDepleted
-                                        ? 'bg-slate-50/50 opacity-50 cursor-not-allowed'
-                                        : 'hover:bg-slate-50'
-                                    }`}
-                                  >
-                                    <td className="py-2 px-2.5 font-bold text-slate-900">
-                                      <div className="flex items-center gap-1.5">
-                                        {isSelected && (
-                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-600"></span>
-                                        )}
-                                        <span>{line.materialNameSnapshot}</span>
-                                      </div>
-                                    </td>
-                                    <td className="py-2 px-2 font-mono text-slate-700 whitespace-nowrap">
-                                      {line.width}M
-                                    </td>
-                                    <td className="py-2 px-2 font-mono text-slate-700 whitespace-nowrap">
-                                      {line.rollLength}M
-                                    </td>
-                                    <td className="py-2 px-2 text-right font-mono font-black whitespace-nowrap">
-                                      <span className={isDepleted ? 'text-slate-400' : 'text-emerald-700'}>
-                                        {line.remainingRollQuantity} {line.remainingRollQuantity === 1 ? 'Roll' : 'Rolls'}
-                                      </span>
-                                    </td>
-                                    <td className="py-2 px-2 font-mono text-indigo-700 font-bold whitespace-nowrap">
-                                      <span className="px-1.5 py-0.5 bg-indigo-50 border border-indigo-200 rounded">
-                                        {selectedStockOutBatch.batchNumber}
-                                      </span>
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ) : availableBatchesForCurrentStockOut.length > 0 ? (
-                  <div className="space-y-1">
-                    <span className="text-[10px] text-slate-500 font-bold block uppercase">
-                      Available Batches in Stock for this Item:
-                    </span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {availableBatchesForCurrentStockOut.map((b) => (
-                        <button
-                          type="button"
-                          key={b.id}
-                          onClick={() => handleBatchSelectOrScan(b.batchNumber)}
-                          className="px-2 py-1 rounded-lg bg-white hover:bg-amber-100 border border-amber-300 text-slate-800 font-mono text-[11px] flex items-center space-x-1.5 shadow-xs cursor-pointer"
-                        >
-                          <span className="font-bold">{b.batchNumber}</span>
-                          <span className="text-amber-700 font-black">({b.currentRemainingRollQuantity} Rolls)</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              <form onSubmit={handleStockOutSubmit} className="space-y-4 text-xs">
-                {/* 1 & 2: Material Name & Auto-Populated Category */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      1. Material Name <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      value={stockOutMaterial}
-                      onChange={(e) => {
-                        setStockOutMaterial(e.target.value);
-                        setStockOutVariantSize('');
-                        setStockOutBarcodeCode('');
-                        setStockOutVerificationStatus('IDLE');
-                        setStockOutError('');
-                      }}
-                      required
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                    >
-                      <option value="">-- Select Material --</option>
-                      {uniqueMaterialNames.map((mat) => (
-                        <option key={mat} value={mat}>
-                          {mat}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      2. Category
-                    </label>
-                    <input
-                      type="text"
-                      readOnly
-                      disabled
-                      value={stockOutAutoCategory || '—'}
-                      placeholder="Auto-populated"
-                      className="w-full p-3 bg-slate-100 border border-slate-300 rounded-xl text-slate-700 text-sm font-medium cursor-not-allowed"
-                    />
-                  </div>
-                </div>
-
-                {/* 3 & 4: Size / Width & Roll Length / Meter (MANUAL NUMERIC INPUTS AS PER BLUEPRINT) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-slate-700 font-bold">
-                        3. Size / Width <span className="text-red-500">*</span>
-                      </label>
-                      <span className="text-[10px] text-slate-400 font-mono">Manual Numeric Input</span>
-                    </div>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        min="0.01"
-                        step="0.01"
-                        list="stock-out-size-suggestions"
-                        required
-                        placeholder="e.g. 1.63 or 1.40"
-                        value={stockOutVariantSize}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setStockOutVariantSize(val);
-                          // Try auto-filling existing roll length if available in stock
-                          const norm = normalizeNumericSize(val);
-                          const foundItem = items.find(
-                            (i) => i.active && i.materialName === stockOutMaterial && normalizeNumericSize(i.variantSize) === norm
-                          );
-                          if (foundItem && foundItem.rollLengthMtr) {
-                            setStockOutRollLength(foundItem.rollLengthMtr.toString());
-                          }
-                          setStockOutBarcodeCode('');
-                          setStockOutVerificationStatus('IDLE');
-                          setStockOutError('');
-                        }}
-                        className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                      />
-                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
-                        M
-                      </span>
-                    </div>
-                    <datalist id="stock-out-size-suggestions">
-                      {stockOutSuggestedSizes.map((size) => (
-                        <option key={size} value={size} />
-                      ))}
-                    </datalist>
-                    {stockOutSuggestedSizes.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        <span className="text-[10px] text-slate-400">In Stock:</span>
-                        {stockOutSuggestedSizes.slice(0, 7).map((s) => (
-                          <button
-                            type="button"
-                            key={s}
-                            onClick={() => {
-                              setStockOutVariantSize(s);
-                              const foundItem = items.find(
-                                (i) => i.active && i.materialName === stockOutMaterial && normalizeNumericSize(i.variantSize) === s
-                              );
-                              if (foundItem && foundItem.rollLengthMtr) {
-                                setStockOutRollLength(foundItem.rollLengthMtr.toString());
-                              }
-                              setStockOutBarcodeCode('');
-                              setStockOutVerificationStatus('IDLE');
-                            }}
-                            className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 hover:bg-amber-100 hover:text-amber-800 text-slate-600 transition-colors"
-                          >
-                            {s}M
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-slate-700 font-bold">
-                        4. Roll Length / Meter <span className="text-red-500">*</span>
-                      </label>
-                      <span className="text-[10px] text-slate-400 font-mono">Manual Numeric Input</span>
-                    </div>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        min="1"
-                        step="any"
-                        required
-                        placeholder="e.g. 50, 69, 70"
-                        value={stockOutRollLength}
-                        onChange={(e) => {
-                          setStockOutRollLength(e.target.value);
-                          setStockOutBarcodeCode('');
-                          setStockOutVerificationStatus('IDLE');
-                          setStockOutError('');
-                        }}
-                        className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                      />
-                      <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
-                        M
-                      </span>
-                    </div>
-                    <div className="mt-1 flex items-center space-x-1">
-                      <span className="text-[10px] text-slate-400">Quick:</span>
-                      {['50', '69', '70'].map((len) => (
-                        <button
-                          type="button"
-                          key={len}
-                          onClick={() => {
-                            setStockOutRollLength(len);
-                            setStockOutBarcodeCode('');
-                            setStockOutVerificationStatus('IDLE');
-                          }}
-                          className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors ${
-                            stockOutRollLength === len ? 'bg-amber-600 text-white font-bold' : 'bg-slate-100 hover:bg-amber-100 text-slate-600'
-                          }`}
-                        >
-                          {len}M
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 5 & 6: Roll Count OUT & Date */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-slate-700 font-bold mb-1">
-                      5. Roll Count OUT <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      ref={stockOutRollsInputRef}
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      required
-                      placeholder="e.g. 2"
-                      value={stockOutRolls}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        // Strictly digits only: disallow negative signs, dots, commas, decimals
-                        if (val === '' || /^\d+$/.test(val)) {
-                          setStockOutRolls(val);
-                          setStockOutError('');
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          stockOutVerificationInputRef.current?.focus();
-                        }
-                      }}
-                      className={`w-full p-3 bg-slate-50 border rounded-xl text-slate-900 font-mono text-base font-black focus:ring-2 focus:ring-amber-500 focus:outline-hidden ${
-                        stockOutRolls && (!stockOutRollValidation.valid || (matchedStockOutItem && stockOutRollValidation.count > matchedStockOutItem.currentStock))
-                          ? 'border-red-400 bg-red-50/40'
-                          : 'border-slate-300'
-                      }`}
-                    />
-                    {stockOutRolls && !stockOutRollValidation.valid && (
-                      <p className="mt-1 text-[11px] text-red-600 font-semibold flex items-center space-x-1">
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span>{stockOutRollValidation.error}</span>
-                      </p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-700 font-bold mb-1">6. Date</label>
-                    <input
-                      type="date"
-                      value={stockOutDate}
-                      onChange={(e) => setStockOutDate(e.target.value)}
-                      className="w-full p-3 bg-slate-50 border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-hidden"
-                    />
-                  </div>
-                </div>
-
-                {/* 7. CALCULATION / STOCK PREVIEW */}
-                {matchedStockOutItem && (
-                  (() => {
-                    const current = matchedStockOutItem.currentStock;
-                    const rollsOut = stockOutRollValidation.valid ? stockOutRollValidation.count : 0;
-                    const isExceeded = stockOutRollValidation.valid && rollsOut > current;
-                    const afterStock = Math.max(0, current - rollsOut);
-                    const widthNum = selectedStockOutBatch
-                      ? parseFloat(selectedStockOutBatch.variantSize) || parseFloat(matchedStockOutItem.variantSize) || 1.0
-                      : parseFloat(matchedStockOutItem.variantSize) || 1.0;
-                    const lengthNum = selectedStockOutBatch
-                      ? selectedStockOutBatch.rollLengthMtr
-                      : (normalizeNumericLength(stockOutRollLength) || matchedStockOutItem.rollLengthMtr);
-                    const areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
-                    const totalAreaOut = Number((areaPerRoll * rollsOut).toFixed(2));
-
-                    return (
-                      <div
-                        className={`p-4 rounded-2xl border space-y-3 ${
-                          isExceeded ? 'bg-red-50 border-red-200' : 'bg-amber-50/70 border-amber-200'
-                        }`}
-                      >
-                        <div className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-                          <span>7. Calculation / Stock Preview</span>
-                          <span className="font-mono text-slate-600 normal-case text-xs">
-                            Expected: <strong>{selectedStockOutBatch ? selectedStockOutBatch.batchNumber : matchedStockOutItem.barcode}</strong>
-                          </span>
-                        </div>
-
-                        {/* Batch Stock Breakdown (if batch selected) */}
-                        {selectedStockOutBatch && (
-                          <div className="p-3 bg-amber-100/80 rounded-xl border border-amber-300 font-mono text-xs space-y-1.5">
-                            <div className="flex items-center justify-between text-slate-900 font-bold">
-                              <span>Batch: {selectedStockOutBatch.batchNumber} (Inv: {selectedStockOutBatch.invoiceNumber})</span>
-                              <span className="text-amber-900">In Batch: {selectedStockOutBatch.currentRemainingRollQuantity} Rolls</span>
-                            </div>
-                            <div className="flex items-center justify-between text-slate-700 pt-1 border-t border-amber-200">
-                              <span>Batch After OUT:</span>
-                              <strong className="text-amber-900">
-                                {selectedStockOutBatch.currentRemainingRollQuantity} &rarr;{' '}
-                                {Math.max(0, selectedStockOutBatch.currentRemainingRollQuantity - rollsOut)} Rolls
-                              </strong>
-                            </div>
-                            {rollsOut > selectedStockOutBatch.currentRemainingRollQuantity && (
-                              <div className="text-xs text-red-700 font-bold flex items-center space-x-1 pt-1">
-                                <AlertCircle className="w-3.5 h-3.5 shrink-0 text-red-600" />
-                                <span>
-                                  Insufficient stock in this batch. Only {selectedStockOutBatch.currentRemainingRollQuantity} rolls are available.
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Roll Counts */}
-                        <div className="grid grid-cols-3 gap-2 text-center font-mono">
-                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                            <span className="text-[10px] text-slate-500 block uppercase font-sans font-semibold">
-                              Total Stock
-                            </span>
-                            <span className="text-base font-bold text-slate-900">
-                              {current} Rolls
-                            </span>
-                          </div>
-
-                          <div className="bg-white p-2.5 rounded-xl border border-slate-200">
-                            <span className="text-[10px] text-amber-700 block uppercase font-sans font-semibold">
-                              Rolls OUT
-                            </span>
-                            <span className="text-base font-bold text-amber-700">
-                              {stockOutRollValidation.valid ? `-${rollsOut} Rolls` : '—'}
-                            </span>
-                          </div>
-
-                          <div
-                            className={`p-2.5 rounded-xl shadow-xs text-white ${
-                              isExceeded || (selectedStockOutBatch && rollsOut > selectedStockOutBatch.currentRemainingRollQuantity)
-                                ? 'bg-red-600'
-                                : 'bg-slate-900'
-                            }`}
-                          >
-                            <span className="text-[10px] text-slate-300 block uppercase font-sans font-semibold">
-                              After Stock OUT
-                            </span>
-                            <span className="text-base font-black text-white">
-                              {stockOutRollValidation.valid && !isExceeded ? `${afterStock} Rolls` : `${current} Rolls`}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* Area Calculations as per blueprint */}
-                        <div className="bg-white/80 p-3 rounded-xl border border-slate-200 font-mono text-xs space-y-1">
-                          <div className="flex items-center justify-between text-slate-700">
-                            <span>Area Per Roll:</span>
-                            <strong>{widthNum} M × {lengthNum} M = {areaPerRoll} m²</strong>
-                          </div>
-                          <div className="flex items-center justify-between text-amber-800 border-t border-slate-100 pt-1 font-bold">
-                            <span>Total Area OUT:</span>
-                            <span>
-                              {stockOutRollValidation.valid
-                                ? `${areaPerRoll} × ${rollsOut} = ${totalAreaOut} m²`
-                                : '—'}
-                            </span>
-                          </div>
-                        </div>
-
-                        {isExceeded && (
-                          <div className="text-xs text-red-700 font-bold flex items-center space-x-1.5 pt-1">
-                            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                            <span>
-                              Requested rolls ({rollsOut}) exceeds current in-hand stock ({current} rolls).
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })()
-                )}
-
-                {/* 8. BARCODE SCAN / VERIFICATION */}
-                <div className="p-4 bg-slate-50 rounded-2xl border-2 border-slate-200 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <label className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center space-x-1.5">
-                        <BarcodeIcon className="w-4 h-4 text-amber-600" />
-                        <span>8. Barcode Verification</span>
-                      </label>
-                      <p className="text-[11px] text-slate-500">
-                        Scan or enter barcode for {matchedStockOutItem ? `${matchedStockOutItem.materialName} / ${matchedStockOutItem.variantSize}M / ${matchedStockOutItem.rollLengthMtr}M` : 'selected item'}.
-                      </p>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setCameraScannerTarget('stock-out');
-                        setCameraScannerOpen(true);
-                      }}
-                      className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg text-slate-700 font-bold text-xs flex items-center space-x-1 shadow-xs"
-                      title="Open phone camera scanner"
-                    >
-                      <Camera className="w-3.5 h-3.5 text-amber-600" />
-                      <span>Camera</span>
-                    </button>
-                  </div>
-
-                  {/* Input with auto-validation on Enter / rapid scanner typing */}
-                  <div className="relative">
-                    <input
-                      ref={stockOutVerificationInputRef}
-                      type="text"
-                      disabled={!matchedStockOutItem}
-                      placeholder={
-                        matchedStockOutItem
-                          ? `Scan or enter barcode (e.g. ${matchedStockOutItem.barcode})...`
-                          : 'Select Material, Size & Length first'
-                      }
-                      value={stockOutBarcodeCode}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setStockOutBarcodeCode(val);
-                        if (val.trim()) {
-                          validateStockOutBarcode(val);
-                        } else {
-                          setStockOutVerificationStatus('IDLE');
-                        }
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          validateStockOutBarcode(stockOutBarcodeCode);
-                        }
-                      }}
-                      className={`w-full p-3 bg-white border-2 rounded-xl text-slate-900 font-mono text-sm font-bold placeholder:font-sans placeholder:font-normal focus:outline-hidden transition-colors ${
-                        stockOutVerificationStatus === 'VERIFIED'
-                          ? 'border-emerald-500 ring-2 ring-emerald-200'
-                          : stockOutVerificationStatus === 'MISMATCH'
-                          ? 'border-red-500 ring-2 ring-red-200'
-                          : 'border-slate-300 focus:border-amber-500'
-                      }`}
-                    />
-
-                    {stockOutBarcodeCode && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStockOutBarcodeCode('');
-                          setStockOutVerificationStatus('IDLE');
-                          stockOutVerificationInputRef.current?.focus();
-                        }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Verification Status Feedback */}
-                  {stockOutVerificationStatus === 'VERIFIED' && (
-                    <div className="p-3 bg-emerald-100/80 border border-emerald-300 rounded-xl text-xs text-emerald-950 font-bold flex items-center space-x-2">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
-                      <span>
-                        {selectedStockOutBatch ? (
-                          <>
-                            ✓ Batch Barcode Verified: <strong className="font-mono">{selectedStockOutBatch.batchNumber}</strong> &bull; Invoice: <strong>{selectedStockOutBatch.invoiceNumber}</strong> &bull; Available: {selectedStockOutBatch.currentRemainingRollQuantity} Rolls
-                          </>
-                        ) : matchedStockOutItem ? (
-                          <>
-                            ✓ Barcode Verified: {matchedStockOutItem.materialName} &mdash; {matchedStockOutItem.variantSize}M ({matchedStockOutItem.rollLengthMtr}M)
-                          </>
-                        ) : (
-                          '✓ Barcode Verified'
-                        )}
-                      </span>
-                    </div>
-                  )}
-
-                  {stockOutVerificationStatus === 'MISMATCH' && (
-                    <div className="p-3 bg-red-100/80 border border-red-300 rounded-xl text-xs text-red-900 font-bold flex items-center space-x-2">
-                      <AlertCircle className="w-4 h-4 text-red-700 shrink-0" />
-                      <span>✕ Barcode does not match the selected material configuration or batch.</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* 9. SAVE STOCK OUT (Enabled only when verified & valid count <= current) */}
-                <div className="pt-2">
-                  <button
-                    type="submit"
-                    disabled={!isStockOutSaveEnabled}
-                    className={`w-full py-3.5 px-4 font-bold rounded-xl shadow-sm transition-all text-sm flex items-center justify-center space-x-2 ${
-                      isStockOutSaveEnabled
-                        ? 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer active:scale-98 shadow-md'
-                        : 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-75'
-                    }`}
-                  >
-                    <ArrowUpFromLine className="w-4 h-4" />
-                    <span>
-                      {isStockOutSaveEnabled
-                        ? selectedStockOutBatch
-                          ? `9. Save Stock OUT (-${stockOutRollValidation.count} Rolls from Batch ${selectedStockOutBatch.batchNumber})`
-                          : `9. Save Stock OUT (-${stockOutRollValidation.count} Rolls)`
-                        : stockOutVerificationStatus !== 'VERIFIED'
-                        ? 'Scan Barcode to Enable Save'
-                        : !stockOutRollValidation.valid
-                        ? 'Enter Valid Roll Count (> 0)'
-                        : selectedStockOutBatch && stockOutRollValidation.count > selectedStockOutBatch.currentRemainingRollQuantity
-                        ? `Exceeds Batch Stock (${selectedStockOutBatch.currentRemainingRollQuantity} Max)`
-                        : matchedStockOutItem && stockOutRollValidation.count > matchedStockOutItem.currentStock
-                        ? 'Exceeds Current Stock'
-                        : 'Complete Required Fields to Save'}
-                    </span>
-                  </button>
-                </div>
-              </form>
-            </div>
+          <div className="space-y-6">
+            <BarcodeScannerView
+              batches={batches}
+              itemsWithStock={itemsWithStock}
+              onExecuteStockOut={handleScannerStockOut}
+              onRollStockOut={handleRollStockOut}
+              onDispatchComplete={handleDispatchComplete}
+            />
           </div>
         )}
-
         {/* ========================================================= */}
         {/* TAB 5: TRANSACTIONS (Blueprint Spec) */}
         {/* ========================================================= */}
@@ -4389,13 +3695,13 @@ export default function App() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <div className="flex items-center space-x-2">
-                  <h2 className="text-lg font-black text-slate-900 tracking-tight">Barcode Labels</h2>
+                  <h2 className="text-lg font-black text-slate-900 tracking-tight">Roll Barcode Labels</h2>
                   <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
                     CODE128 Linear
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Stock IN batch barcodes. Every roll in a received batch receives this linear barcode sticker.
+                  Unique physical roll stickers. Every received roll in the warehouse receives its own unique CODE128 label.
                 </p>
               </div>
 
