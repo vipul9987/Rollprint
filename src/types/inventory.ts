@@ -132,7 +132,12 @@ export interface InventoryRoll {
   id: string; // Unique UUID
   rollBarcode: string; // UNIQUE barcode for this specific physical roll
   batchNumber: string; // Grouping batch number (e.g. 101026GT28728)
-  invoiceNumber: string; // Original invoice number (e.g. GT28728)
+  batchId?: string; // Foreign key to stock_batches.id
+  batchItemId?: string; // Foreign key to stock_batch_items.id
+  materialId?: string; // Foreign key to materials.id
+  invoiceNumber: string; // Original receiving invoice number (e.g. GT28728)
+  originalStockInInvoiceNumber?: string; // Explicit alias for receiving invoice
+  stockOutInvoiceNumber?: string; // Outgoing dispatch invoice number (e.g. DS/26-27/1230)
   rollNumber: number; // Roll number within batch/item (e.g. 1, 2, 3...)
   materialName: string; // e.g. "Bright FL 26"
   category: string; // e.g. "Frontlit Flex"
@@ -145,3 +150,36 @@ export interface InventoryRoll {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * POS Dispatch Record (Parent Dispatch Event)
+ * Represents one outgoing retail / wholesale billing event
+ */
+export interface StockOutDispatch {
+  id: string;
+  dispatchInvoiceNumber: string; // e.g. "DS/26-27/1230"
+  dispatchDate: string; // YYYY-MM-DD
+  totalRolls: number;
+  notes?: string;
+  createdAt: string;
+  items?: StockOutDispatchItem[];
+}
+
+/**
+ * POS Dispatch Line Item
+ * Each item in the dispatch corresponds to exactly 1 physical roll
+ */
+export interface StockOutDispatchItem {
+  id: string;
+  dispatchId: string;
+  inventoryRollId: string;
+  rollBarcode: string;
+  materialNameSnapshot: string;
+  categorySnapshot?: string;
+  width: string;
+  rollLength: number;
+  batchNumber: string;
+  originalStockInInvoiceNumber: string;
+  createdAt: string;
+}
+
