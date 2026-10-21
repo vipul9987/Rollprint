@@ -6,7 +6,9 @@ import {
   saveStoredMatrixTransactions,
   getStoredMatrixBatches,
   saveStoredMatrixBatches,
-  INITIAL_MATRIX_BATCHES
+  INITIAL_MATRIX_BATCHES,
+  INITIAL_MATRIX_ITEMS,
+  normalizeNumericSize
 } from './inventoryStore';
 
 export const STORAGE_KEY_ROLLS = 'rollprint_inventory_rolls_v1';
@@ -58,13 +60,13 @@ export function validateUniqueRollBarcode(barcode: string, existingRolls?: Inven
 }
 
 /**
- * Generate seed physical rolls from initial system batches
+ * Generate seed physical rolls from initial system batches and opening stock
  */
 export function generateInitialRolls(): InventoryRoll[] {
   const rolls: InventoryRoll[] = [];
+  const existingBarcodes = new Set<string>();
 
   INITIAL_MATRIX_BATCHES.forEach((batch) => {
-    let globalRollSeq = 1;
     (batch.items || []).forEach((item, itemIdx) => {
       const qty = item.initialRollQuantity || 1;
       const isMultiLine = (batch.items || []).length > 1;
@@ -79,11 +81,15 @@ export function generateInitialRolls(): InventoryRoll[] {
         const remainingForThisItem = item.remainingRollQuantity;
         const isOut = r > remainingForThisItem;
 
+        existingBarcodes.add(barcode.toUpperCase());
         rolls.push({
           id: `roll-${batch.batchNumber.toLowerCase()}-${item.id}-${r}`,
           rollBarcode: barcode,
           batchNumber: batch.batchNumber,
+          batchId: batch.id,
+          batchItemId: item.id,
           invoiceNumber: batch.invoiceNumber,
+          originalStockInInvoiceNumber: batch.invoiceNumber,
           rollNumber: r,
           materialName: item.materialNameSnapshot || batch.materialName || 'Material',
           category: item.categorySnapshot || batch.category || 'Flex PVC',
@@ -95,10 +101,37 @@ export function generateInitialRolls(): InventoryRoll[] {
           createdAt: batch.createdAt,
           updatedAt: batch.createdAt
         });
-
-        globalRollSeq++;
       }
     });
+  });
+
+  // Seed physical roll records for Opening Stock items
+  INITIAL_MATRIX_ITEMS.forEach((item) => {
+    if (item.unit !== 'Sheets' && item.openingStock > 0) {
+      for (let r = 1; r <= item.openingStock; r++) {
+        const pad = String(r).padStart(2, '0');
+        const barcode = `OP-${item.id.toUpperCase()}-R${pad}`;
+        if (!existingBarcodes.has(barcode.toUpperCase())) {
+          existingBarcodes.add(barcode.toUpperCase());
+          rolls.push({
+            id: `roll-op-${item.id}-${r}`,
+            rollBarcode: barcode,
+            batchNumber: 'OPENING-STOCK',
+            invoiceNumber: 'OPENING-INV',
+            originalStockInInvoiceNumber: 'OPENING-INV',
+            rollNumber: r,
+            materialName: item.materialName,
+            category: item.category,
+            size: item.variantSize,
+            rollLength: item.rollLengthMtr || 0,
+            status: 'IN_STOCK',
+            receivedDate: '2026-09-01',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            updatedAt: '2026-09-01T00:00:00.000Z'
+          });
+        }
+      }
+    }
   });
 
   return rolls;
@@ -581,5 +614,261 @@ export async function executeRollStockOutTransaction(
     roll: updatedRoll,
     transaction: txn,
     newBalance: stockAfter
+  };
+}
+
+export interface AtomicRollDispatchResult {
+  success: boolean;
+  error?: string;
+  isConflict?: boolean;
+  conflictBarcode?: string;
+  dispatchInvoiceNumber?: string;
+  dispatchDate?: string;
+  totalRolls?: number;
+  dispatchedRolls?: InventoryRoll[];
+  transactions?: MatrixStockTransaction[];
+}
+
+/**
+ * ATOMIC MULTI-ROLL POS DISPATCH:
+ * Client Requirement:
+ * - When user clicks CONFIRM STOCK OUT, revalidate EVERY roll in database:
+ *   - barcode exists
+ *   - status still IN_STOCK
+ *   - no duplicates
+ *   - OUT invoice exists
+ *   - OUT date valid
+ * - Process entire dispatch atomically:
+ *   If 10 rolls are in cart: either ALL 10 become OUT or NONE become OUT.
+ *   No partial completion.
+ * - Call Supabase RPC execute_roll_dispatch if connected.
+ * - Local rollback guarantee: If any single roll is invalid or already OUT,
+ *   zero rolls are modified.
+ */
+export async function executeAtomicRollDispatch(
+  outInvoiceNumber: string,
+  outDate: string,
+  rollsOrBarcodes: (InventoryRoll | string)[]
+): Promise<AtomicRollDispatchResult> {
+  const cleanInvoice = (outInvoiceNumber || '').trim();
+  if (!cleanInvoice) {
+    return { success: false, error: 'Stock OUT Invoice Number is required.' };
+  }
+
+  const cleanDate = (outDate || '').trim() || new Date().toISOString().split('T')[0];
+  if (!cleanDate) {
+    return { success: false, error: 'Stock OUT Date is required.' };
+  }
+
+  if (!rollsOrBarcodes || rollsOrBarcodes.length === 0) {
+    return { success: false, error: 'No physical rolls provided for dispatch.' };
+  }
+
+  // 1. Extract and normalize unique roll barcodes
+  const barcodeList: string[] = [];
+  const seenBarcodes = new Set<string>();
+
+  for (const item of rollsOrBarcodes) {
+    const raw = typeof item === 'string' ? item : item.rollBarcode;
+    const code = extractRollBarcode(raw);
+    if (!code) {
+      return { success: false, error: 'Invalid roll barcode encountered in dispatch cart.' };
+    }
+    if (seenBarcodes.has(code.toUpperCase())) {
+      return { success: false, error: `Roll already added to this Stock OUT list: ${code}` };
+    }
+    seenBarcodes.add(code.toUpperCase());
+    barcodeList.push(code);
+  }
+
+  // 2. Validate against Database (Supabase RPC if available)
+  const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+  const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+
+  if (supabaseUrl && supabaseKey) {
+    try {
+      const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/execute_roll_dispatch`, {
+        method: 'POST',
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          p_out_invoice: cleanInvoice,
+          p_out_date: cleanDate,
+          p_roll_barcodes: barcodeList
+        })
+      });
+
+      if (!res.ok) {
+        const errorJson = await res.json().catch(() => ({}));
+        const msg = errorJson.message || errorJson.error || 'Database transaction failed';
+        return {
+          success: false,
+          error: `Supabase Atomic Dispatch Failed: ${msg}`
+        };
+      }
+    } catch (e: any) {
+      console.warn('Supabase RPC call failed, falling back to local atomic transaction:', e);
+    }
+  }
+
+  // 3. Atomic Local Store Execution
+  // All-or-nothing: Validate ALL rolls are currently IN_STOCK in local store
+  const currentRolls = getStoredInventoryRolls();
+  const rollMap = new Map<string, InventoryRoll>();
+  currentRolls.forEach((r) => {
+    rollMap.set(r.rollBarcode.toUpperCase(), r);
+  });
+
+  const rollsToDispatch: InventoryRoll[] = [];
+  for (const code of barcodeList) {
+    const match = rollMap.get(code.toUpperCase());
+    if (!match) {
+      return {
+        success: false,
+        error: `Roll barcode not found: ${code}. Entire dispatch cancelled.`
+      };
+    }
+    if (match.status === 'OUT') {
+      return {
+        success: false,
+        isConflict: true,
+        conflictBarcode: code,
+        error: `This roll has already been stocked out: ${code} (Previous OUT Invoice: ${match.stockOutInvoiceNumber || 'N/A'}, Date: ${match.stockOutDate || 'N/A'}). Entire dispatch cancelled.`
+      };
+    }
+    if (!match.rollLength || match.rollLength <= 0) {
+      return {
+        success: false,
+        error: `Roll ${code} has invalid roll length (${match.rollLength}M). Dispatch blocked.`
+      };
+    }
+    rollsToDispatch.push(match);
+  }
+
+  // All rolls validated! Now perform atomic updates
+  const nowIso = new Date().toISOString();
+  const updatedRollMap = new Map<string, InventoryRoll>();
+
+  const newlyDispatchedRolls = rollsToDispatch.map((orig) => {
+    const updated: InventoryRoll = {
+      ...orig,
+      status: 'OUT',
+      stockOutInvoiceNumber: cleanInvoice,
+      stockOutDate: cleanDate,
+      updatedAt: nowIso
+    };
+    updatedRollMap.set(orig.rollBarcode.toUpperCase(), updated);
+    return updated;
+  });
+
+  // Update rolls pool
+  const nextRolls = currentRolls.map((r) => updatedRollMap.get(r.rollBarcode.toUpperCase()) || r);
+  saveStoredInventoryRolls(nextRolls);
+
+  // Update batches: decrement remaining roll count for each dispatched roll
+  const batches = getStoredMatrixBatches();
+  const updatedBatches = batches.map((batch) => {
+    const rollsForBatch = newlyDispatchedRolls.filter(
+      (r) => r.batchNumber.toUpperCase() === batch.batchNumber.toUpperCase()
+    );
+    if (rollsForBatch.length === 0) return batch;
+
+    let updatedItems = batch.items || [];
+    if (updatedItems.length > 0) {
+      updatedItems = updatedItems.map((it) => {
+        const countForItem = rollsForBatch.filter(
+          (r) =>
+            r.materialName.toLowerCase() === it.materialNameSnapshot.toLowerCase() &&
+            r.size.trim() === it.width.trim()
+        ).length;
+        if (countForItem > 0) {
+          return {
+            ...it,
+            remainingRollQuantity: Math.max(0, it.remainingRollQuantity - countForItem)
+          };
+        }
+        return it;
+      });
+    }
+
+    const newRemaining = updatedItems.length > 0
+      ? updatedItems.reduce((acc, it) => acc + it.remainingRollQuantity, 0)
+      : Math.max(0, batch.currentRemainingRollQuantity - rollsForBatch.length);
+
+    return {
+      ...batch,
+      items: updatedItems,
+      currentRemainingRollQuantity: newRemaining
+    };
+  });
+  saveStoredMatrixBatches(updatedBatches);
+
+  // Create OUT transaction for each dispatched roll
+  const items = getStoredMatrixItems();
+  const currentTransactions = getStoredMatrixTransactions();
+  const newTransactions: MatrixStockTransaction[] = [];
+
+  newlyDispatchedRolls.forEach((r, idx) => {
+    const matchedItem = items.find(
+      (i) =>
+        i.active &&
+        i.materialName.toLowerCase() === r.materialName.toLowerCase() &&
+        normalizeNumericSize(i.variantSize) === normalizeNumericSize(r.size)
+    );
+
+    const widthNum = parseFloat(r.size) || 1.0;
+    const areaMtr2 = Number((widthNum * r.rollLength).toFixed(2));
+
+    const txnId = `tx-pos-out-${Date.now()}-${idx}-${Math.random().toString(36).substr(2, 4)}`;
+    newTransactions.push({
+      id: txnId,
+      itemId: matchedItem ? matchedItem.id : `dyn-${r.materialName}-${r.size}`,
+      materialName: r.materialName,
+      category: r.category,
+      variantSize: r.size,
+      rollLengthMtr: r.rollLength,
+      barcode: r.rollBarcode,
+      type: 'OUT',
+      quantity: 1,
+      areaMtr2,
+      stockBefore: 0,
+      stockAfter: 0,
+      unit: 'Rolls',
+      date: cleanDate,
+      invoiceNumber: cleanInvoice,
+      batchNumber: r.batchNumber,
+      createdAt: nowIso,
+      inventoryRollId: r.id,
+      rollBarcode: r.rollBarcode,
+      stockOutInvoiceNumber: cleanInvoice,
+      stockOutDate: cleanDate,
+      originalStockInInvoiceNumber: r.invoiceNumber,
+      inventory_roll_id: r.id,
+      roll_barcode: r.rollBarcode,
+      material_id: matchedItem?.id,
+      material_name_snapshot: r.materialName,
+      category_snapshot: r.category,
+      width: r.size,
+      roll_length: r.rollLength,
+      transaction_type: 'OUT',
+      stock_out_invoice_number: cleanInvoice,
+      stock_out_date: cleanDate,
+      original_stock_in_invoice_number: r.invoiceNumber,
+      created_at: nowIso
+    });
+  });
+
+  saveStoredMatrixTransactions([...newTransactions, ...currentTransactions]);
+
+  return {
+    success: true,
+    dispatchInvoiceNumber: cleanInvoice,
+    dispatchDate: cleanDate,
+    totalRolls: newlyDispatchedRolls.length,
+    dispatchedRolls: newlyDispatchedRolls,
+    transactions: newTransactions
   };
 }
