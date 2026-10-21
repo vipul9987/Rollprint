@@ -10,6 +10,7 @@ import {
   INITIAL_MATRIX_ITEMS,
   normalizeNumericSize
 } from './inventoryStore';
+import { getAuthHeaders } from '../lib/supabase';
 
 export const STORAGE_KEY_ROLLS = 'rollprint_inventory_rolls_v1';
 
@@ -369,12 +370,11 @@ export async function syncRollsToSupabase(rolls: InventoryRoll[]): Promise<void>
       return record;
     });
 
+    const authHeaders = await getAuthHeaders();
     const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls?on_conflict=roll_barcode`, {
       method: 'POST',
       headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
+        ...authHeaders,
         Prefer: 'resolution=merge-duplicates'
       },
       body: JSON.stringify(payload)
@@ -398,11 +398,9 @@ export async function fetchRollsFromSupabase(): Promise<InventoryRoll[] | null> 
   if (!supabaseUrl || !supabaseKey) return null;
 
   try {
+    const authHeaders = await getAuthHeaders();
     const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls?select=*&order=created_at.desc`, {
-      headers: {
-        apikey: supabaseKey,
-        Authorization: `Bearer ${supabaseKey}`
-      }
+      headers: authHeaders
     });
 
     if (!res.ok) {
@@ -816,15 +814,12 @@ export async function executeAtomicRollDispatch(
     };
   }
 
-  if (hasSupabase && supabaseUrl && supabaseKey) {
+  if (hasSupabase && supabaseUrl) {
     try {
+      const authHeaders = await getAuthHeaders();
       const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/execute_roll_dispatch`, {
         method: 'POST',
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
-          'Content-Type': 'application/json'
-        },
+        headers: authHeaders,
         body: JSON.stringify({
           p_out_invoice: cleanInvoice,
           p_out_date: cleanDate,
@@ -1009,4 +1004,67 @@ export async function executeAtomicRollDispatch(
     dispatchedRolls: newlyDispatchedRolls,
     transactions: newTransactions
   };
+}
+
+/**
+ * ATOMIC MULTI-ITEM STOCK IN RPC:
+ * Executes execute_stock_in_batch on remote Supabase if connected.
+ * Requires authenticated staff session.
+ */
+export async function executeAtomicStockInRpc(
+  invoiceNumber: string,
+  stockInDate: string,
+  items: Array<{ materialName: string; category?: string; width: string; rollLength: number; rollQuantity: number }>
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+  const hasSupabase = isSupabaseConfigured();
+
+  if (isProductionEnvironment() && !hasSupabase) {
+    return {
+      success: false,
+      error: 'DATABASE UNAVAILABLE: Supabase database connection is not configured. Stock IN mutations are disabled in production to prevent device stock divergence.'
+    };
+  }
+
+  if (hasSupabase && supabaseUrl) {
+    try {
+      const authHeaders = await getAuthHeaders();
+      const payloadItems = items.map((it) => ({
+        material_name: it.materialName,
+        category: it.category || 'Flex PVC',
+        size: it.width,
+        roll_length: it.rollLength,
+        quantity: it.rollQuantity
+      }));
+
+      const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/execute_stock_in_batch`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          p_invoice_number: invoiceNumber,
+          p_stock_in_date: stockInDate,
+          p_items: payloadItems
+        })
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        const msg = errJson.message || errJson.error || `HTTP ${res.status} Stock IN failed`;
+        return { success: false, error: `Supabase Stock IN Failed: ${msg}` };
+      }
+
+      const data = await res.json();
+      return { success: true, data };
+    } catch (e: any) {
+      console.warn('Supabase Stock IN RPC call failed:', e);
+      if (isProductionEnvironment()) {
+        return {
+          success: false,
+          error: `DATABASE UNAVAILABLE: Remote Supabase database is unreachable (${e?.message || 'Network error'}). Stock IN mutations are disabled in production.`
+        };
+      }
+    }
+  }
+
+  return { success: true };
 }
