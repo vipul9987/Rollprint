@@ -2029,7 +2029,7 @@ export default function App() {
           transactions={transactions}
           batches={batches}
           onStockTransaction={({ itemId, type, quantity, dateStr, extraMeta }) => {
-            const res = executeStockTransaction(itemId, type, quantity, dateStr, extraMeta);
+            const res = executeStockTransaction(itemId, type, quantity, dateStr, undefined, extraMeta);
             if (res.success) {
               const refreshed = itemsWithStock.find((i) => i.id === itemId);
               if (refreshed) {

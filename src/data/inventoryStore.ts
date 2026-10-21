@@ -448,6 +448,8 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_BATCHES);
     let list: MatrixBatch[] = INITIAL_MATRIX_BATCHES;
+    let hasChanged = false;
+
     if (raw) {
       const parsed: MatrixBatch[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -472,8 +474,6 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
         }
       }
     }
-
-    let hasChanged = false;
 
     // Normalization & Parent-Child items guarantee
     const sanitized = list.map((b) => {
@@ -535,7 +535,10 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
     if (geBatchIndex === -1) {
       const geBatch = INITIAL_MATRIX_BATCHES.find((b) => b.batchNumber === '101026GE23542');
       if (geBatch) {
-        sanitized.push({ ...geBatch });
+        sanitized.push({
+          ...geBatch,
+          items: geBatch.items || []
+        });
         hasChanged = true;
       }
     } else {

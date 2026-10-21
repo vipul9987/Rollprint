@@ -211,6 +211,8 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
     setQuickError(null);
     setQuickSuccess(null);
 
+    if (actionDrawerMode === 'NONE') return;
+
     const qty = parseInt(quickQty, 10);
     if (isNaN(qty) || qty <= 0) {
       setQuickError('Please enter a valid roll quantity (at least 1).');

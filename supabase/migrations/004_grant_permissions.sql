@@ -1,9 +1,10 @@
 -- ====================================================================
 -- RollPrint IMS - Migration 004: Grant Table Permissions & Fix RPC
 -- 1. Grants anon / authenticated access to inventory tables & sequences
--- 2. Updates execute_roll_dispatch to use PostgreSQL row-locking syntax
+-- 2. Drops obsolete trigger trg_sync_roll_status on inventory_rolls
+-- 3. Converts status column to VARCHAR(50) accepting 'IN_STOCK' and 'OUT'
+-- 4. Updates execute_roll_dispatch with PostgreSQL row-locking syntax
 --    (PERFORM ... FOR UPDATE instead of aggregate FOR UPDATE)
--- 3. Sets SECURITY DEFINER on execute_roll_dispatch
 -- ====================================================================
 
 -- 1. SCHEMA USAGE
@@ -23,7 +24,26 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authentic
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authenticated, service_role;
 
--- 6. CORRECTED ATOMIC MULTI-ROLL DISPATCH FUNCTION
+-- 6. DROP OLD TRIGGER THAT BLOCKS COLUMN ALTERATION
+DROP TRIGGER IF EXISTS trg_sync_roll_status ON inventory_rolls;
+
+-- 7. CONVERT status COLUMN TO VARCHAR(50) ACCEPTING 'IN_STOCK' AND 'OUT'
+ALTER TABLE inventory_rolls ALTER COLUMN status DROP DEFAULT;
+ALTER TABLE inventory_rolls ALTER COLUMN status TYPE VARCHAR(50) USING status::text;
+ALTER TABLE inventory_rolls ALTER COLUMN status SET DEFAULT 'IN_STOCK';
+UPDATE inventory_rolls SET status = 'IN_STOCK' WHERE status IN ('AVAILABLE', 'OPEN') OR status IS NULL;
+UPDATE inventory_rolls SET status = 'OUT' WHERE status IN ('CONSUMED');
+
+-- 8. DISABLE RLS ON OPERATIONAL TABLES FOR WAREHOUSE CLIENT APP
+ALTER TABLE materials DISABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_batches DISABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_batch_items DISABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory_rolls DISABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_transactions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_out_dispatches DISABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_out_dispatch_items DISABLE ROW LEVEL SECURITY;
+
+-- 9. CORRECTED ATOMIC MULTI-ROLL DISPATCH FUNCTION
 CREATE OR REPLACE FUNCTION execute_roll_dispatch(
     p_out_invoice VARCHAR,
     p_out_date DATE,
@@ -115,10 +135,10 @@ BEGIN
         -- Record Dispatch Audit Line Item
         INSERT INTO stock_out_dispatch_items (
             dispatch_id,
-            roll_id,
+            inventory_roll_id,
             roll_barcode,
-            material_name,
-            size,
+            material_name_snapshot,
+            width,
             roll_length,
             batch_number,
             original_stock_in_invoice_number,

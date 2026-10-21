@@ -325,30 +325,36 @@ export async function syncRollsToSupabase(rolls: InventoryRoll[]): Promise<void>
   if (!supabaseUrl || !supabaseKey || rolls.length === 0) return;
 
   try {
-    const payload = rolls.map((r) => ({
-      id: r.id,
-      roll_barcode: r.rollBarcode,
-      barcode: r.rollBarcode,
-      batch_number: r.batchNumber,
-      invoice_number: r.invoiceNumber,
-      original_stock_in_invoice_number: r.originalStockInInvoiceNumber || r.invoiceNumber,
-      stock_out_invoice_number: r.stockOutInvoiceNumber || null,
-      stock_in_date: r.receivedDate || new Date().toISOString().split('T')[0],
-      stock_out_date: r.stockOutDate || null,
-      roll_number: r.rollNumber,
-      material_name: r.materialName,
-      category_snapshot: r.category,
-      size: r.size,
-      roll_length: r.rollLength,
-      status: r.status === 'IN_STOCK' ? 'IN_STOCK' : 'OUT',
-      initial_length: r.rollLength,
-      remaining_length: r.status === 'IN_STOCK' ? r.rollLength : 0,
-      received_date: r.receivedDate,
-      created_at: r.createdAt,
-      updated_at: r.updatedAt
-    }));
+    const isUuid = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+    const payload = rolls.map((r) => {
+      const record: any = {
+        roll_barcode: r.rollBarcode,
+        barcode: r.rollBarcode,
+        batch_number: r.batchNumber,
+        invoice_number: r.invoiceNumber,
+        original_stock_in_invoice_number: r.originalStockInInvoiceNumber || r.invoiceNumber,
+        stock_out_invoice_number: r.stockOutInvoiceNumber || null,
+        stock_in_date: r.receivedDate || new Date().toISOString().split('T')[0],
+        stock_out_date: r.stockOutDate || null,
+        roll_number: r.rollNumber,
+        material_name: r.materialName,
+        category_snapshot: r.category,
+        size: r.size,
+        roll_length: r.rollLength,
+        status: r.status === 'IN_STOCK' ? 'IN_STOCK' : 'OUT',
+        initial_length: r.rollLength,
+        remaining_length: r.status === 'IN_STOCK' ? r.rollLength : 0,
+        received_date: r.receivedDate,
+        created_at: r.createdAt,
+        updated_at: r.updatedAt
+      };
+      if (isUuid(r.id)) {
+        record.id = r.id;
+      }
+      return record;
+    });
 
-    const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls`, {
+    const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls?on_conflict=roll_barcode`, {
       method: 'POST',
       headers: {
         apikey: supabaseKey,

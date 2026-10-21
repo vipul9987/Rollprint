@@ -1494,36 +1494,37 @@ const tallyBatch = INITIAL_MATRIX_BATCHES.find((b) => b.batchNumber === '101026G
 assert(!!tallyBatch, 'Client sample batch 101026GT28728 exists in INITIAL_MATRIX_BATCHES');
 assert(tallyBatch?.invoiceNumber === 'GT28728', 'Batch invoice number is GT28728');
 assert(tallyBatch?.barcodeValue === '101026GT28728', 'Batch barcode value is 101026GT28728 (DDMMYY + Invoice)');
+const batchItems = tallyBatch?.items || [];
 assert(Array.isArray(tallyBatch?.items), 'Batch contains items array');
-assert(tallyBatch?.items.length === 9, 'Batch contains exactly 9 inventory item lines under invoice GT28728');
+assert(batchItems.length === 9, 'Batch contains exactly 9 inventory item lines under invoice GT28728');
 
 // 2. Validate all 9 lines belong to the SAME batch and share the SAME barcode
-tallyBatch?.items.forEach((itemLine, idx) => {
-  assert(itemLine.batchId === tallyBatch.id, `Item line ${idx + 1} references parent batch id ${tallyBatch.id}`);
-  assert(tallyBatch.barcodeValue === '101026GT28728', `Item line ${idx + 1} shares identical batch barcode 101026GT28728`);
+batchItems.forEach((itemLine, idx) => {
+  assert(itemLine.batchId === tallyBatch?.id, `Item line ${idx + 1} references parent batch id ${tallyBatch?.id}`);
+  assert(tallyBatch?.barcodeValue === '101026GT28728', `Item line ${idx + 1} shares identical batch barcode 101026GT28728`);
 });
 
 // Check exact material lines from client's system
-const bronzeLines = tallyBatch?.items.filter((it) => it.materialNameSnapshot === 'Bronze (S Prints) N') || [];
+const bronzeLines = batchItems.filter((it) => it.materialNameSnapshot === 'Bronze (S Prints) N');
 assert(bronzeLines.length === 6, 'Contains 6 Bronze (S Prints) N lines (1.32, 1.63, 1.93, 2.54, 3.20 50M, 3.20 45M)');
 
-const tufanLines = tallyBatch?.items.filter((it) => it.materialNameSnapshot === 'Flex Tufan') || [];
+const tufanLines = batchItems.filter((it) => it.materialNameSnapshot === 'Flex Tufan');
 assert(tufanLines.length === 3, 'Contains 3 Flex Tufan lines (1.93, 2.54, 3.20)');
 
 // Total rolls in batch: 1 + 1 + 2 + 2 + 2 + 1 + 3 + 2 + 3 = 17
-const totalInitialRolls = tallyBatch?.items.reduce((sum, it) => sum + it.initialRollQuantity, 0);
+const totalInitialRolls = batchItems.reduce((sum, it) => sum + it.initialRollQuantity, 0);
 assert(totalInitialRolls === 17, `Total initial roll quantity across all lines is 17 Rolls (got ${totalInitialRolls})`);
 
 // 3. Item-level Stock OUT deduction:
 // Deduct 1 roll from Bronze (S Prints) N | Size: 1.93 | Length: 70M (from 2 Rolls -> 1 Roll)
-const targetBronze193 = tallyBatch?.items.find(
+const targetBronze193 = batchItems.find(
   (it) => it.materialNameSnapshot === 'Bronze (S Prints) N' && it.width === '1.93'
 );
 assert(!!targetBronze193, 'Found Bronze (S Prints) N 1.93 line');
 assert(targetBronze193?.remainingRollQuantity === 2, 'Initial remaining quantity for Bronze 1.93 is 2 Rolls');
 
 // Simulate single line Stock OUT deduction
-const updatedItems = tallyBatch!.items.map((it) =>
+const updatedItems = batchItems.map((it) =>
   it.id === targetBronze193!.id
     ? { ...it, remainingRollQuantity: it.remainingRollQuantity - 1 }
     : it
@@ -1982,7 +1983,7 @@ await (async () => {
   assert(failedDispatch.success === false, 'Atomic dispatch rejected due to concurrent conflict');
   assert(failedDispatch.isConflict === true, 'Conflict flag is true');
   assert(
-    failedDispatch.error?.includes('already been stocked out'),
+    Boolean(failedDispatch.error?.includes('already been stocked out')),
     `Error explains roll already stocked out: ${failedDispatch.error}`
   );
 
