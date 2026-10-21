@@ -108,10 +108,10 @@ export const BatchDetailPage: React.FC<BatchDetailPageProps> = ({
           materialNameSnapshot: batch.materialName || 'Material',
           categorySnapshot: batch.category || 'Roll Material',
           width: batch.variantSize || '1.02',
-          rollLength: batch.rollLengthMtr || 50,
+          rollLength: batch.rollLengthMtr || 0,
           initialRollQuantity: batch.initialRollQuantity || 1,
           remainingRollQuantity: batch.currentRemainingRollQuantity || 0,
-          areaM2: Number(((parseFloat(batch.variantSize || '1.02') || 1) * (batch.rollLengthMtr || 50) * (batch.initialRollQuantity || 1)).toFixed(2)),
+          areaM2: Number(((parseFloat(batch.variantSize || '1.02') || 1) * (batch.rollLengthMtr || 0) * (batch.initialRollQuantity || 1)).toFixed(2)),
           createdAt: batch.createdAt
         }
       ] : []);

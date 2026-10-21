@@ -88,7 +88,7 @@ export function generateInitialRolls(): InventoryRoll[] {
           materialName: item.materialNameSnapshot || batch.materialName || 'Material',
           category: item.categorySnapshot || batch.category || 'Flex PVC',
           size: item.width || batch.variantSize || '1.63',
-          rollLength: item.rollLength || batch.rollLengthMtr || 50,
+          rollLength: item.rollLength || batch.rollLengthMtr || 0,
           status: isOut ? 'OUT' : 'IN_STOCK',
           receivedDate: batch.stockInDate,
           stockOutDate: isOut ? batch.stockInDate : undefined,
@@ -321,7 +321,7 @@ export async function queryRollByExactBarcode(rawBarcode: string): Promise<Inven
             materialName: row.material_name || '',
             category: row.category || 'Flex PVC',
             size: String(row.size || ''),
-            rollLength: Number(row.roll_length || row.initial_length) || 50,
+            rollLength: Number(row.roll_length || row.initial_length) || 0,
             status: (row.status === 'AVAILABLE' || row.status === 'IN_STOCK') ? 'IN_STOCK' : 'OUT',
             receivedDate: row.received_date || '',
             createdAt: row.created_at || new Date().toISOString(),
@@ -468,7 +468,13 @@ export async function executeRollStockOutTransaction(
   const transactions = getStoredMatrixTransactions();
 
   const widthNum = parseFloat(roll.size) || 1.0;
-  const lengthNum = roll.rollLength || 50;
+  const lengthNum = roll.rollLength;
+  if (!lengthNum || lengthNum <= 0) {
+    return {
+      success: false,
+      error: `Roll ${roll.rollBarcode} has invalid roll length (${roll.rollLength}M). Dispatch blocked.`
+    };
+  }
   const areaMtr2 = Number((widthNum * lengthNum * 1).toFixed(2));
 
   let matchedItem = items.find(

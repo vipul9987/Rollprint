@@ -467,7 +467,7 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
         const initialQty = b.initialRollQuantity || 1;
         const remainingQty = b.currentRemainingRollQuantity ?? initialQty;
         const widthStr = b.variantSize || '1.02';
-        const lengthNum = b.rollLengthMtr || 50;
+        const lengthNum = b.rollLengthMtr || (b.items && b.items[0] ? b.items[0].rollLength : 0);
         const widthNum = parseFloat(widthStr) || 1.0;
         items = [
           {
@@ -508,7 +508,7 @@ export function getStoredMatrixBatches(): MatrixBatch[] {
         materialName: b.materialName || firstItem?.materialNameSnapshot || '',
         category: b.category || firstItem?.categorySnapshot || '',
         variantSize: b.variantSize || firstItem?.width || '',
-        rollLengthMtr: b.rollLengthMtr || firstItem?.rollLength || 50,
+        rollLengthMtr: b.rollLengthMtr || firstItem?.rollLength || 0,
         initialRollQuantity: totalInitial,
         currentRemainingRollQuantity: totalRemaining
       };
@@ -805,7 +805,7 @@ export function calculateMatrixWithStock(
       else areaPerRoll = 2.97;
     } else {
       const widthNum = parseFloat(item.variantSize) || 1.0;
-      const lengthNum = item.rollLengthMtr || 70;
+      const lengthNum = item.rollLengthMtr || 0;
       areaPerRoll = Number((widthNum * lengthNum).toFixed(2));
     }
 

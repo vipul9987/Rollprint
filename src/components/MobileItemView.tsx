@@ -26,7 +26,7 @@ export const MobileItemView: React.FC<MobileItemViewProps> = ({
   const inputQty = parseInt(rollInput, 10) || 0;
 
   const width = parseFloat(item.variantSize) || 1.0;
-  const length = item.rollLengthMtr || 70;
+  const length = item.rollLengthMtr || 0;
   const areaPerRoll = Number((width * length).toFixed(2));
 
   const afterStock = mode === 'IN' ? current + inputQty : Math.max(0, current - inputQty);
@@ -115,12 +115,12 @@ export const MobileItemView: React.FC<MobileItemViewProps> = ({
               Width: {item.variantSize} M
             </span>
             <span className="px-2.5 py-1 bg-indigo-50 border border-indigo-200 rounded-full">
-              Length: {item.rollLengthMtr || 70} M
+              Length: {item.rollLengthMtr ? `${item.rollLengthMtr} M` : '-'}
             </span>
           </div>
 
           <div className="text-[11px] text-slate-500 font-mono">
-            Area per roll: {item.variantSize} × {item.rollLengthMtr || 70} = <strong className="text-slate-700">{areaPerRoll} m²</strong>
+            Area per roll: {item.variantSize} × {item.rollLengthMtr || 0} = <strong className="text-slate-700">{areaPerRoll} m²</strong>
           </div>
 
           {/* Current Stock Banner */}

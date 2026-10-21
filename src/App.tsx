@@ -1009,7 +1009,7 @@ export default function App() {
 
     const effectiveMatName = targetItemLine?.materialNameSnapshot || batch.materialName || '';
     const effectiveSize = targetItemLine?.width || batch.variantSize || '';
-    const effectiveLength = targetItemLine?.rollLength || batch.rollLengthMtr || 70;
+    const effectiveLength = targetItemLine?.rollLength || batch.rollLengthMtr || 0;
     const effectiveCategory = targetItemLine?.categorySnapshot || batch.category || 'Flex PVC';
 
     const normSize = normalizeNumericSize(effectiveSize);
@@ -1508,7 +1508,7 @@ export default function App() {
     setItemFormMaterial(item.materialName);
     setItemFormCategory(item.category);
     setItemFormSize(item.variantSize);
-    setItemFormRollLength((item.rollLengthMtr || 70).toString());
+    setItemFormRollLength(item.rollLengthMtr ? item.rollLengthMtr.toString() : '');
     setItemFormError('');
     setIsItemModalOpen(true);
   };
@@ -1538,7 +1538,7 @@ export default function App() {
         i.id !== editingItem?.id &&
         i.materialName.toLowerCase() === trimMaterial.toLowerCase() &&
         normalizeNumericSize(i.variantSize) === trimSize &&
-        (i.rollLengthMtr || 70) === lenVal
+        (i.rollLengthMtr || 0) === lenVal
     );
 
     if (duplicate) {
@@ -3144,8 +3144,8 @@ export default function App() {
                             const foundItem = items.find(
                               (i) => i.active && i.materialName === stockInMaterial && normalizeNumericSize(i.variantSize) === norm
                             );
-                            if (foundItem) {
-                              setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
+                            if (foundItem && foundItem.rollLengthMtr) {
+                              setStockInRollLength(foundItem.rollLengthMtr.toString());
                             }
                             setStockInError('');
                           }}
@@ -3171,8 +3171,8 @@ export default function App() {
                                 const foundItem = items.find(
                                   (i) => i.active && i.materialName === stockInMaterial && normalizeNumericSize(i.variantSize) === s
                                 );
-                                if (foundItem) {
-                                  setStockInRollLength((foundItem.rollLengthMtr || 70).toString());
+                                if (foundItem && foundItem.rollLengthMtr) {
+                                  setStockInRollLength(foundItem.rollLengthMtr.toString());
                                 }
                                 setStockInError('');
                               }}
@@ -3549,7 +3549,7 @@ export default function App() {
                                       materialNameSnapshot: selectedStockOutBatch.materialName || 'Material',
                                       categorySnapshot: selectedStockOutBatch.category || 'Roll Material',
                                       width: selectedStockOutBatch.variantSize || '1.02',
-                                      rollLength: selectedStockOutBatch.rollLengthMtr || 50,
+                                      rollLength: selectedStockOutBatch.rollLengthMtr || 0,
                                       initialRollQuantity: selectedStockOutBatch.initialRollQuantity || 1,
                                       remainingRollQuantity: selectedStockOutBatch.currentRemainingRollQuantity || 0,
                                       areaM2: 0,
@@ -3699,8 +3699,8 @@ export default function App() {
                           const foundItem = items.find(
                             (i) => i.active && i.materialName === stockOutMaterial && normalizeNumericSize(i.variantSize) === norm
                           );
-                          if (foundItem) {
-                            setStockOutRollLength((foundItem.rollLengthMtr || 70).toString());
+                          if (foundItem && foundItem.rollLengthMtr) {
+                            setStockOutRollLength(foundItem.rollLengthMtr.toString());
                           }
                           setStockOutBarcodeCode('');
                           setStockOutVerificationStatus('IDLE');
@@ -3729,8 +3729,8 @@ export default function App() {
                               const foundItem = items.find(
                                 (i) => i.active && i.materialName === stockOutMaterial && normalizeNumericSize(i.variantSize) === s
                               );
-                              if (foundItem) {
-                                setStockOutRollLength((foundItem.rollLengthMtr || 70).toString());
+                              if (foundItem && foundItem.rollLengthMtr) {
+                                setStockOutRollLength(foundItem.rollLengthMtr.toString());
                               }
                               setStockOutBarcodeCode('');
                               setStockOutVerificationStatus('IDLE');
@@ -4684,8 +4684,8 @@ export default function App() {
                   <div className="flex items-center justify-between text-slate-700">
                     <span className="text-slate-500 font-sans">Area Per Roll:</span>
                     <strong>
-                      {parseFloat(itemFormSize) || 0}M × {parseFloat(itemFormRollLength) || 70}M = {
-                        Number(((parseFloat(itemFormSize) || 0) * (parseFloat(itemFormRollLength) || 70)).toFixed(2))
+                      {parseFloat(itemFormSize) || 0}M × {parseFloat(itemFormRollLength) || 0}M = {
+                        Number(((parseFloat(itemFormSize) || 0) * (parseFloat(itemFormRollLength) || 0)).toFixed(2))
                       } m²
                     </strong>
                   </div>

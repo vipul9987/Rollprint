@@ -67,7 +67,7 @@ export async function queryBatchFromDatabase(rawBatchCode: string): Promise<Batc
             materialName: row.material_name,
             category: row.category || 'Roll Material',
             variantSize: String(row.variant_size),
-            rollLengthMtr: Number(row.roll_length_mtr) || 50,
+            rollLengthMtr: Number(row.roll_length_mtr) || 0,
             initialRollQuantity: Number(row.initial_roll_quantity) || 1,
             currentRemainingRollQuantity: Number(row.current_remaining_roll_quantity) || 0,
             invoiceNumber: row.invoice_number,
@@ -226,7 +226,10 @@ export async function executeStockOutTransaction(
   const effectiveMatName = targetItemLine?.materialNameSnapshot || batch.materialName;
   const effectiveCategory = targetItemLine?.categorySnapshot || batch.category;
   const effectiveWidth = targetItemLine?.width || batch.variantSize;
-  const effectiveLength = targetItemLine?.rollLength || batch.rollLengthMtr || 50;
+  const effectiveLength = targetItemLine?.rollLength || batch.rollLengthMtr;
+  if (!effectiveLength || effectiveLength <= 0) {
+    throw new Error(`Batch ${batch.batchNumber} has invalid roll length. Dispatch blocked.`);
+  }
 
   const widthNum = parseFloat(effectiveWidth) || 1.0;
   const lengthNum = effectiveLength;

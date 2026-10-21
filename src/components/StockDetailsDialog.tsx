@@ -224,7 +224,11 @@ export const StockDetailsDialog: React.FC<StockDetailsDialogProps> = ({
       }
     }
 
-    const lengthNum = parseFloat(quickRollLength) || (item.rollLengthMtr || 50);
+    const lengthNum = parseFloat(quickRollLength) || (item.rollLengthMtr || 0);
+    if (lengthNum <= 0) {
+      setQuickError('Roll length must be specified and greater than 0.');
+      return;
+    }
 
     const selectedBatch = matchingBatches.find((b) => b.id === quickSelectedBatchId);
 
