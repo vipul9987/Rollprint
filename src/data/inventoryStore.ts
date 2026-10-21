@@ -881,3 +881,18 @@ export function getItemWebUrl(itemId: string): string {
   const origin = window.location.origin;
   return `${origin}/item/${itemId}`;
 }
+
+// Re-export physical roll functions
+export {
+  STORAGE_KEY_ROLLS,
+  extractRollBarcode,
+  generateRollBarcode,
+  validateUniqueRollBarcode,
+  generateInitialRolls,
+  getStoredInventoryRolls,
+  saveStoredInventoryRolls,
+  createPhysicalRollRecords,
+  queryRollByExactBarcode,
+  executeRollStockOutTransaction
+} from './rollDatabase';
+export type { RollStockOutResult } from './rollDatabase';

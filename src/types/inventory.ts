@@ -40,18 +40,17 @@ export interface MatrixBatchItem {
 export interface MatrixBatch {
   id: string; // Internal unique ID / UUID
   batchNumber: string; // e.g. 101026GT28728 (UNIQUE: DDMMYY + Cleaned Invoice)
+  materialName: string;
+  category: string;
+  variantSize: string; // e.g. "1.63"
+  rollLengthMtr: number; // e.g. 50
+  initialRollQuantity: number; // Initial received rolls in this batch
+  currentRemainingRollQuantity: number; // Remaining rolls in this batch
   invoiceNumber: string; // Original, complete invoice number as entered
   stockInDate: string; // Date received (YYYY-MM-DD)
   barcodeValue: string; // Exactly equal to batchNumber (e.g. 101026GT28728)
   createdAt: string;
-  items: MatrixBatchItem[]; // 1 Batch / Invoice -> Multiple Batch Item Lines
-  // Backwards compatibility / convenience fields:
-  materialName?: string;
-  category?: string;
-  variantSize?: string;
-  rollLengthMtr?: number;
-  initialRollQuantity?: number;
-  currentRemainingRollQuantity?: number;
+  items?: MatrixBatchItem[]; // 1 Batch / Invoice -> Multiple Batch Item Lines
 }
 
 export interface MatrixStockTransaction {
@@ -96,4 +95,30 @@ export interface MatrixDashboardMetrics {
   totalOutAreaMtr2: number;
   lowStockCount: number;
   outOfStockCount: number;
+}
+
+/**
+ * Individual Physical Roll in Inventory
+ * Database Table: inventory_rolls
+ * RULE: inventory_rolls.roll_barcode must be UNIQUE.
+ * Every physical roll has its OWN unique barcode.
+ */
+export type RollCurrentStatus = 'IN_STOCK' | 'OUT';
+
+export interface InventoryRoll {
+  id: string; // Unique UUID
+  rollBarcode: string; // UNIQUE barcode for this specific physical roll
+  batchNumber: string; // Grouping batch number (e.g. 101026GT28728)
+  invoiceNumber: string; // Original invoice number (e.g. GT28728)
+  rollNumber: number; // Roll number within batch/item (e.g. 1, 2, 3...)
+  materialName: string; // e.g. "Bright FL 26"
+  category: string; // e.g. "Frontlit Flex"
+  size: string; // Width / size in metres (e.g. "1.63")
+  rollLength: number; // Length per roll in metres (e.g. 50)
+  status: RollCurrentStatus; // 'IN_STOCK' | 'OUT'
+  receivedDate: string; // YYYY-MM-DD
+  stockOutDate?: string; // YYYY-MM-DD when stocked out
+  stockOutTransactionId?: string; // Reference to stock transaction
+  createdAt: string;
+  updatedAt: string;
 }

@@ -56,7 +56,22 @@ import {
   saveStoredMatrixBatches,
   findBatchesByBatchOrBarcode
 } from './data/inventoryStore';
-import { MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock, InventorySummaryGroup, MatrixBatch, MatrixBatchItem } from './types/inventory';
+import {
+  InventoryRoll,
+  MatrixInventoryItem,
+  MatrixStockTransaction,
+  MatrixItemWithStock,
+  InventorySummaryGroup,
+  MatrixBatch,
+  MatrixBatchItem
+} from './types/inventory';
+import {
+  getStoredInventoryRolls,
+  saveStoredInventoryRolls,
+  createPhysicalRollRecords,
+  queryRollByExactBarcode,
+  executeRollStockOutTransaction
+} from './data/rollDatabase';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
 import { BatchBarcodeLabel } from './components/BatchBarcodeLabel';
@@ -89,6 +104,7 @@ export default function App() {
   const [items, setItems] = useState<MatrixInventoryItem[]>(() => getStoredMatrixItems());
   const [transactions, setTransactions] = useState<MatrixStockTransaction[]>(() => getStoredMatrixTransactions());
   const [batches, setBatches] = useState<MatrixBatch[]>(() => getStoredMatrixBatches());
+  const [inventoryRolls, setInventoryRolls] = useState<InventoryRoll[]>(() => getStoredInventoryRolls());
 
   // Active batch for barcode label printing modal
   const [activeBatchForPrint, setActiveBatchForPrint] = useState<{ batch: MatrixBatch; copies: number } | null>(null);
@@ -1094,6 +1110,18 @@ export default function App() {
     }
   };
 
+  // Handler for individual physical roll Stock OUT
+  const handleRollStockOut = (roll: InventoryRoll) => {
+    setItems(getStoredMatrixItems());
+    setBatches(getStoredMatrixBatches());
+    setTransactions(getStoredMatrixTransactions());
+    setInventoryRolls(getStoredInventoryRolls());
+    showNotification(
+      `Dispatched 1 Roll of ${roll.materialName} (${roll.size}M × ${roll.rollLength}M) • Barcode: ${roll.rollBarcode}`,
+      'success'
+    );
+  };
+
   // Add Item to Current Draft Batch
   const handleAddOrUpdateItemToBatch = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -1333,6 +1361,26 @@ export default function App() {
     const updatedTxns = [...newTxns, ...transactions];
     setTransactions(updatedTxns);
     saveStoredMatrixTransactions(updatedTxns);
+
+    // CRITICAL ROLL BARCODE RULE:
+    // Every physical roll must have its OWN unique barcode.
+    // One barcode must NEVER represent multiple physical rolls.
+    // Stock IN receives e.g. 3 Rolls -> Create exactly 3 inventory_roll records (Roll 1, Roll 2, Roll 3)
+    linesToSave.forEach((line, idx) => {
+      const normSize = normalizeNumericSize(line.width);
+      createPhysicalRollRecords(
+        stockInGeneratedBatchNumber,
+        rawInvoice.toUpperCase(),
+        line.materialName,
+        line.category,
+        normSize,
+        line.rollLength,
+        line.rollQuantity,
+        stockInDate,
+        linesToSave.length > 1 ? idx + 1 : undefined
+      );
+    });
+    setInventoryRolls(getStoredInventoryRolls());
 
     // Prompt/Open Batch Barcode Label print modal
     setActiveBatchForPrint({
@@ -2090,6 +2138,7 @@ export default function App() {
               batches={batches}
               itemsWithStock={itemsWithStock}
               onExecuteStockOut={handleScannerStockOut}
+              onRollStockOut={handleRollStockOut}
             />
           </div>
         )}

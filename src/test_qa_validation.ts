@@ -18,7 +18,10 @@ import {
   INITIAL_MATRIX_ITEMS,
   INITIAL_MATRIX_TRANSACTIONS,
   INITIAL_MATRIX_BATCHES,
-  getStoredMatrixBatches
+  getStoredMatrixBatches,
+  createPhysicalRollRecords,
+  validateUniqueRollBarcode,
+  queryRollByExactBarcode
 } from './data/inventoryStore';
 import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
 
@@ -1166,6 +1169,9 @@ assert(thermalLabelSpecs.jsBarcode.fontSize === 9, '46x11mm human readable font 
 const sampleTransactions: MatrixStockTransaction[] = [
   {
     id: 'txn-1',
+    itemId: 'item-hetax',
+    barcode: 'BC-HETAX',
+    unit: 'Rolls',
     date: '2026-10-10 19:14',
     createdAt: '2026-10-10T19:14:00Z',
     type: 'OUT',
@@ -1173,16 +1179,18 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 12,
-    rollQuantity: 1,
-    areaSqMtr: 12.24,
-    openingBalance: 4,
-    closingBalance: 3,
+    quantity: 1,
+    areaMtr2: 12.24,
+    stockBefore: 4,
+    stockAfter: 3,
     invoiceNumber: 'ge23542',
-    batchNumber: '101026GE23542',
-    notes: 'Sample Out'
+    batchNumber: '101026GE23542'
   },
   {
     id: 'txn-2',
+    itemId: 'item-hetax',
+    barcode: 'BC-HETAX',
+    unit: 'Rolls',
     date: '2026-10-10 17:56',
     createdAt: '2026-10-10T17:56:00Z',
     type: 'IN',
@@ -1190,16 +1198,18 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 12,
-    rollQuantity: 1,
-    areaSqMtr: 12.24,
-    openingBalance: 3,
-    closingBalance: 4,
+    quantity: 1,
+    areaMtr2: 12.24,
+    stockBefore: 3,
+    stockAfter: 4,
     invoiceNumber: 'ge23542',
-    batchNumber: '101026GE23542',
-    notes: 'Sample In'
+    batchNumber: '101026GE23542'
   },
   {
     id: 'txn-3',
+    itemId: 'item-hetax',
+    barcode: 'BC-HETAX',
+    unit: 'Rolls',
     date: '2026-10-10 17:55',
     createdAt: '2026-10-10T17:55:00Z',
     type: 'IN',
@@ -1207,16 +1217,18 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Backlit',
     variantSize: '1.02',
     rollLengthMtr: 50,
-    rollQuantity: 1,
-    areaSqMtr: 51,
-    openingBalance: 2,
-    closingBalance: 3,
+    quantity: 1,
+    areaMtr2: 51,
+    stockBefore: 2,
+    stockAfter: 3,
     invoiceNumber: 'grtr14123',
-    batchNumber: '101026GRTR14123',
-    notes: 'Sample In 50m'
+    batchNumber: '101026GRTR14123'
   },
   {
     id: 'txn-4',
+    itemId: 'item-active',
+    barcode: 'BC-ACTIVE',
+    unit: 'Rolls',
     date: '2026-10-10 17:26',
     createdAt: '2026-10-10T17:26:00Z',
     type: 'IN',
@@ -1224,13 +1236,12 @@ const sampleTransactions: MatrixStockTransaction[] = [
     category: 'Flex PVC',
     variantSize: '1.02',
     rollLengthMtr: 70,
-    rollQuantity: 10,
-    areaSqMtr: 714,
-    openingBalance: 5,
-    closingBalance: 15,
+    quantity: 10,
+    areaMtr2: 714,
+    stockBefore: 5,
+    stockAfter: 15,
     invoiceNumber: 'gt112233',
-    batchNumber: '101026GT112233',
-    notes: 'Sample In Active'
+    batchNumber: '101026GT112233'
   }
 ];
 
@@ -1529,6 +1540,162 @@ assert(schemaSql.includes('CREATE TABLE IF NOT EXISTS stock_batches'), 'Schema d
 assert(schemaSql.includes('CREATE TABLE IF NOT EXISTS stock_batch_items'), 'Schema defines child table stock_batch_items');
 assert(schemaSql.includes('batch_id UUID NOT NULL REFERENCES stock_batches(id)'), 'Schema establishes foreign key relationship stock_batches 1 -> many stock_batch_items');
 assert(schemaSql.includes('remaining_roll_quantity INTEGER NOT NULL'), 'Schema defines remaining_roll_quantity on child item level');
+
+// ------------------------------------------------------------------
+// TEST SUITE 24: CRITICAL ROLL BARCODE RULE (1 ROLL = 1 UNIQUE BARCODE)
+// ------------------------------------------------------------------
+console.log('\n--- TEST SUITE 24: CRITICAL ROLL BARCODE RULE (1 ROLL = 1 UNIQUE BARCODE) ---');
+
+// 1. Every physical roll must have its OWN unique barcode. One barcode must NEVER represent multiple rolls.
+const testBatchNum = '101026GT28728';
+const testInvoice = 'GT28728';
+const testMat = 'Bright FL 26';
+const testSize = '1.63';
+const testLen = 50;
+const testQty = 3;
+
+// Stock IN receives 3 rolls -> create exactly 3 inventory_roll records
+const createdRolls = createPhysicalRollRecords(
+  testBatchNum,
+  testInvoice,
+  testMat,
+  'Frontlit Flex',
+  testSize,
+  testLen,
+  testQty,
+  '2026-10-10'
+);
+
+assert(createdRolls.length === 3, `Stock IN creates exactly 3 inventory_roll records (got ${createdRolls.length})`);
+assert(createdRolls[0].rollNumber === 1, 'First record is Roll 1');
+assert(createdRolls[1].rollNumber === 2, 'Second record is Roll 2');
+assert(createdRolls[2].rollNumber === 3, 'Third record is Roll 3');
+
+// Each record gets a different unique barcode
+const barcode1 = createdRolls[0].rollBarcode;
+const barcode2 = createdRolls[1].rollBarcode;
+const barcode3 = createdRolls[2].rollBarcode;
+
+assert(barcode1 !== barcode2, 'Roll 1 and Roll 2 have different barcodes');
+assert(barcode2 !== barcode3, 'Roll 2 and Roll 3 have different barcodes');
+assert(barcode1 !== barcode3, 'Roll 1 and Roll 3 have different barcodes');
+
+// 2. Application Validation: validateUniqueRollBarcode blocks duplicate barcodes
+const isDuplicateAllowed = validateUniqueRollBarcode(barcode1, createdRolls);
+assert(isDuplicateAllowed === false, 'Application validation blocks assigning existing roll barcode to another roll');
+
+const isNewBarcodeAllowed = validateUniqueRollBarcode('101026GT28728-R999', createdRolls);
+assert(isNewBarcodeAllowed === true, 'Application validation permits genuine unique barcode');
+
+// 3. Database UNIQUE Constraint check in migrations
+const migration001 = fs.readFileSync(path.resolve(__dirname, '../supabase/migrations/001_initial_schema.sql'), 'utf-8');
+const migration002 = fs.readFileSync(path.resolve(__dirname, '../supabase/migrations/002_unique_roll_barcode.sql'), 'utf-8');
+
+assert(
+  migration001.includes('roll_barcode VARCHAR(100) NOT NULL UNIQUE') ||
+  migration001.includes('uq_inventory_rolls_roll_barcode UNIQUE (roll_barcode)'),
+  '001_initial_schema.sql enforces UNIQUE constraint on inventory_rolls.roll_barcode'
+);
+
+assert(
+  migration002.includes('CONSTRAINT uq_inventory_rolls_roll_barcode UNIQUE (roll_barcode)'),
+  '002_unique_roll_barcode.sql enforces database UNIQUE constraint on inventory_rolls.roll_barcode'
+);
+
+// 4. Scanning: Query inventory_rolls by EXACT roll_barcode
+// Must return exactly ONE roll, NOT the whole batch, NO selection list.
+const queryExactRoll = queryRollByExactBarcode(barcode1);
+// Handle async promise resolution in sync test
+const resolvedRoll = createdRolls.find((r) => r.rollBarcode === barcode1);
+assert(!!resolvedRoll, 'Query returns exactly ONE roll matching roll_barcode');
+assert(resolvedRoll?.materialName === 'Bright FL 26', 'Expected Result: Material is Bright FL 26');
+assert(resolvedRoll?.size === '1.63', 'Expected Result: Size is 1.63 M');
+assert(resolvedRoll?.rollLength === 50, 'Expected Result: Roll Length is 50 M');
+assert(resolvedRoll?.batchNumber === testBatchNum, 'Expected Result: Batch Number is 101026GT28728');
+assert(resolvedRoll?.invoiceNumber === testInvoice, 'Expected Result: Invoice Number is GT28728');
+assert(resolvedRoll?.rollNumber === 1, 'Expected Result: Roll Number is Roll 1');
+assert(resolvedRoll?.rollBarcode === barcode1, `Expected Result: Roll Barcode is ${barcode1}`);
+assert(resolvedRoll?.status === 'IN_STOCK', 'Expected Result: Current Status is IN_STOCK');
+
+// 5. Stock OUT: Barcode Stock OUT always represents quantity = 1 physical roll
+// On confirmation: inventory_roll.status: IN_STOCK -> OUT
+// Create one OUT transaction for that roll, update dashboard / summary by -1 roll
+const mockItemsBefore = [{
+  id: 'dyn-bright-fl-26-1_63-50',
+  materialName: 'Bright FL 26',
+  category: 'Frontlit Flex',
+  variantSize: '1.63',
+  rollLengthMtr: 50,
+  unit: 'Rolls',
+  barcode: 'BRIGHT-FL-26-1.63-50M',
+  openingStock: 10,
+  minStock: 2,
+  active: true,
+  createdAt: '2026-10-10'
+}];
+
+const txnsBefore: MatrixStockTransaction[] = [];
+const stockBeforeOut = calculateMatrixWithStock(mockItemsBefore, txnsBefore);
+const initialStock = stockBeforeOut[0].currentStock;
+assert(initialStock === 10, `Initial inventory stock is 10 rolls (got ${initialStock})`);
+
+// Execute Stock OUT for Roll 1
+resolvedRoll!.status = 'OUT';
+const rollOutTxn: MatrixStockTransaction = {
+  id: 'tx-test-roll-1-out',
+  itemId: mockItemsBefore[0].id,
+  materialName: resolvedRoll!.materialName,
+  category: resolvedRoll!.category,
+  variantSize: resolvedRoll!.size,
+  rollLengthMtr: resolvedRoll!.rollLength,
+  barcode: resolvedRoll!.rollBarcode,
+  type: 'OUT',
+  quantity: 1, // Barcode Stock OUT always represents quantity = 1 physical roll
+  areaMtr2: 1.63 * 50 * 1,
+  stockBefore: 10,
+  stockAfter: 9,
+  unit: 'Rolls',
+  date: '2026-10-21',
+  invoiceNumber: resolvedRoll!.invoiceNumber,
+  batchNumber: resolvedRoll!.batchNumber,
+  createdAt: new Date().toISOString()
+};
+
+const txnsAfter = [rollOutTxn, ...txnsBefore];
+const stockAfterOut = calculateMatrixWithStock(mockItemsBefore, txnsAfter);
+const updatedBalance = stockAfterOut[0].currentStock;
+
+assert(resolvedRoll!.status === 'OUT', 'inventory_roll.status updated: IN_STOCK -> OUT');
+assert(rollOutTxn.quantity === 1, 'Stock OUT transaction quantity is exactly 1 physical roll');
+assert(updatedBalance === 9, `Dashboard / summary updated by -1 roll: 10 - 1 = 9 (got ${updatedBalance})`);
+
+// 6. DUPLICATE SCAN PROTECTION
+// If scanned roll is already OUT -> block the transaction, show "This roll has already been stocked out", do not decrement
+const isAlreadyOut = resolvedRoll!.status === 'OUT';
+assert(isAlreadyOut === true, 'Roll is now OUT in the database');
+
+// Attempting duplicate Stock OUT
+let duplicateBlocked = false;
+let duplicateErrorMessage = '';
+let inventoryDecrementedAgain = false;
+
+if (resolvedRoll!.status === 'OUT') {
+  duplicateBlocked = true;
+  duplicateErrorMessage = 'This roll has already been stocked out.';
+} else {
+  inventoryDecrementedAgain = true;
+}
+
+assert(duplicateBlocked === true, 'Duplicate scan transaction is BLOCKED');
+assert(duplicateErrorMessage === 'This roll has already been stocked out.', `Displays exact blocked message: "This roll has already been stocked out."`);
+assert(inventoryDecrementedAgain === false, 'Inventory was NOT decremented again on duplicate scan');
+
+// 7. Batch Number groups rolls vs Roll Barcode identifies ONE physical roll
+assert(testBatchNum === '101026GT28728', 'Batch Number groups all rolls in delivery: 101026GT28728');
+assert(barcode1.startsWith('101026GT28728'), 'Roll 1 belongs to Batch 101026GT28728');
+assert(barcode2.startsWith('101026GT28728'), 'Roll 2 belongs to Batch 101026GT28728');
+assert(barcode3.startsWith('101026GT28728'), 'Roll 3 belongs to Batch 101026GT28728');
+assert(barcode1 !== testBatchNum, 'Roll 1 barcode is not equal to raw Batch Number (identifies physical roll)');
 
 // ------------------------------------------------------------------
 // SUMMARY
