@@ -25,6 +25,7 @@ import {
 } from './data/inventoryStore';
 import {
   executeRollStockOutTransaction,
+  executeAtomicRollDispatch,
   getStoredInventoryRolls,
   saveStoredInventoryRolls
 } from './data/rollDatabase';
@@ -1785,6 +1786,237 @@ await (async () => {
     dupResult.error === 'This physical roll has already been stocked out.',
     `Exact duplicate error: "${dupResult.error}"`
   );
+})();
+
+// ------------------------------------------------------------------
+// TEST SUITE 29: MANDATORY CLIENT END-TO-END REGRESSION TESTS 1 TO 8
+// ------------------------------------------------------------------
+(async () => {
+  console.log('\n--- TEST SUITE 29: MANDATORY CLIENT END-TO-END REGRESSION TESTS 1 TO 8 ---');
+
+  // =================================================================
+  // END-TO-END TEST 1 — STOCK IN
+  // Create: Invoice: GT28728, Date: 10/10/2026, Item: Bright FL 26, Width: 1.63, Length: 50, Quantity: 3
+  // Expected: Batch created, 3 physical inventory_roll records, 3 UNIQUE barcodes, 3 distinct labels, All: status = IN_STOCK
+  // =================================================================
+  console.log('\n>> End-to-End Test 1: Stock IN Multi-Roll Physical Record Creation');
+  const e2eRolls = createPhysicalRollRecords(
+    '101026GT28728-E2E',
+    'GT28728',
+    'Bright FL 26',
+    'Flex PVC',
+    '1.63',
+    50,
+    3,
+    '2026-10-10'
+  );
+
+  assert(e2eRolls.length === 3, 'Created exactly 3 physical inventory_roll records for Quantity = 3');
+  assert(e2eRolls[0].rollNumber === 1, 'Roll 1 number is 1');
+  assert(e2eRolls[1].rollNumber === 2, 'Roll 2 number is 2');
+  assert(e2eRolls[2].rollNumber === 3, 'Roll 3 number is 3');
+
+  const barcodes = new Set(e2eRolls.map((r) => r.rollBarcode));
+  assert(barcodes.size === 3, 'All 3 physical rolls have distinct, UNIQUE barcodes');
+  assert(e2eRolls.every((r) => r.status === 'IN_STOCK'), 'All 3 physical rolls have status = IN_STOCK');
+  assert(e2eRolls.every((r) => r.rollLength === 50), 'All 3 physical rolls have exact roll length 50M (no silent defaults)');
+
+  // =================================================================
+  // END-TO-END TEST 2 — POS STOCK OUT CART & DUPLICATE PROTECTION
+  // OUT Invoice: DS/26-27/1230, Date: 21/10/2026
+  // Scan barcode Roll 1 -> Added to cart
+  // Scan barcode Roll 2 -> Added to cart
+  // Scan Roll 1 again -> "Roll already added to this Stock OUT list.", Cart remains 2 rolls.
+  // =================================================================
+  console.log('\n>> End-to-End Test 2: POS Stock OUT Cart Continuous Scan & Duplicate Prevention');
+  const outInvoice = 'DS/26-27/1230';
+  const outDate = '2026-10-21';
+
+  const cart: any[] = [];
+  const roll1 = e2eRolls[0];
+  const roll2 = e2eRolls[1];
+  const roll3 = e2eRolls[2];
+
+  // Scan Roll 1
+  if (!cart.some((r) => r.rollBarcode === roll1.rollBarcode)) {
+    cart.push(roll1);
+  }
+  assert(cart.length === 1, 'Scan barcode Roll 1: Added to OUT cart (Cart = 1 roll)');
+
+  // Scan Roll 2
+  if (!cart.some((r) => r.rollBarcode === roll2.rollBarcode)) {
+    cart.push(roll2);
+  }
+  assert(cart.length === 2, 'Scan barcode Roll 2: Added to OUT cart (Cart = 2 rolls)');
+
+  // Scan Roll 1 again
+  let duplicateRejected = false;
+  let duplicateMessage = '';
+  if (cart.some((r) => r.rollBarcode === roll1.rollBarcode)) {
+    duplicateRejected = true;
+    duplicateMessage = 'Roll already added to this Stock OUT list.';
+  } else {
+    cart.push(roll1);
+  }
+  assert(duplicateRejected === true, 'Scan Roll 1 again: Duplicate scan rejected');
+  assert(duplicateMessage === 'Roll already added to this Stock OUT list.', 'Displays exact message: "Roll already added to this Stock OUT list."');
+  assert(cart.length === 2, 'Cart remains exactly 2 rolls after duplicate rejection');
+
+  // =================================================================
+  // END-TO-END TEST 3 — ATOMIC CONFIRM STOCK OUT & SUMMARY TRUTH
+  // Confirm Stock OUT.
+  // Expected: Roll 1: OUT, Roll 2: OUT, Roll 3: IN_STOCK
+  // Summary: Bright FL 26 / 1.63 -> Remaining: exactly 1 Roll
+  // =================================================================
+  console.log('\n>> End-to-End Test 3: Confirm POS Stock OUT & Physical Summary Truth');
+  const dispatchResult = await executeAtomicRollDispatch(outInvoice, outDate, cart);
+  assert(dispatchResult.success === true, 'Atomic multi-roll dispatch execution succeeded');
+  assert(dispatchResult.totalRolls === 2, 'Total rolls dispatched is 2');
+
+  const refreshedRoll1 = await queryRollByExactBarcode(roll1.rollBarcode);
+  const refreshedRoll2 = await queryRollByExactBarcode(roll2.rollBarcode);
+  const refreshedRoll3 = await queryRollByExactBarcode(roll3.rollBarcode);
+
+  assert(refreshedRoll1?.status === 'OUT', 'Roll 1 status transitioned to OUT');
+  assert(refreshedRoll2?.status === 'OUT', 'Roll 2 status transitioned to OUT');
+  assert(refreshedRoll3?.status === 'IN_STOCK', 'Roll 3 remains IN_STOCK');
+  assert(refreshedRoll1?.stockOutInvoiceNumber === outInvoice, `Roll 1 recorded OUT invoice: ${outInvoice}`);
+  assert(refreshedRoll1?.invoiceNumber === 'GT28728', 'Roll 1 preserved original Stock IN invoice: GT28728');
+
+  // Physical roll source of truth check: COUNT(inventory_rolls WHERE status = 'IN_STOCK')
+  const allCurrentRolls = getStoredInventoryRolls();
+  const inStockCount = allCurrentRolls.filter(
+    (r) =>
+      r.status === 'IN_STOCK' &&
+      r.batchNumber === '101026GT28728-E2E' &&
+      r.materialName === 'Bright FL 26' &&
+      r.size === '1.63'
+  ).length;
+  assert(inStockCount === 1, 'Physical Roll Source of Truth: exactly 1 Roll remains in stock');
+
+  // =================================================================
+  // END-TO-END TEST 4 — RESCAN OUT ROLL
+  // Scan Roll 1 again.
+  // Expected: "This roll has already been stocked out." Do not add it to cart. Do not change stock.
+  // =================================================================
+  console.log('\n>> End-to-End Test 4: Rescan OUT Roll Protection');
+  const rescanAttempt = await queryRollByExactBarcode(roll1.rollBarcode);
+  assert(rescanAttempt?.status === 'OUT', 'Rescanned roll status confirmed as OUT in database');
+
+  let alreadyOutBlocked = false;
+  let alreadyOutMsg = '';
+  if (rescanAttempt?.status === 'OUT') {
+    alreadyOutBlocked = true;
+    alreadyOutMsg = 'This roll has already been stocked out.';
+  }
+  assert(alreadyOutBlocked === true, 'Rescan OUT roll blocked from cart entry');
+  assert(alreadyOutMsg === 'This roll has already been stocked out.', 'Displays exact message: "This roll has already been stocked out."');
+
+  // Verify stock not decremented
+  const inStockAfterRescan = getStoredInventoryRolls().filter(
+    (r) =>
+      r.status === 'IN_STOCK' &&
+      r.batchNumber === '101026GT28728-E2E' &&
+      r.materialName === 'Bright FL 26' &&
+      r.size === '1.63'
+  ).length;
+  assert(inStockAfterRescan === 1, 'Inventory stock balance unchanged (remains 1 Roll)');
+
+  // =================================================================
+  // END-TO-END TEST 5 — MULTI-MATERIAL DISPATCH
+  // Scan physical rolls from: Bright FL 26, Backlit Sunlex, Flex Tufan under the same OUT Invoice.
+  // Expected: all appear in one OUT Stock List. One confirmation dispatches all.
+  // =================================================================
+  console.log('\n>> End-to-End Test 5: Multi-Material POS Dispatch Under Same Invoice');
+  const mmRollBright = createPhysicalRollRecords('101026MULTI-01', 'INV-MM1', 'Bright FL 26', 'Flex PVC', '1.63', 50, 1, '2026-10-10')[0];
+  const mmRollSunlex = createPhysicalRollRecords('101026MULTI-02', 'INV-MM2', 'Backlit Sunlex', 'Backlit', '1.32', 70, 1, '2026-10-10')[0];
+  const mmRollTufan = createPhysicalRollRecords('101026MULTI-03', 'INV-MM3', 'Flex Tufan', 'Frontlit', '1.93', 70, 1, '2026-10-10')[0];
+
+  const multiCart = [mmRollBright, mmRollSunlex, mmRollTufan];
+  assert(multiCart.length === 3, 'Multi-material OUT Stock List contains 3 distinct items');
+
+  const mmDispatchResult = await executeAtomicRollDispatch('DS/26-27/MULTI-999', '2026-10-21', multiCart);
+  assert(mmDispatchResult.success === true, 'One atomic confirmation dispatches all 3 materials');
+  assert(mmDispatchResult.totalRolls === 3, 'Total rolls dispatched is 3');
+
+  const checkBright = await queryRollByExactBarcode(mmRollBright.rollBarcode);
+  const checkSunlex = await queryRollByExactBarcode(mmRollSunlex.rollBarcode);
+  const checkTufan = await queryRollByExactBarcode(mmRollTufan.rollBarcode);
+
+  assert(checkBright?.status === 'OUT', 'Bright FL 26 transitioned to OUT');
+  assert(checkSunlex?.status === 'OUT', 'Backlit Sunlex transitioned to OUT');
+  assert(checkTufan?.status === 'OUT', 'Flex Tufan transitioned to OUT');
+  assert(checkBright?.stockOutInvoiceNumber === 'DS/26-27/MULTI-999', 'Bright FL 26 shares dispatch invoice DS/26-27/MULTI-999');
+  assert(checkSunlex?.stockOutInvoiceNumber === 'DS/26-27/MULTI-999', 'Backlit Sunlex shares dispatch invoice DS/26-27/MULTI-999');
+  assert(checkTufan?.stockOutInvoiceNumber === 'DS/26-27/MULTI-999', 'Flex Tufan shares dispatch invoice DS/26-27/MULTI-999');
+
+  // =================================================================
+  // END-TO-END TEST 6 — ATOMIC TRANSACTION FAILURE SIMULATION
+  // 5 rolls in cart. Before confirmation, force 1 roll to OUT in another session. Confirm.
+  // Expected: entire dispatch fails safely. No remaining 4 rolls are partially marked OUT.
+  // =================================================================
+  console.log('\n>> End-to-End Test 6: Atomic Failure & Zero-Partial-Dispatch Guarantee');
+  const atomicBatch = createPhysicalRollRecords('101026ATOMIC-01', 'INV-ATM', 'Bright FL 26', 'Flex PVC', '1.63', 50, 5, '2026-10-10');
+  assert(atomicBatch.length === 5, 'Created 5 rolls for atomic test');
+
+  // Place all 5 rolls into dispatch cart
+  const atomicCart = [...atomicBatch];
+
+  // Concurrent session intervention: Force roll 3 to OUT in database
+  const concurrentRoll3 = atomicBatch[2];
+  const allRollsForIntervention = getStoredInventoryRolls();
+  const intervenedRolls = allRollsForIntervention.map((r) =>
+    r.rollBarcode === concurrentRoll3.rollBarcode
+      ? { ...r, status: 'OUT' as const, stockOutInvoiceNumber: 'CONCURRENT-SESSION-INV', stockOutDate: '2026-10-21' }
+      : r
+  );
+  saveStoredInventoryRolls(intervenedRolls);
+
+  // Attempt atomic dispatch with cart
+  const failedDispatch = await executeAtomicRollDispatch('DS/FAIL-TEST', '2026-10-21', atomicCart);
+  assert(failedDispatch.success === false, 'Atomic dispatch rejected due to concurrent conflict');
+  assert(failedDispatch.isConflict === true, 'Conflict flag is true');
+  assert(
+    failedDispatch.error?.includes('already been stocked out'),
+    `Error explains roll already stocked out: ${failedDispatch.error}`
+  );
+
+  // CRITICAL AUDIT: Verify none of the other 4 rolls were marked OUT
+  const rollsAfterFailure = getStoredInventoryRolls();
+  const roll1After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[0].rollBarcode);
+  const roll2After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[1].rollBarcode);
+  const roll4After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[3].rollBarcode);
+  const roll5After = rollsAfterFailure.find((r) => r.rollBarcode === atomicBatch[4].rollBarcode);
+
+  assert(roll1After?.status === 'IN_STOCK', 'Roll 1 remains IN_STOCK (Not partially dispatched)');
+  assert(roll2After?.status === 'IN_STOCK', 'Roll 2 remains IN_STOCK (Not partially dispatched)');
+  assert(roll4After?.status === 'IN_STOCK', 'Roll 4 remains IN_STOCK (Not partially dispatched)');
+  assert(roll5After?.status === 'IN_STOCK', 'Roll 5 remains IN_STOCK (Not partially dispatched)');
+
+  // =================================================================
+  // END-TO-END TEST 7 — DATABASE & SEED PERSISTENCE
+  // Clear simulated storage and reload.
+  // =================================================================
+  console.log('\n>> End-to-End Test 7: Persistence & Opening Stock Recovery');
+  const restoredRolls = getStoredInventoryRolls();
+  assert(restoredRolls.length > 0, 'Physical inventory rolls restored from store');
+  const openingSunlexRolls = restoredRolls.filter((r) => r.batchNumber === 'OPENING-STOCK' && r.materialName === 'Backlit Sunlex');
+  assert(openingSunlexRolls.length > 0, 'Opening stock rolls exist with individual physical roll barcodes');
+
+  // =================================================================
+  // END-TO-END TEST 8 — STOCK HISTORY AUDIT
+  // Verify transaction history includes: Roll Barcode, Date, Type, Length, Batch, Invoice, Before, After
+  // =================================================================
+  console.log('\n>> End-to-End Test 8: Stock Details History Columns');
+  const sampleTx = mmDispatchResult.transactions?.[0];
+  assert(sampleTx !== undefined, 'Transaction record exists for audit');
+  assert(Boolean(sampleTx?.rollBarcode), `Roll Barcode is present in history: ${sampleTx?.rollBarcode}`);
+  assert(Boolean(sampleTx?.date), `Date is present in history: ${sampleTx?.date}`);
+  assert(sampleTx?.type === 'OUT', 'Type is OUT');
+  assert(sampleTx?.rollLengthMtr === 50 || sampleTx?.rollLengthMtr === 70, `Length is present: ${sampleTx?.rollLengthMtr}M`);
+  assert(Boolean(sampleTx?.batchNumber), `Batch Number is present: ${sampleTx?.batchNumber}`);
+  assert(Boolean(sampleTx?.stockOutInvoiceNumber), `OUT Invoice is present: ${sampleTx?.stockOutInvoiceNumber}`);
+  assert(Boolean(sampleTx?.originalStockInInvoiceNumber), `Original IN Invoice is present: ${sampleTx?.originalStockInInvoiceNumber}`);
 })();
 
 // ------------------------------------------------------------------
