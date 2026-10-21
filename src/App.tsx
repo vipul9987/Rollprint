@@ -137,7 +137,7 @@ export default function App() {
   // Synchronize inventory rolls from remote Supabase on initial load
   useEffect(() => {
     fetchRollsFromSupabase().then((remoteRolls) => {
-      if (remoteRolls && remoteRolls.length > 0) {
+      if (remoteRolls !== null) {
         setInventoryRolls(remoteRolls);
         saveStoredInventoryRolls(remoteRolls);
       }

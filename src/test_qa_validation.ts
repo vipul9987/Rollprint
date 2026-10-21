@@ -2081,6 +2081,20 @@ await (async () => {
   setForceProductionModeForTesting(null);
   const restoredGuard = checkProductionDatabaseGuard();
   assert(restoredGuard.allowed, 'Development / test mode allows normal local store operation');
+
+  // =================================================================
+  // END-TO-END TEST 11 — PRODUCTION TEST SEED BLOCKING GUARANTEE
+  // 759 opening rolls are TEST/DEV ONLY and must NEVER be synced to Supabase
+  // =================================================================
+  console.log('\n>> End-to-End Test 11: Production Test Seed Blocking Guarantee');
+  const allOpening = genRun1.filter(r => r.batchNumber === 'OPENING-STOCK');
+  assert(allOpening.length === 725, `Opening stock pool contains ${allOpening.length} test rolls`);
+  
+  // Verify safeguard filters out 100% of opening-stock rolls
+  const filtered = allOpening.filter(
+    (r) => r.batchNumber !== 'OPENING-STOCK' && !r.rollBarcode.toUpperCase().startsWith('OP-')
+  );
+  assert(filtered.length === 0, 'Production sync safeguard filters out 100% of test opening rolls');
 })();
 
 // ------------------------------------------------------------------

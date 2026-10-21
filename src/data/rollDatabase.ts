@@ -200,21 +200,28 @@ export function checkProductionDatabaseGuard(): { allowed: boolean; error?: stri
  */
 export function getStoredInventoryRolls(): InventoryRoll[] {
   try {
+    const isProdWithDb = isProductionEnvironment() && isSupabaseConfigured();
+
     if (typeof window === 'undefined' || !window.localStorage) {
       if (!memoryRollStore) {
-        memoryRollStore = generateInitialRolls();
+        memoryRollStore = isProdWithDb ? [] : generateInitialRolls();
       }
       return memoryRollStore;
     }
     const raw = localStorage.getItem(STORAGE_KEY_ROLLS);
     if (!raw) {
-      const initial = generateInitialRolls();
+      const initial = isProdWithDb ? [] : generateInitialRolls();
       saveStoredInventoryRolls(initial);
       return initial;
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      // Ensure seed batches (like AB12345, GT28728, GE23542) rolls are present
+      if (isProdWithDb) {
+        // In production with Supabase configured, remote DB is the source of truth.
+        // Never inject development opening stock / seed rolls into production!
+        return parsed;
+      }
+      // Ensure seed batches (like AB12345, GT28728, GE23542) rolls are present in dev/test
       const seedRolls = generateInitialRolls();
       const existingBarcodes = new Set(parsed.map((r: InventoryRoll) => r.rollBarcode.toUpperCase()));
       const missingSeeds = seedRolls.filter((sr) => !existingBarcodes.has(sr.rollBarcode.toUpperCase()));
@@ -225,12 +232,12 @@ export function getStoredInventoryRolls(): InventoryRoll[] {
       }
       return parsed;
     }
-    const initial = generateInitialRolls();
+    const initial = isProdWithDb ? [] : generateInitialRolls();
     saveStoredInventoryRolls(initial);
     return initial;
   } catch (err) {
     if (!memoryRollStore) {
-      memoryRollStore = generateInitialRolls();
+      memoryRollStore = isProductionEnvironment() && isSupabaseConfigured() ? [] : generateInitialRolls();
     }
     return memoryRollStore;
   }
@@ -324,9 +331,17 @@ export async function syncRollsToSupabase(rolls: InventoryRoll[]): Promise<void>
   const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
   if (!supabaseUrl || !supabaseKey || rolls.length === 0) return;
 
+  // CRITICAL PRODUCTION SAFEGUARD:
+  // Opening stock and test seed rolls are TEST/DEV ONLY.
+  // They must NEVER be synced to production Supabase.
+  const productionRolls = rolls.filter(
+    (r) => r.batchNumber !== 'OPENING-STOCK' && !r.rollBarcode.toUpperCase().startsWith('OP-')
+  );
+  if (productionRolls.length === 0) return;
+
   try {
     const isUuid = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
-    const payload = rolls.map((r) => {
+    const payload = productionRolls.map((r) => {
       const record: any = {
         roll_barcode: r.rollBarcode,
         barcode: r.rollBarcode,
