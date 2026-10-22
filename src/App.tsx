@@ -76,6 +76,7 @@ import {
   executeRollStockOutTransaction,
   checkProductionDatabaseGuard,
   fetchRollsFromSupabase,
+  fetchTransactionsFromSupabase,
   executeAtomicStockInRpc
 } from './data/rollDatabase';
 import { MobileItemView } from './components/MobileItemView';
@@ -159,7 +160,7 @@ export default function App() {
     }
   }, []);
 
-  // Synchronize inventory rolls from remote Supabase on initial load and when staff logs in
+  // Synchronize inventory rolls and stock transactions from remote Supabase on initial load and when staff logs in
   useEffect(() => {
     if (!isSupabaseConfigured() || staffSession) {
       fetchRollsFromSupabase().then((remoteRolls) => {
@@ -168,8 +169,26 @@ export default function App() {
           saveStoredInventoryRolls(remoteRolls);
         }
       });
+      fetchTransactionsFromSupabase().then((remoteTxns) => {
+        if (remoteTxns !== null) {
+          setTransactions(remoteTxns);
+          saveStoredMatrixTransactions(remoteTxns);
+        }
+      });
     }
   }, [staffSession]);
+
+  // Re-sync transactions when user opens the Transactions tab
+  useEffect(() => {
+    if (activeTab === 'transactions' && isSupabaseConfigured() && staffSession) {
+      fetchTransactionsFromSupabase().then((remoteTxns) => {
+        if (remoteTxns !== null) {
+          setTransactions(remoteTxns);
+          saveStoredMatrixTransactions(remoteTxns);
+        }
+      });
+    }
+  }, [activeTab, staffSession]);
 
   // Distinct Material Names (displays ONLY material names in dropdowns)
   const uniqueMaterialNames = useMemo(() => {
@@ -1165,8 +1184,19 @@ export default function App() {
   const handleDispatchComplete = (result: any) => {
     setItems(getStoredMatrixItems());
     setBatches(getStoredMatrixBatches());
-    setTransactions(getStoredMatrixTransactions());
     setInventoryRolls(getStoredInventoryRolls());
+    if (isSupabaseConfigured() && staffSession) {
+      fetchTransactionsFromSupabase().then((remoteTxns) => {
+        if (remoteTxns !== null) {
+          setTransactions(remoteTxns);
+          saveStoredMatrixTransactions(remoteTxns);
+        } else {
+          setTransactions(getStoredMatrixTransactions());
+        }
+      });
+    } else {
+      setTransactions(getStoredMatrixTransactions());
+    }
     showNotification(
       `Stock OUT Complete: ${result.totalRolls || 0} rolls dispatched under Invoice ${result.dispatchInvoiceNumber || ''}`,
       'success'
@@ -1427,6 +1457,21 @@ export default function App() {
     const updatedTxns = [...newTxns, ...transactions];
     setTransactions(updatedTxns);
     saveStoredMatrixTransactions(updatedTxns);
+
+    if (isSupabaseConfigured() && staffSession) {
+      fetchTransactionsFromSupabase().then((remoteTxns) => {
+        if (remoteTxns !== null) {
+          setTransactions(remoteTxns);
+          saveStoredMatrixTransactions(remoteTxns);
+        }
+      });
+      fetchRollsFromSupabase().then((remoteRolls) => {
+        if (remoteRolls !== null) {
+          setInventoryRolls(remoteRolls);
+          saveStoredInventoryRolls(remoteRolls);
+        }
+      });
+    }
 
     // CRITICAL ROLL BARCODE RULE:
     // Every physical roll must have its OWN unique barcode.

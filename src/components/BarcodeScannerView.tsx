@@ -13,12 +13,12 @@ import {
   Upload,
   ArrowUpFromLine,
   Trash2,
-  Calendar,
   FileText,
   RotateCcw,
   ShieldAlert,
   ShoppingCart,
-  Check
+  Check,
+  Barcode as BarcodeIcon
 } from 'lucide-react';
 import { MatrixBatch, MatrixItemWithStock, InventoryRoll } from '../types/inventory';
 import {
@@ -59,20 +59,20 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   isModal = false
 }) => {
   // =========================================================================
-  // TOP DISPATCH HEADER INPUTS (Entered ONCE for the entire dispatch)
+  // DISPATCH HEADER INPUTS (Entered ONCE for the entire dispatch)
   // =========================================================================
   const [stockOutInvoice, setStockOutInvoice] = useState<string>('DS/26-27/1230');
   const [stockOutDate, setStockOutDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   // =========================================================================
-  // POS TEMPORARY CART (OUT STOCK LIST)
+  // OUT STOCK LIST (TEMPORARY CART)
   // =========================================================================
   const [cartRolls, setCartRolls] = useState<InventoryRoll[]>([]);
 
   // Scan feedback alert message
   const [scanAlert, setScanAlert] = useState<ScanAlert | null>(null);
 
-  // Manual Roll Barcode Input
+  // Manual Roll Barcode Input (USB gun / manual typing)
   const [manualInput, setManualInput] = useState<string>('');
   const manualInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -80,7 +80,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [dispatchError, setDispatchError] = useState<string>('');
 
-  // Dispatch success report (Phase 10)
+  // Dispatch success report (Summary after confirmation)
   const [dispatchedReport, setDispatchedReport] = useState<{
     outInvoice: string;
     outDate: string;
@@ -88,13 +88,16 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     rolls: InventoryRoll[];
   } | null>(null);
 
-  // Camera & Stream State
+  // Camera Scanner Modal State (Hidden by default, opens only on [Open Scanner])
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState<boolean>(false);
+  const [cameraError, setCameraError] = useState<string>('');
+  const [modalFeedback, setModalFeedback] = useState<string>('');
+
+  // Camera Hardware / Stream Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const zxingControlsRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
-  const [cameraError, setCameraError] = useState<string>('');
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [hasTorchSupport, setHasTorchSupport] = useState<boolean>(false);
@@ -126,7 +129,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
           osc.start();
           osc.stop(ctx.currentTime + 0.14);
         } else {
-          // Low buzzer for error / warning
+          // Low buzz for duplicate / error
           osc.frequency.setValueAtTime(240, ctx.currentTime);
           gain.gain.setValueAtTime(0.2, ctx.currentTime);
           gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.22);
@@ -149,7 +152,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     } catch {}
   }, []);
 
-  // Stop camera stream
+  // Stop camera stream cleanly
   const stopCamera = useCallback(() => {
     if (zxingControlsRef.current) {
       try {
@@ -163,13 +166,12 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       } catch {}
       streamRef.current = null;
     }
-    setIsCameraActive(false);
     setIsTorchOn(false);
     setHasTorchSupport(false);
   }, []);
 
   // =========================================================================
-  // CONTINUOUS SCANNING BEHAVIOR (ONE SCAN = ONE ROLL)
+  // SCAN PROCESSING (ONE SCAN = ONE PHYSICAL ROLL)
   // =========================================================================
   const handleBarcodeDecoded = useCallback(
     async (rawCode: string) => {
@@ -185,16 +187,16 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       lastScanTimestampRef.current = now;
 
       // 1. DUPLICATE SCAN PROTECTION (Current Cart)
-      // "If a roll is already present in current OUT cart: Reject second scan.
-      // Show: 'Roll already added to this Stock OUT list.' Do NOT add duplicate."
       if (cartRolls.some((r) => r.rollBarcode.toUpperCase() === clean.toUpperCase())) {
         triggerScanAudio(false);
+        const msg = 'Roll already added to this Stock OUT list.';
         setScanAlert({
           type: 'warning',
-          title: 'Roll already added to this Stock OUT list.',
+          title: msg,
           detail: `Roll ${clean} is already present in your OUT stock list.`,
           barcode: clean
         });
+        setModalFeedback(`⚠️ ${clean} is already in the list`);
         return;
       }
 
@@ -202,52 +204,53 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       const roll = await queryRollByExactBarcode(clean);
 
       if (!roll) {
-        // INVALID BARCODE: Show "Roll barcode not found." Do not add anything.
         triggerScanAudio(false);
+        const msg = 'Roll barcode not found.';
         setScanAlert({
           type: 'error',
-          title: 'Roll barcode not found.',
+          title: msg,
           detail: `No physical roll matches barcode "${clean}".`,
           barcode: clean
         });
+        setModalFeedback(`❌ Barcode "${clean}" not found`);
         return;
       }
 
       // 3. ALREADY OUT PROTECTION
-      // "If database says: status = OUT: Reject scan.
-      // Show: 'This roll has already been stocked out.'
-      // If available, show: Roll Barcode, Previous OUT Invoice, Previous OUT Date."
       if (roll.status === 'OUT') {
         triggerScanAudio(false);
+        const msg = 'This roll has already been stocked out.';
         setScanAlert({
           type: 'error',
-          title: 'This roll has already been stocked out.',
+          title: msg,
           detail: 'This physical roll was previously dispatched and cannot be stocked out again.',
           barcode: roll.rollBarcode,
           previousOutInvoice: roll.stockOutInvoiceNumber || 'N/A',
           previousOutDate: roll.stockOutDate || 'N/A'
         });
+        setModalFeedback(`❌ ${roll.rollBarcode} already OUT`);
         return;
       }
 
-      // 4. VALID IN_STOCK PHYSICAL ROLL -> ADD TO CART (Quantity = 1 physical roll)
+      // 4. VALID IN_STOCK PHYSICAL ROLL -> ADD TO OUT STOCK LIST
       triggerScanAudio(true);
       setCartRolls((prev) => [roll, ...prev]);
       setScanAlert({
         type: 'success',
         title: `Added: ${roll.materialName} (${roll.size}M × ${roll.rollLength}M)`,
-        detail: `Batch: ${roll.batchNumber} • IN Inv: ${roll.invoiceNumber}`,
+        detail: `Batch: ${roll.batchNumber} • Roll Barcode: ${roll.rollBarcode}`,
         barcode: roll.rollBarcode
       });
+      setModalFeedback(`✅ Added: ${roll.rollBarcode}`);
 
-      // Clear & refocus manual input immediately
+      // Clear & refocus manual input immediately for seamless USB gun workflow
       setManualInput('');
       setTimeout(() => manualInputRef.current?.focus(), 50);
     },
     [cartRolls, triggerScanAudio]
   );
 
-  // Start Camera
+  // Start Camera only when modal is open
   const startCamera = useCallback(async () => {
     stopCamera();
     setCameraError('');
@@ -276,7 +279,6 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
-        setIsCameraActive(true);
 
         const hints = new Map<DecodeHintType, any>();
         hints.set(DecodeHintType.POSSIBLE_FORMATS, [
@@ -299,9 +301,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       }
     } catch (err: any) {
       console.warn('Camera initialization error:', err);
-      setIsCameraActive(false);
       setCameraError(
-        'Could not access the camera. Please allow camera permissions or enter the Roll Barcode manually.'
+        'Camera unavailable. Allow camera permission or enter/scan the Roll Barcode manually.'
       );
     }
   }, [facingMode, handleBarcodeDecoded, stopCamera]);
@@ -325,8 +326,9 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
   };
 
+  // Manage camera lifecycle strictly based on modal visibility
   useEffect(() => {
-    if (!dispatchedReport) {
+    if (isCameraModalOpen) {
       startCamera();
     } else {
       stopCamera();
@@ -334,9 +336,9 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     return () => {
       stopCamera();
     };
-  }, [dispatchedReport, facingMode, startCamera, stopCamera]);
+  }, [isCameraModalOpen, facingMode, startCamera, stopCamera]);
 
-  // Remove individual roll from temporary list
+  // Remove individual roll from OUT stock list
   const handleRemoveRoll = (barcode: string) => {
     setCartRolls((prev) => prev.filter((r) => r.rollBarcode.toUpperCase() !== barcode.toUpperCase()));
     setScanAlert({
@@ -353,7 +355,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     setDispatchError('');
   };
 
-  // Handle Manual Input Submit
+  // Handle Manual Input / USB scanner Submit
   const handleManualSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const clean = manualInput.trim().toUpperCase();
@@ -361,7 +363,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     handleBarcodeDecoded(clean);
   };
 
-  // Photo file upload fallback
+  // Fallback photo file upload
   const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -390,13 +392,13 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       setScanAlert({
         type: 'error',
         title: 'Barcode decode failed from photo.',
-        detail: 'Try typing the printed roll barcode number manually.'
+        detail: 'Try entering the printed roll barcode number manually.'
       });
     }
   };
 
   // =========================================================================
-  // ATOMIC CONFIRM STOCK OUT (PHASE 5)
+  // ATOMIC CONFIRM STOCK OUT
   // Revalidates all rolls and commits transaction atomically
   // =========================================================================
   const handleConfirmStockOut = async () => {
@@ -415,7 +417,9 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     }
 
     if (isProductionEnvironment() && !isSupabaseConfigured()) {
-      setDispatchError('DATABASE UNAVAILABLE: Supabase database connection is not configured. Stock OUT mutations are disabled in production to prevent device stock divergence.');
+      setDispatchError(
+        'DATABASE UNAVAILABLE: Remote Supabase database is not connected. Stock OUT mutations are locked in production to prevent device stock divergence.'
+      );
       return;
     }
 
@@ -435,7 +439,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         onDispatchComplete(result);
       }
 
-      // Success Report view (Phase 10)
+      // Success Report view
       setDispatchedReport({
         outInvoice: cleanInvoice,
         outDate: cleanDate,
@@ -466,43 +470,37 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     <div
       className={`${
         isModal ? 'p-1' : 'w-full'
-      } flex flex-col items-center justify-start font-sans antialiased`}
+      } max-w-3xl mx-auto space-y-5 font-sans antialiased`}
     >
-      <div className="w-full max-w-4xl bg-white rounded-3xl shadow-xl border border-slate-200 overflow-hidden space-y-0">
+      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
         {/* ========================================================= */}
-        {/* TOP BAR / TITLE                                           */}
+        {/* HEADER: Decora Sales style                                 */}
         {/* ========================================================= */}
-        <div className="bg-[#0A0A0C] text-white px-6 py-4 flex items-center justify-between border-b border-[#27272A]">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-4">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 rounded-2xl bg-[#C59B3F]/20 border border-[#C59B3F]/40 flex items-center justify-center text-[#D4A84B]">
-              <ArrowUpFromLine className="w-5 h-5 stroke-[2.5]" />
+            <div className="p-2.5 rounded-xl bg-amber-50 text-amber-700">
+              <ArrowUpFromLine className="w-6 h-6 stroke-[2.5]" />
             </div>
             <div>
-              <div className="flex items-center space-x-2">
-                <span className="text-[10px] font-black uppercase tracking-wider text-[#D4A84B]">
-                  Retail POS Mode
-                </span>
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-[10px] font-mono text-emerald-400">Live Scanning</span>
-              </div>
-              <h2 className="text-base sm:text-lg font-black tracking-tight text-white">
-                POS Physical Roll Stock OUT
-              </h2>
+              <h2 className="text-lg font-black text-slate-900 tracking-tight">Stock OUT</h2>
+              <p className="text-xs text-slate-500">
+                Dispatch physical rolls from warehouse inventory by roll barcode.
+              </p>
             </div>
           </div>
 
           <div className="flex items-center space-x-2">
             {cartRolls.length > 0 && (
-              <span className="px-3 py-1 rounded-full bg-[#C59B3F] text-zinc-950 font-black text-xs font-mono">
-                {cartRolls.length} {cartRolls.length === 1 ? 'Roll' : 'Rolls'} in Cart
+              <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-900 font-bold text-xs font-mono border border-amber-300">
+                {cartRolls.length} {cartRolls.length === 1 ? 'Roll' : 'Rolls'} in OUT List
               </span>
             )}
             {onClose && (
               <button
                 type="button"
                 onClick={onClose}
-                className="p-2 text-zinc-400 hover:text-white rounded-xl hover:bg-zinc-800 transition-colors"
-                title="Close Scanner"
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                title="Close"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -511,56 +509,53 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         </div>
 
         {/* ========================================================= */}
-        {/* PHASE 10: SUCCESS DISPATCH BANNER / SUMMARY               */}
+        {/* SUCCESS SUMMARY (When dispatch is confirmed)              */}
         {/* ========================================================= */}
         {dispatchedReport ? (
-          <div className="p-6 sm:p-8 space-y-6 bg-gradient-to-b from-emerald-50/50 to-white animate-in fade-in">
-            <div className="p-6 bg-emerald-50 border-2 border-emerald-300 rounded-3xl text-center space-y-3">
-              <div className="w-14 h-14 bg-emerald-600 text-white rounded-2xl flex items-center justify-center mx-auto shadow-md">
-                <Check className="w-8 h-8 stroke-[3]" />
+          <div className="p-6 space-y-6 bg-emerald-50/50 rounded-2xl border border-emerald-200 animate-in fade-in">
+            <div className="text-center space-y-2">
+              <div className="w-12 h-12 bg-emerald-600 text-white rounded-xl flex items-center justify-center mx-auto shadow-sm">
+                <Check className="w-6 h-6 stroke-[3]" />
               </div>
+              <h3 className="text-xl font-black text-slate-900 tracking-tight">
+                STOCK OUT SUCCESSFUL
+              </h3>
+              <p className="text-xs text-emerald-800 font-medium">
+                All physical rolls have been updated to OUT status in warehouse records.
+              </p>
 
-              <div>
-                <span className="text-[11px] font-black uppercase tracking-widest text-emerald-700 block">
-                  Dispatch Complete
-                </span>
-                <h3 className="text-2xl font-black text-slate-900 tracking-tight">
-                  STOCK OUT SUCCESSFUL
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-lg mx-auto pt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 max-w-md mx-auto pt-2">
                 <div className="p-3 bg-white rounded-xl border border-emerald-200">
                   <span className="text-[10px] font-bold text-slate-400 uppercase block">OUT Invoice</span>
                   <span className="font-mono font-black text-sm text-slate-900">{dispatchedReport.outInvoice}</span>
                 </div>
                 <div className="p-3 bg-white rounded-xl border border-emerald-200">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase block">Date</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase block">OUT Date</span>
                   <span className="font-mono font-black text-sm text-slate-900">{dispatchedReport.outDate}</span>
                 </div>
                 <div className="p-3 bg-white rounded-xl border border-emerald-200">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase block">Total Rolls</span>
+                  <span className="text-[10px] font-bold text-slate-400 uppercase block">Total Dispatched</span>
                   <span className="font-mono font-black text-sm text-emerald-700">{dispatchedReport.totalRolls} ROLLS</span>
                 </div>
               </div>
             </div>
 
-            {/* List of dispatched physical rolls */}
-            <div className="space-y-3">
-              <h4 className="text-xs font-black uppercase tracking-wider text-slate-600">
+            {/* Dispatched rolls table */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">
                 Dispatched Physical Rolls ({dispatchedReport.rolls.length})
               </h4>
-              <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs bg-white">
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
                     <tr>
-                      <th className="py-2.5 px-3">#</th>
-                      <th className="py-2.5 px-3">Material</th>
-                      <th className="py-2.5 px-3">Size</th>
-                      <th className="py-2.5 px-3">Length</th>
-                      <th className="py-2.5 px-3">Batch</th>
-                      <th className="py-2.5 px-3">Roll Barcode</th>
-                      <th className="py-2.5 px-3 text-right">Status</th>
+                      <th className="py-2 px-3">#</th>
+                      <th className="py-2 px-3">Material</th>
+                      <th className="py-2 px-3">Size</th>
+                      <th className="py-2 px-3">Length</th>
+                      <th className="py-2 px-3">Batch</th>
+                      <th className="py-2 px-3">Roll Barcode</th>
+                      <th className="py-2 px-3 text-right">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -588,47 +583,40 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               <button
                 type="button"
                 onClick={handleStartNextDispatch}
-                className="px-6 py-3 bg-[#0A0A0C] hover:bg-slate-800 text-white rounded-2xl font-black text-sm flex items-center space-x-2 shadow-lg transition-all cursor-pointer"
+                className="px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-black text-xs flex items-center space-x-2 shadow-md transition-all cursor-pointer"
               >
-                <RotateCcw className="w-4 h-4 text-[#D4A84B]" />
+                <RotateCcw className="w-3.5 h-3.5 text-[#D4A84B]" />
                 <span>Start Next Dispatch</span>
               </button>
             </div>
           </div>
         ) : (
-          <div className="p-5 sm:p-6 space-y-6">
-            {/* Database unavailable banner in production */}
+          <>
+            {/* ========================================================= */}
+            {/* COMPACT DATABASE CONNECTION GUARD ALERT                   */}
+            {/* ========================================================= */}
             {isProductionEnvironment() && !isSupabaseConfigured() && (
-              <div className="p-4 bg-rose-50 border-2 border-rose-300 rounded-2xl flex items-center space-x-3 text-rose-900 text-xs font-bold">
-                <ShieldAlert className="w-6 h-6 text-rose-600 shrink-0" />
-                <div>
-                  <span className="font-black uppercase tracking-wider block text-rose-800">
-                    Database Connection Required (Production Mode)
-                  </span>
-                  <span>
-                    Remote Supabase database is not connected. In production, Stock OUT mutations are locked to prevent warehouse inventory divergence between devices.
-                  </span>
-                </div>
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center space-x-2.5 text-xs text-rose-800 font-medium">
+                <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>
+                  Database unavailable. Remote Supabase connection is required in production to prevent inventory divergence.
+                </span>
               </div>
             )}
 
             {/* ========================================================= */}
-            {/* STEP 1: TOP DISPATCH HEADER INPUTS                        */}
-            {/* Entered ONCE for the whole dispatch                       */}
+            {/* DISPATCH INFORMATION (OUT Invoice Number, OUT Date)       */}
             {/* ========================================================= */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-[#C59B3F]" />
-                  <span>Dispatch Information (Entered Once)</span>
-                </span>
-                <span className="text-[11px] text-slate-400 font-medium">Applies to all scanned rolls below</span>
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+              <div className="text-xs font-black uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-[#C59B3F]" />
+                <span>Dispatch Information</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {/* OUT Invoice Number * */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                {/* OUT Invoice Number */}
                 <div>
-                  <label className="block text-[11px] font-black uppercase tracking-wider text-slate-600 mb-1">
+                  <label className="block text-slate-700 font-bold mb-1">
                     OUT Invoice Number <span className="text-red-500">*</span>
                   </label>
                   <input
@@ -640,192 +628,90 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                       setDispatchError('');
                     }}
                     placeholder="e.g. DS/26-27/1230"
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-sm text-slate-900 focus:ring-2 focus:ring-[#C59B3F] focus:border-[#C59B3F] outline-none"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold uppercase placeholder:normal-case focus:ring-2 focus:ring-[#C59B3F] focus:outline-hidden"
                   />
                 </div>
 
-                {/* OUT Date * */}
+                {/* OUT Date */}
                 <div>
-                  <label className="block text-[11px] font-black uppercase tracking-wider text-slate-600 mb-1">
+                  <label className="block text-slate-700 font-bold mb-1">
                     OUT Date <span className="text-red-500">*</span>
                   </label>
-                  <div className="relative">
-                    <input
-                      type="date"
-                      required
-                      value={stockOutDate}
-                      onChange={(e) => {
-                        setStockOutDate(e.target.value);
-                        setDispatchError('');
-                      }}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-sm text-slate-900 focus:ring-2 focus:ring-[#C59B3F] focus:border-[#C59B3F] outline-none"
-                    />
-                  </div>
+                  <input
+                    type="date"
+                    required
+                    value={stockOutDate}
+                    onChange={(e) => {
+                      setStockOutDate(e.target.value);
+                      setDispatchError('');
+                    }}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 text-sm focus:ring-2 focus:ring-[#C59B3F] focus:outline-hidden"
+                  />
                 </div>
               </div>
             </div>
 
             {/* ========================================================= */}
-            {/* STEP 2: SCANNER & BARCODE INPUT                           */}
+            {/* SCAN ROLL BARCODE SECTION                                 */}
             {/* ========================================================= */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Camera Scanner Viewport */}
-              <div className="space-y-2">
-                <div className="relative w-full aspect-4/3 sm:aspect-16/10 bg-[#0A0A0C] rounded-2xl overflow-hidden border border-[#27272A] shadow-inner flex items-center justify-center">
-                  <video
-                    ref={videoRef}
-                    playsInline
-                    muted
-                    className="w-full h-full object-cover"
-                  />
-
-                  {/* CODE128 Scanning Crosshairs & Laser Overlay */}
-                  <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
-                    <div className="relative w-4/5 h-28 border-2 border-[#D4A84B]/60 rounded-xl flex items-center justify-center">
-                      <div className="absolute top-0 left-0 w-4 h-4 border-t-3 border-l-3 border-[#D4A84B]" />
-                      <div className="absolute top-0 right-0 w-4 h-4 border-t-3 border-r-3 border-[#D4A84B]" />
-                      <div className="absolute bottom-0 left-0 w-4 h-4 border-b-3 border-l-3 border-[#D4A84B]" />
-                      <div className="absolute bottom-0 right-0 w-4 h-4 border-b-3 border-r-3 border-[#D4A84B]" />
-
-                      {/* Continuous animated laser line */}
-                      <div className="w-full h-0.5 bg-red-500 shadow-[0_0_12px_#ef4444] animate-pulse" />
-
-                      <span className="absolute bottom-2 text-[9px] font-mono text-[#D4A84B] font-bold tracking-widest uppercase bg-[#0A0A0C]/80 px-2 py-0.5 rounded-full">
-                        SCAN PHYSICAL ROLL BARCODE
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Camera Controls Overlay */}
-                  <div className="absolute top-3 right-3 flex items-center space-x-2">
-                    {hasTorchSupport && (
-                      <button
-                        type="button"
-                        onClick={toggleTorch}
-                        className={`p-2 rounded-xl backdrop-blur-md border transition-colors cursor-pointer ${
-                          isTorchOn
-                            ? 'bg-amber-400 text-slate-950 border-amber-300'
-                            : 'bg-black/60 text-white border-white/20 hover:bg-black/80'
-                        }`}
-                        title={isTorchOn ? 'Turn Off Flashlight' : 'Turn On Flashlight'}
-                      >
-                        {isTorchOn ? <Flashlight className="w-4 h-4" /> : <FlashlightOff className="w-4 h-4" />}
-                      </button>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={switchCameraFacing}
-                      className="p-2 rounded-xl bg-black/60 text-white border border-white/20 hover:bg-black/80 backdrop-blur-md transition-colors cursor-pointer"
-                      title="Switch Camera (Front/Back)"
-                    >
-                      <RefreshCw className="w-4 h-4" />
-                    </button>
-                  </div>
-
-                  {/* Camera Error Message */}
-                  {cameraError && (
-                    <div className="absolute inset-0 bg-slate-950/90 text-white p-4 flex flex-col items-center justify-center text-center space-y-2">
-                      <AlertCircle className="w-8 h-8 text-amber-400" />
-                      <p className="text-xs text-slate-300 max-w-xs">{cameraError}</p>
-                    </div>
-                  )}
+            <div className="p-4 bg-gradient-to-r from-amber-50/70 to-orange-50/40 rounded-2xl border border-amber-200/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <BarcodeIcon className="w-4 h-4 text-amber-700" />
+                  <span className="font-black text-slate-900 text-xs uppercase tracking-wide">
+                    Scan Roll Barcode
+                  </span>
                 </div>
+                <span className="text-[11px] text-slate-500 font-medium hidden sm:inline">
+                  USB Gun or Camera Scanner
+                </span>
               </div>
 
-              {/* USB Gun / Manual Roll Barcode Input */}
-              <div className="flex flex-col justify-between space-y-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-black uppercase tracking-wider text-slate-700">
-                      SCAN ROLL BARCODE
-                    </span>
-                    <span className="text-[10px] font-medium text-slate-500">USB Gun / Manual Input</span>
-                  </div>
-
-                  <form onSubmit={handleManualSubmit} className="flex gap-2">
-                    <div className="relative flex-1">
-                      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                      <input
-                        ref={manualInputRef}
-                        type="text"
-                        value={manualInput}
-                        onChange={(e) => setManualInput(e.target.value)}
-                        placeholder="Scan or enter unique roll barcode..."
-                        className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono font-bold uppercase focus:ring-2 focus:ring-[#C59B3F] focus:border-[#C59B3F] outline-none"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={!manualInput.trim()}
-                      className="px-4 py-2.5 bg-[#0A0A0C] hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer shrink-0"
-                    >
-                      Add Roll
-                    </button>
-                  </form>
-
-                  {/* Quick test barcodes */}
-                  <div className="pt-1 space-y-1">
-                    <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider">
-                      Click to Test Barcodes:
-                    </span>
-                    <div className="flex flex-wrap gap-1">
-                      <button
-                        type="button"
-                        onClick={() => handleBarcodeDecoded('121026AB12345-R01')}
-                        className="px-2 py-1 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-mono font-bold text-[10px] border border-emerald-300 transition-colors"
-                        title="Bright FL 26 Roll 1"
-                      >
-                        121026AB12345-R01 (Roll 1)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleBarcodeDecoded('121026AB12345-R02')}
-                        className="px-2 py-1 rounded-md bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-mono font-bold text-[10px] border border-emerald-300 transition-colors"
-                        title="Bright FL 26 Roll 2"
-                      >
-                        121026AB12345-R02 (Roll 2)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleBarcodeDecoded('101026GE23542-R01')}
-                        className="px-2 py-1 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-900 font-mono font-bold text-[10px] border border-amber-300 transition-colors"
-                        title="Hetax Roll 1"
-                      >
-                        101026GE23542-R01
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleBarcodeDecoded('OP-BS-163-R01')}
-                        className="px-2 py-1 rounded-md bg-indigo-100 hover:bg-indigo-200 text-indigo-900 font-mono font-bold text-[10px] border border-indigo-300 transition-colors"
-                        title="Opening Sunlex Roll 1"
-                      >
-                        OP-BS-163-R01
-                      </button>
-                    </div>
-                  </div>
+              {/* [ barcode input ] [ Add Roll ] [ Open Scanner ] */}
+              <form onSubmit={handleManualSubmit} className="flex flex-col sm:flex-row gap-2">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    ref={manualInputRef}
+                    type="text"
+                    value={manualInput}
+                    onChange={(e) => setManualInput(e.target.value)}
+                    placeholder="Enter or scan Roll Barcode with USB gun (e.g. 121026AB12345-R01)..."
+                    className="w-full pl-9 pr-3 py-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold uppercase placeholder:normal-case focus:ring-2 focus:ring-[#C59B3F] focus:outline-hidden"
+                  />
                 </div>
 
-                {/* Upload Image alternative */}
-                <div className="pt-2 border-t border-slate-200 flex items-center justify-between text-[11px]">
-                  <span className="text-slate-500">Scan label photo from gallery:</span>
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    accept="image/*"
-                    onChange={handlePhotoUpload}
-                    className="hidden"
-                  />
+                <div className="flex gap-2 shrink-0">
+                  <button
+                    type="submit"
+                    disabled={!manualInput.trim()}
+                    className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer"
+                  >
+                    Add Roll
+                  </button>
+
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-white border border-slate-300 rounded-lg shadow-2xs hover:bg-slate-100 flex items-center space-x-1 cursor-pointer"
+                    onClick={() => {
+                      setCameraError('');
+                      setModalFeedback('');
+                      setIsCameraModalOpen(true);
+                    }}
+                    className="px-3.5 py-2.5 bg-white hover:bg-amber-50 border border-amber-300 text-amber-900 font-bold text-xs rounded-xl shadow-2xs flex items-center space-x-1.5 transition-colors cursor-pointer"
                   >
-                    <Upload className="w-3 h-3" />
-                    <span>Upload Image</span>
+                    <Camera className="w-4 h-4 text-amber-600" />
+                    <span>Open Scanner</span>
                   </button>
                 </div>
-              </div>
+              </form>
+
+              {/* CAMERA ERROR NOTIFICATION (compact) */}
+              {cameraError && (
+                <div className="p-2.5 bg-amber-100/70 border border-amber-300 rounded-xl text-xs text-amber-900 flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>{cameraError}</span>
+                </div>
+              )}
             </div>
 
             {/* ========================================================= */}
@@ -833,7 +719,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
             {/* ========================================================= */}
             {scanAlert && (
               <div
-                className={`p-3.5 rounded-2xl border text-xs flex items-start space-x-3 transition-all ${
+                className={`p-3.5 rounded-xl border text-xs flex items-start space-x-3 transition-all ${
                   scanAlert.type === 'success'
                     ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
                     : scanAlert.type === 'warning'
@@ -850,7 +736,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   <div className="font-bold flex items-center gap-2">
                     <span>{scanAlert.title}</span>
                     {scanAlert.barcode && (
-                      <span className="font-mono text-[10px] px-1.5 py-0.2 bg-white/80 rounded border">
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 bg-white/80 rounded border">
                         {scanAlert.barcode}
                       </span>
                     )}
@@ -872,7 +758,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                 <button
                   type="button"
                   onClick={() => setScanAlert(null)}
-                  className="text-slate-400 hover:text-slate-700"
+                  className="text-slate-400 hover:text-slate-700 cursor-pointer"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -880,13 +766,13 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
             )}
 
             {/* ========================================================= */}
-            {/* STEP 3: OUT STOCK LIST (TEMPORARY CART)                   */}
+            {/* OUT STOCK LIST                                            */}
             {/* ========================================================= */}
             <div className="space-y-3">
               <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                 <div className="flex items-center space-x-2">
                   <ShoppingCart className="w-4 h-4 text-slate-700" />
-                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-900">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-900">
                     OUT STOCK LIST
                   </h3>
                   <span className="px-2 py-0.5 rounded-full bg-slate-900 text-white font-mono font-bold text-xs">
@@ -914,66 +800,69 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                     No physical rolls scanned into OUT list yet.
                   </p>
                   <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
-                    Point camera at roll barcode stickers or scan with USB gun. Rolls will appear in this list.
+                    Enter or scan Roll Barcode with USB scanner, or click "Open Scanner" to scan roll labels with camera.
                   </p>
                 </div>
               ) : (
-                <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-xs bg-white">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
-                      <tr>
-                        <th className="py-2.5 px-3">#</th>
-                        <th className="py-2.5 px-3">Material</th>
-                        <th className="py-2.5 px-3">Size</th>
-                        <th className="py-2.5 px-3">Length</th>
-                        <th className="py-2.5 px-3">Batch</th>
-                        <th className="py-2.5 px-3">Roll Barcode</th>
-                        <th className="py-2.5 px-3 text-right">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {cartRolls.map((roll, index) => (
-                        <tr key={roll.rollBarcode} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="py-2.5 px-3 font-bold text-slate-400">{index + 1}</td>
-                          <td className="py-2.5 px-3 font-bold text-slate-900">{roll.materialName}</td>
-                          <td className="py-2.5 px-3 font-mono font-bold text-slate-700">{roll.size}M</td>
-                          <td className="py-2.5 px-3 font-mono font-bold text-slate-700">{roll.rollLength}M</td>
-                          <td className="py-2.5 px-3 font-mono text-indigo-700">{roll.batchNumber}</td>
-                          <td className="py-2.5 px-3 font-mono font-black text-slate-900">
-                            <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200">
-                              {roll.rollBarcode}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveRoll(roll.rollBarcode)}
-                              className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                              title="Remove from temporary OUT list"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
+                <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs bg-white">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
+                        <tr>
+                          <th className="py-2.5 px-3">#</th>
+                          <th className="py-2.5 px-3">Material</th>
+                          <th className="py-2.5 px-3">Size</th>
+                          <th className="py-2.5 px-3">Length</th>
+                          <th className="py-2.5 px-3">Batch</th>
+                          <th className="py-2.5 px-3">Roll Barcode</th>
+                          <th className="py-2.5 px-3 text-right">Remove</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {cartRolls.map((roll, index) => (
+                          <tr key={roll.rollBarcode} className="hover:bg-slate-50 font-medium">
+                            <td className="py-2.5 px-3 font-bold text-slate-400">{index + 1}</td>
+                            <td className="py-2.5 px-3 font-bold text-slate-900">{roll.materialName}</td>
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-700">{roll.size}M</td>
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-700">{roll.rollLength}M</td>
+                            <td className="py-2.5 px-3 font-mono text-indigo-700">{roll.batchNumber}</td>
+                            <td className="py-2.5 px-3 font-mono font-bold text-slate-900">
+                              <span className="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200">
+                                {roll.rollBarcode}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveRoll(roll.rollBarcode)}
+                                className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                title="Remove roll from OUT list"
+                                aria-label="Remove"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
 
-            {/* Error banner during dispatch */}
+            {/* Dispatch Error Notification */}
             {dispatchError && (
-              <div className="p-3.5 bg-red-50 border border-red-300 rounded-xl text-xs text-red-900 flex items-center space-x-2 font-medium">
-                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center space-x-2 font-medium">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
                 <span>{dispatchError}</span>
               </div>
             )}
 
             {/* ========================================================= */}
-            {/* STEP 4: BOTTOM TOTALS & CONFIRM STOCK OUT                 */}
+            {/* BOTTOM TOTALS & CONFIRM STOCK OUT                         */}
             {/* ========================================================= */}
-            <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="pt-3 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
               <div className="text-xs text-slate-600">
                 <span>Total Rolls OUT: </span>
                 <strong className="text-slate-900 font-mono font-black text-sm">
@@ -981,35 +870,178 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                 </strong>
                 {cartRolls.length > 0 && (
                   <span className="text-slate-400 ml-2">
-                    (Stock OUT will commit {cartRolls.length} rolls atomically)
+                    (Ready for atomic dispatch)
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center gap-2 w-full sm:w-auto">
-                <button
-                  type="button"
-                  disabled={cartRolls.length === 0 || isSubmitting || (isProductionEnvironment() && !isSupabaseConfigured())}
-                  onClick={handleConfirmStockOut}
-                  className="w-full sm:w-auto px-6 py-3 bg-[#C59B3F] hover:bg-[#b58b33] disabled:opacity-40 disabled:pointer-events-none text-zinc-950 font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
-                      <span>Processing Dispatch...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
-                      <span>CONFIRM STOCK OUT ({cartRolls.length})</span>
-                    </>
-                  )}
-                </button>
-              </div>
+              <button
+                type="button"
+                disabled={
+                  cartRolls.length === 0 ||
+                  isSubmitting ||
+                  (isProductionEnvironment() && !isSupabaseConfigured())
+                }
+                onClick={handleConfirmStockOut}
+                className="w-full sm:w-auto px-6 py-3 bg-[#C59B3F] hover:bg-[#b58b33] disabled:opacity-40 disabled:pointer-events-none text-zinc-950 font-black text-sm rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 cursor-pointer"
+              >
+                {isSubmitting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-zinc-950 border-t-transparent rounded-full animate-spin" />
+                    <span>Processing Stock OUT...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 stroke-[2.5]" />
+                    <span>CONFIRM STOCK OUT ({cartRolls.length})</span>
+                  </>
+                )}
+              </button>
             </div>
-          </div>
+          </>
         )}
       </div>
+
+      {/* ========================================================= */}
+      {/* CAMERA SCANNER MODAL (Opens only on [Open Scanner])        */}
+      {/* ========================================================= */}
+      {isCameraModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center space-x-2">
+                <Camera className="w-5 h-5 text-amber-600" />
+                <span className="font-bold text-sm text-slate-900">Scan Roll Barcode</span>
+                <span className="text-[11px] font-mono font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full border border-amber-300">
+                  {cartRolls.length} in OUT list
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setIsCameraModalOpen(false);
+                }}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200/60 transition-colors cursor-pointer"
+                title="Close Scanner"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Video Viewport */}
+            <div className="p-4 space-y-3">
+              <div className="relative bg-slate-950 rounded-xl overflow-hidden min-h-[280px] max-h-[340px] flex items-center justify-center border border-slate-800">
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                />
+
+                {/* CODE128 Linear Reticle */}
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
+                  <div className="relative w-64 h-32 border-2 border-[#D4A84B]/70 rounded-xl flex items-center justify-center shadow-lg">
+                    <div className="absolute top-0 left-0 w-4 h-4 border-t-3 border-l-3 border-[#D4A84B]" />
+                    <div className="absolute top-0 right-0 w-4 h-4 border-t-3 border-r-3 border-[#D4A84B]" />
+                    <div className="absolute bottom-0 left-0 w-4 h-4 border-b-3 border-l-3 border-[#D4A84B]" />
+                    <div className="absolute bottom-0 right-0 w-4 h-4 border-b-3 border-r-3 border-[#D4A84B]" />
+                    {/* Animated laser guide */}
+                    <div className="w-full h-0.5 bg-red-500 shadow-[0_0_8px_#ef4444] animate-pulse" />
+                  </div>
+                </div>
+
+                {/* Camera stream controls overlay */}
+                <div className="absolute top-3 right-3 flex items-center space-x-2">
+                  {hasTorchSupport && (
+                    <button
+                      type="button"
+                      onClick={toggleTorch}
+                      className={`p-2 rounded-xl backdrop-blur-md border transition-colors cursor-pointer ${
+                        isTorchOn
+                          ? 'bg-amber-400 text-slate-950 border-amber-300'
+                          : 'bg-black/60 text-white border-white/20 hover:bg-black/80'
+                      }`}
+                      title={isTorchOn ? 'Turn Off Flashlight' : 'Turn On Flashlight'}
+                    >
+                      {isTorchOn ? <Flashlight className="w-4 h-4" /> : <FlashlightOff className="w-4 h-4" />}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={switchCameraFacing}
+                    className="p-2 rounded-xl bg-black/60 text-white border border-white/20 hover:bg-black/80 backdrop-blur-md transition-colors cursor-pointer"
+                    title="Switch Camera (Front/Back)"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Instant Scan Feedback Banner inside Modal */}
+                {modalFeedback && (
+                  <div className="absolute bottom-3 left-3 right-3 py-1.5 px-3 rounded-lg bg-black/80 backdrop-blur-md text-white font-mono font-bold text-xs text-center border border-white/20 animate-in fade-in">
+                    {modalFeedback}
+                  </div>
+                )}
+
+                {/* Camera Permission Error Overlay */}
+                {cameraError && (
+                  <div className="absolute inset-0 bg-slate-950/95 text-white p-5 flex flex-col items-center justify-center text-center space-y-3">
+                    <AlertCircle className="w-8 h-8 text-amber-400" />
+                    <p className="text-xs text-slate-200 max-w-xs">{cameraError}</p>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="py-2 px-3 bg-white text-slate-900 rounded-lg text-xs font-bold hover:bg-slate-100 flex items-center space-x-1.5 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload Photo Instead</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <p className="text-center text-xs text-slate-500">
+                Point camera at the physical roll's unique barcode sticker.
+              </p>
+
+              {/* Upload image alternative fallback */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="hidden"
+                onChange={handlePhotoUpload}
+              />
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 border-t border-slate-100 bg-slate-50 flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="text-slate-600 hover:text-slate-900 font-medium flex items-center space-x-1 cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Upload Photo</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  stopCamera();
+                  setIsCameraModalOpen(false);
+                }}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                Done Scanning ({cartRolls.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

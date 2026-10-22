@@ -436,6 +436,82 @@ export async function fetchRollsFromSupabase(): Promise<InventoryRoll[] | null> 
 }
 
 /**
+ * Fetch remote stock transactions directly from Supabase
+ */
+export async function fetchTransactionsFromSupabase(): Promise<MatrixStockTransaction[] | null> {
+  const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+  const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
+  if (!supabaseUrl || !supabaseKey) return null;
+
+  try {
+    const authHeaders = await getAuthHeaders();
+    const [txnsRes, rollsRes] = await Promise.all([
+      fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/stock_transactions?select=*&order=created_at.desc`, {
+        headers: authHeaders
+      }),
+      fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls?select=id,roll_barcode,batch_number,invoice_number,original_stock_in_invoice_number,material_name,category_snapshot,size,roll_length`, {
+        headers: authHeaders
+      })
+    ]);
+
+    if (!txnsRes.ok) {
+      console.warn('fetchTransactionsFromSupabase failed:', txnsRes.status, txnsRes.statusText);
+      return null;
+    }
+
+    const txns = await txnsRes.json();
+    if (!Array.isArray(txns)) return null;
+
+    const rolls = rollsRes.ok ? await rollsRes.json() : [];
+    const rollMap = new Map<string, any>();
+    if (Array.isArray(rolls)) {
+      rolls.forEach((r: any) => {
+        if (r.roll_barcode) {
+          rollMap.set(r.roll_barcode.toUpperCase(), r);
+        }
+      });
+    }
+
+    return txns.map((t: any) => {
+      const roll = t.roll_barcode ? rollMap.get(t.roll_barcode.toUpperCase()) : null;
+      const width = parseFloat(roll?.size || '1') || 1;
+      const length = Number(roll?.roll_length || t.quantity) || 50;
+      const isStockIn = t.transaction_type === 'STOCK_IN';
+      const cleanInv = isStockIn
+        ? (t.reference_number || t.original_stock_in_invoice_number || roll?.invoice_number || '')
+        : (t.stock_out_invoice_number || t.reference_number || '');
+
+      return {
+        id: t.id,
+        itemId: roll?.id || t.id,
+        materialName: roll?.material_name || 'Material',
+        category: roll?.category_snapshot || 'Flex PVC',
+        variantSize: String(roll?.size || '1.02'),
+        rollLengthMtr: length,
+        barcode: t.roll_barcode || roll?.batch_number || '',
+        type: (isStockIn ? 'IN' : 'OUT') as 'IN' | 'OUT',
+        quantity: 1,
+        areaMtr2: Number((width * length).toFixed(2)),
+        stockBefore: 0,
+        stockAfter: 0,
+        unit: 'Rolls',
+        date: t.stock_out_date || (t.created_at ? t.created_at.split('T')[0] : ''),
+        invoiceNumber: cleanInv,
+        batchNumber: roll?.batch_number || '',
+        rollBarcode: t.roll_barcode,
+        originalStockInInvoiceNumber: t.original_stock_in_invoice_number || roll?.original_stock_in_invoice_number || roll?.invoice_number,
+        stockOutInvoiceNumber: t.stock_out_invoice_number,
+        stockOutDate: t.stock_out_date,
+        createdAt: t.created_at || new Date().toISOString()
+      };
+    });
+  } catch (err) {
+    console.warn('fetchTransactionsFromSupabase network error:', err);
+    return null;
+  }
+}
+
+/**
  * EXACT SCAN QUERY:
  * When a barcode is scanned:
  * Query inventory_rolls by EXACT roll_barcode.
