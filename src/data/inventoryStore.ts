@@ -7,6 +7,7 @@ import {
   MatrixBatch,
   MatrixBatchItem
 } from '../types/inventory';
+import { isSupabaseConfigured } from '../lib/supabase';
 
 const STORAGE_KEY_ITEMS = 'rollprint_client_excel_matrix_v8';
 const STORAGE_KEY_TRANSACTIONS = 'rollprint_client_excel_txns_v8';
@@ -712,20 +713,32 @@ export const INITIAL_MATRIX_TRANSACTIONS: MatrixStockTransaction[] = [];
 
 export function getStoredMatrixItems(): MatrixInventoryItem[] {
   try {
+    const isLiveDb = typeof window !== 'undefined' && isSupabaseConfigured();
     const raw = localStorage.getItem(STORAGE_KEY_ITEMS);
     if (!raw) {
-      localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(INITIAL_MATRIX_ITEMS));
-      return INITIAL_MATRIX_ITEMS;
+      const itemsToSave = INITIAL_MATRIX_ITEMS.map((item) => ({
+        ...item,
+        openingStock: isLiveDb ? 0 : item.openingStock
+      }));
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(itemsToSave));
+      }
+      return itemsToSave;
     }
     const parsed = JSON.parse(raw);
     return parsed.map((item: any) => ({
       ...item,
       summaryGroup: item.summaryGroup || getItemSummaryGroup(item),
       rollLengthMtr: item.rollLengthMtr !== undefined ? item.rollLengthMtr : 70,
-      active: item.active !== undefined ? item.active : true
+      active: item.active !== undefined ? item.active : true,
+      openingStock: isLiveDb ? 0 : (item.openingStock !== undefined ? item.openingStock : 0)
     }));
   } catch {
-    return INITIAL_MATRIX_ITEMS;
+    const isLiveDb = typeof window !== 'undefined' && isSupabaseConfigured();
+    return INITIAL_MATRIX_ITEMS.map((item) => ({
+      ...item,
+      openingStock: isLiveDb ? 0 : item.openingStock
+    }));
   }
 }
 
@@ -806,7 +819,10 @@ export function calculateMatrixWithStock(
   rolls?: any[]
 ): MatrixItemWithStock[] {
   let activeRolls: any[] | undefined = rolls;
-  if (!activeRolls && typeof localStorage !== 'undefined') {
+  const isSupabaseLive = isSupabaseConfigured();
+
+  // ONLY fall back to local storage in local offline dev / test mode when Supabase is NOT configured
+  if (activeRolls === undefined && typeof localStorage !== 'undefined' && !isSupabaseLive) {
     try {
       const raw = localStorage.getItem('rollprint_inventory_rolls_v1');
       if (raw) {
@@ -834,13 +850,23 @@ export function calculateMatrixWithStock(
       : [];
 
     let currentStock: number;
-    if (matchingRolls.length > 0) {
-      // Physical roll state is the primary source of truth:
-      // COUNT(inventory_rolls WHERE status = 'IN_STOCK')
-      currentStock = matchingRolls.filter((r: any) => r.status === 'IN_STOCK').length;
+    // When rolls are explicitly provided (including an empty array []) or in Supabase production mode:
+    // Physical rolls are the SOLE source of truth!
+    if (activeRolls !== undefined || isSupabaseLive) {
+      if (item.unit === 'Sheets' && matchingRolls.length === 0) {
+        // Non-roll sheet material
+        currentStock = Math.max(0, (isSupabaseLive ? 0 : item.openingStock) + totalIn - totalOut);
+      } else {
+        // All roll materials: exactly COUNT(inventory_rolls WHERE status = 'IN_STOCK')
+        currentStock = matchingRolls.filter((r: any) => r.status === 'IN_STOCK').length;
+      }
     } else {
-      // Fallback for sheet items or items without physical rolls
-      currentStock = Math.max(0, item.openingStock + totalIn - totalOut);
+      // Local development / unit test fixture fallback
+      if (matchingRolls.length > 0) {
+        currentStock = matchingRolls.filter((r: any) => r.status === 'IN_STOCK').length;
+      } else {
+        currentStock = Math.max(0, item.openingStock + totalIn - totalOut);
+      }
     }
 
     // Calculate area

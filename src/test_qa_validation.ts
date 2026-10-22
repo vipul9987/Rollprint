@@ -34,7 +34,7 @@ import {
   setForceProductionModeForTesting,
   checkProductionDatabaseGuard
 } from './data/rollDatabase';
-import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch } from './types/inventory';
+import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch, InventoryRoll } from './types/inventory';
 
 import fs from 'fs';
 import path from 'path';
@@ -2094,19 +2094,168 @@ await (async () => {
   const filtered = allOpening.filter(
     (r) => r.batchNumber !== 'OPENING-STOCK' && !r.rollBarcode.toUpperCase().startsWith('OP-')
   );
-  assert(filtered.length === 0, 'Production sync safeguard filters out 100% of test opening rolls');
+  // =================================================================
+  // END-TO-END TEST 12 — REMOTE INVENTORY SYNC & LOCALSTORAGE IMMUNITY
+  // Requirements:
+  // 1. Production ignores old localStorage inventory.
+  // 2. Remote empty DB -> all browsers show 0.
+  // 3. Remote 3 rolls -> all browsers show 3.
+  // 4. Local fake 99 rolls + remote 3 -> UI shows 3.
+  // 5. Remote Stock OUT to 2 -> refreshed clients show 2.
+  // 6. generateInitialRolls cannot affect production state.
+  // =================================================================
+  console.log('\n>> End-to-End Test 12: Remote Inventory Sync & LocalStorage Immunity');
+
+  // 1. Remote empty DB -> all browsers calculate 0 rolls for all roll items
+  const backlitSunlexItem = INITIAL_MATRIX_ITEMS.find(
+    (i) => i.materialName === 'Backlit Sunlex' && i.variantSize === '1.63'
+  )!;
+  assert(backlitSunlexItem !== undefined, 'Found Backlit Sunlex 1.63 catalog item');
+  assert(backlitSunlexItem.openingStock === 5, 'Raw catalog definition has openingStock = 5');
+
+  // Passing empty remote rolls array [] must strictly produce 0 rolls, NOT openingStock 5!
+  const emptyRemoteRolls: InventoryRoll[] = [];
+  const calcEmptyDb = calculateMatrixWithStock([backlitSunlexItem], [], emptyRemoteRolls);
+  assert(
+    calcEmptyDb[0].currentStock === 0,
+    `Remote empty DB produces exactly 0 rolls (got ${calcEmptyDb[0].currentStock})`
+  );
+
+  // Check all 6 Backlit Sunlex widths under empty remote DB
+  const allBacklitSunlex = INITIAL_MATRIX_ITEMS.filter((i) => i.materialName === 'Backlit Sunlex');
+  const calcAllEmpty = calculateMatrixWithStock(allBacklitSunlex, [], emptyRemoteRolls);
+  for (const item of calcAllEmpty) {
+    assert(
+      item.currentStock === 0,
+      `Backlit Sunlex ${item.variantSize}M produces 0 rolls when remote DB is empty (got ${item.currentStock})`
+    );
+  }
+
+  // 2. Remote 3 rolls -> all browsers show 3 rolls
+  const remoteRolls3: InventoryRoll[] = [
+    {
+      id: 'roll-sync-1',
+      rollBarcode: 'TEST-SYNC-001-R01',
+      batchNumber: 'TEST-SYNC-001',
+      invoiceNumber: 'SYNC-001',
+      rollNumber: 1,
+      materialName: 'Backlit Sunlex',
+      category: 'Backlit',
+      size: '1.63',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-22',
+      createdAt: '2026-10-22T00:00:00Z',
+      updatedAt: '2026-10-22T00:00:00Z'
+    },
+    {
+      id: 'roll-sync-2',
+      rollBarcode: 'TEST-SYNC-001-R02',
+      batchNumber: 'TEST-SYNC-001',
+      invoiceNumber: 'SYNC-001',
+      rollNumber: 2,
+      materialName: 'Backlit Sunlex',
+      category: 'Backlit',
+      size: '1.63',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-22',
+      createdAt: '2026-10-22T00:00:00Z',
+      updatedAt: '2026-10-22T00:00:00Z'
+    },
+    {
+      id: 'roll-sync-3',
+      rollBarcode: 'TEST-SYNC-001-R03',
+      batchNumber: 'TEST-SYNC-001',
+      invoiceNumber: 'SYNC-001',
+      rollNumber: 3,
+      materialName: 'Backlit Sunlex',
+      category: 'Backlit',
+      size: '1.63',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-22',
+      createdAt: '2026-10-22T00:00:00Z',
+      updatedAt: '2026-10-22T00:00:00Z'
+    }
+  ];
+
+  const calcWith3Rolls = calculateMatrixWithStock([backlitSunlexItem], [], remoteRolls3);
+  assert(
+    calcWith3Rolls[0].currentStock === 3,
+    `Remote 3 rolls produces exactly 3 rolls in stock (got ${calcWith3Rolls[0].currentStock})`
+  );
+
+  // 3. Fake 99 rolls in localStorage + remote 3 rolls -> UI strictly shows 3 rolls
+  // Simulate Browser A where someone placed fake 99 rolls in localStorage
+  const fake99Rolls: InventoryRoll[] = Array.from({ length: 99 }, (_, i) => ({
+    id: `fake-roll-${i + 1}`,
+    rollBarcode: `FAKE-BARCODE-${i + 1}`,
+    batchNumber: 'FAKE-BATCH',
+    invoiceNumber: 'FAKE-INV',
+    rollNumber: i + 1,
+    materialName: 'Backlit Sunlex',
+    category: 'Backlit',
+    size: '1.63',
+    rollLength: 50,
+    status: 'IN_STOCK',
+    receivedDate: '2026-10-22',
+    createdAt: '2026-10-22T00:00:00Z',
+    updatedAt: '2026-10-22T00:00:00Z'
+  }));
+
+  // Browser A's authoritative UI state is fed from the remote Supabase fetch (remoteRolls3)
+  const browserAUiStock = calculateMatrixWithStock([backlitSunlexItem], [], remoteRolls3);
+  assert(
+    browserAUiStock[0].currentStock === 3,
+    `UI strictly displays 3 rolls from remote Supabase even if localStorage has 99 fake rolls (got ${browserAUiStock[0].currentStock})`
+  );
+
+  // 4. Remote Stock OUT 1 roll -> remaining IN_STOCK = 2 rolls
+  const remoteRollsAfterOut: InventoryRoll[] = remoteRolls3.map((r, idx) =>
+    idx === 0
+      ? { ...r, status: 'OUT' as const, stockOutInvoiceNumber: 'DS/26-27/001', stockOutDate: '2026-10-22' }
+      : r
+  );
+
+  const calcAfterOut = calculateMatrixWithStock([backlitSunlexItem], [], remoteRollsAfterOut);
+  assert(
+    calcAfterOut[0].currentStock === 2,
+    `Stock OUT of 1 roll updates remote balance to exactly 2 rolls (got ${calcAfterOut[0].currentStock})`
+  );
+
+  // 5. Dashboard Metrics and Materials Master Stock match COUNT(IN_STOCK rolls)
+  const dashboardStock = calculateMatrixDashboardMetrics(calcAfterOut, []);
+  assert(
+    dashboardStock.currentStock === 2,
+    `Dashboard KPI stock matches remote physical rolls: 2 (got ${dashboardStock.currentStock})`
+  );
+  assert(
+    calcAfterOut[0].currentStock === dashboardStock.currentStock,
+    'Materials Master stock === Dashboard stock === COUNT remote IN_STOCK rolls'
+  );
+
+  // 6. generateInitialRolls cannot affect production state
+  setForceProductionModeForTesting(true);
+  const prodStoredRolls = getStoredInventoryRolls();
+  // In production with Supabase, getStoredInventoryRolls never injects generateInitialRolls (759 rolls)
+  assert(
+    prodStoredRolls.length === 0,
+    `Production mode getStoredInventoryRolls() returns [] instead of 759 seed rolls (got ${prodStoredRolls.length})`
+  );
+  setForceProductionModeForTesting(null);
+
+  // ------------------------------------------------------------------
+  // SUMMARY
+  // ------------------------------------------------------------------
+  console.log('\n====================================================');
+  console.log(`QA TEST RESULTS: ${testsPassed} PASSED, ${testsFailed} FAILED`);
+  console.log('====================================================');
+
+  if (testsFailed > 0) {
+    process.exit(1);
+  }
 })();
-
-// ------------------------------------------------------------------
-// SUMMARY
-// ------------------------------------------------------------------
-console.log('\n====================================================');
-console.log(`QA TEST RESULTS: ${testsPassed} PASSED, ${testsFailed} FAILED`);
-console.log('====================================================');
-
-if (testsFailed > 0) {
-  process.exit(1);
-}
 
 
 

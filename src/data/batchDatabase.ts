@@ -1,4 +1,4 @@
-import { MatrixBatch, MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock } from '../types/inventory';
+import { MatrixBatch, MatrixBatchItem, MatrixInventoryItem, MatrixStockTransaction, MatrixItemWithStock } from '../types/inventory';
 import {
   getStoredMatrixBatches,
   saveStoredMatrixBatches,
@@ -9,12 +9,83 @@ import {
   calculateMatrixWithStock,
   INITIAL_MATRIX_BATCHES
 } from './inventoryStore';
+import { getAuthHeaders, isSupabaseConfigured } from '../lib/supabase';
 
 export interface BatchQueryResult {
   batch: MatrixBatch;
   item: MatrixItemWithStock | null;
   liveBatchStock: number;
   overallItemStock: number;
+}
+
+/**
+ * Fetch all batches from remote Supabase (stock_batches + stock_batch_items)
+ */
+export async function fetchBatchesFromSupabase(): Promise<MatrixBatch[] | null> {
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || (typeof process !== 'undefined' ? process.env?.VITE_SUPABASE_URL : '');
+  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || (typeof process !== 'undefined' ? process.env?.VITE_SUPABASE_ANON_KEY : '');
+  if (!supabaseUrl || !supabaseKey) return null;
+
+  try {
+    const authHeaders = await getAuthHeaders();
+    const [batchesRes, itemsRes] = await Promise.all([
+      fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/stock_batches?select=*&order=created_at.desc`, { headers: authHeaders }),
+      fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/stock_batch_items?select=*&order=created_at.desc`, { headers: authHeaders })
+    ]);
+
+    if (!batchesRes.ok) return null;
+
+    const batchesData = await batchesRes.json();
+    const itemsData = itemsRes.ok ? await itemsRes.json() : [];
+
+    if (!Array.isArray(batchesData)) return null;
+
+    const itemsByBatchId = new Map<string, MatrixBatchItem[]>();
+    if (Array.isArray(itemsData)) {
+      itemsData.forEach((it: any) => {
+        const bId = it.batch_id;
+        if (!itemsByBatchId.has(bId)) {
+          itemsByBatchId.set(bId, []);
+        }
+        itemsByBatchId.get(bId)!.push({
+          id: it.id,
+          batchId: it.batch_id,
+          materialNameSnapshot: it.material_name_snapshot || '',
+          categorySnapshot: it.category_snapshot || 'Flex PVC',
+          width: it.width || '',
+          rollLength: Number(it.roll_length) || 0,
+          initialRollQuantity: Number(it.initial_roll_quantity) || 1,
+          remainingRollQuantity: Number(it.remaining_roll_quantity) || 0,
+          areaM2: Number(it.area_m2) || 0,
+          createdAt: it.created_at || new Date().toISOString()
+        });
+      });
+    }
+
+    return batchesData.map((row: any) => {
+      const bItems = itemsByBatchId.get(row.id) || [];
+      const totalInitial = bItems.reduce((acc, it) => acc + it.initialRollQuantity, 0) || Number(row.initial_roll_quantity) || 1;
+      const totalRemaining = bItems.reduce((acc, it) => acc + it.remainingRollQuantity, 0) || Number(row.current_remaining_roll_quantity) || 0;
+      return {
+        id: row.id,
+        batchNumber: row.batch_number,
+        invoiceNumber: row.invoice_number,
+        stockInDate: row.stock_in_date || '',
+        barcodeValue: row.barcode_value || row.batch_number,
+        items: bItems,
+        initialRollQuantity: totalInitial,
+        currentRemainingRollQuantity: totalRemaining,
+        materialName: bItems[0]?.materialNameSnapshot || row.material_name || '',
+        category: bItems[0]?.categorySnapshot || row.category || 'Roll Material',
+        variantSize: bItems[0]?.width || String(row.variant_size || ''),
+        rollLengthMtr: bItems[0]?.rollLength || Number(row.roll_length_mtr) || 0,
+        createdAt: row.created_at || new Date().toISOString()
+      };
+    });
+  } catch (err) {
+    console.warn('fetchBatchesFromSupabase network error:', err);
+    return null;
+  }
 }
 
 /**
@@ -45,17 +116,15 @@ export async function queryBatchFromDatabase(rawBatchCode: string): Promise<Batc
   if (!targetBatch) return null;
 
   // 1. Try Supabase REST API if credentials are provided in environment
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || (typeof process !== 'undefined' ? process.env?.VITE_SUPABASE_URL : '');
+  const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || (typeof process !== 'undefined' ? process.env?.VITE_SUPABASE_ANON_KEY : '');
 
-  if (supabaseUrl && supabaseKey) {
+  if (isSupabaseConfigured() && supabaseUrl && supabaseKey) {
     try {
+      const authHeaders = await getAuthHeaders();
       const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/stock_batches?batch_number=eq.${encodeURIComponent(targetBatch)}&select=*`;
       const res = await fetch(endpoint, {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`
-        }
+        headers: authHeaders
       });
       if (res.ok) {
         const rows = await res.json();
@@ -64,9 +133,9 @@ export async function queryBatchFromDatabase(rawBatchCode: string): Promise<Batc
           const batch: MatrixBatch = {
             id: row.id,
             batchNumber: row.batch_number,
-            materialName: row.material_name,
+            materialName: row.material_name || '',
             category: row.category || 'Roll Material',
-            variantSize: String(row.variant_size),
+            variantSize: String(row.variant_size || ''),
             rollLengthMtr: Number(row.roll_length_mtr) || 0,
             initialRollQuantity: Number(row.initial_roll_quantity) || 1,
             currentRemainingRollQuantity: Number(row.current_remaining_roll_quantity) || 0,
@@ -91,6 +160,8 @@ export async function queryBatchFromDatabase(rawBatchCode: string): Promise<Batc
           };
         }
       }
+      // When Supabase is configured, do not fall back to local seed fixtures!
+      return null;
     } catch (err) {
       console.warn('Supabase query failed, falling back to central batch registry:', err);
     }

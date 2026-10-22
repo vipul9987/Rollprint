@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   LayoutDashboard,
   Layers,
@@ -89,6 +89,7 @@ import { BarcodeDisplay } from './components/BarcodeDisplay';
 import { BarcodeScannerView } from './components/BarcodeScannerView';
 import { BatchDetailPage } from './components/BatchDetailPage';
 import { StockDetailsDialog } from './components/StockDetailsDialog';
+import { fetchBatchesFromSupabase } from './data/batchDatabase';
 import { downloadSummaryCsvFile, copySummaryTsvForGoogleSheets } from './utils/summaryExport';
 
 type TabType = 'dashboard' | 'scan' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
@@ -109,11 +110,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
   const [dashboardViewMode, setDashboardViewMode] = useState<DashboardViewMode>('matrix');
 
-  // Core Data State
+  const isSupabaseLive = isSupabaseConfigured();
+
+  // Core Data State (In production with Supabase, remote DB is the only source of truth!)
   const [items, setItems] = useState<MatrixInventoryItem[]>(() => getStoredMatrixItems());
-  const [transactions, setTransactions] = useState<MatrixStockTransaction[]>(() => getStoredMatrixTransactions());
-  const [batches, setBatches] = useState<MatrixBatch[]>(() => getStoredMatrixBatches());
-  const [inventoryRolls, setInventoryRolls] = useState<InventoryRoll[]>(() => getStoredInventoryRolls());
+  const [transactions, setTransactions] = useState<MatrixStockTransaction[]>(() => isSupabaseLive ? [] : getStoredMatrixTransactions());
+  const [batches, setBatches] = useState<MatrixBatch[]>(() => isSupabaseLive ? [] : getStoredMatrixBatches());
+  const [inventoryRolls, setInventoryRolls] = useState<InventoryRoll[]>(() => isSupabaseLive ? [] : getStoredInventoryRolls());
+
+  // Inventory loading indicator (active until remote inventory is fetched from Supabase)
+  const [isInventoryLoading, setIsInventoryLoading] = useState<boolean>(isSupabaseLive);
 
   // Active batch for barcode label printing modal
   const [activeBatchForPrint, setActiveBatchForPrint] = useState<{ batch: MatrixBatch; copies: number } | null>(null);
@@ -149,6 +155,35 @@ export default function App() {
   const [staffSession, setStaffSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured());
 
+  // Revalidate all operational inventory data from remote Supabase (Rolls, Batches, Transactions)
+  const revalidateRemoteInventory = useCallback(async () => {
+    if (!isSupabaseConfigured()) {
+      setIsInventoryLoading(false);
+      return;
+    }
+    try {
+      const [remoteRolls, remoteTxns, remoteBatches] = await Promise.all([
+        fetchRollsFromSupabase(),
+        fetchTransactionsFromSupabase(),
+        fetchBatchesFromSupabase()
+      ]);
+      if (remoteRolls !== null) {
+        setInventoryRolls(remoteRolls);
+        saveStoredInventoryRolls(remoteRolls);
+      }
+      if (remoteTxns !== null) {
+        setTransactions(remoteTxns);
+        saveStoredMatrixTransactions(remoteTxns);
+      }
+      if (remoteBatches !== null) {
+        setBatches(remoteBatches);
+        saveStoredMatrixBatches(remoteBatches);
+      }
+    } finally {
+      setIsInventoryLoading(false);
+    }
+  }, []);
+
   // Listen for Staff Auth changes
   useEffect(() => {
     if (isSupabaseConfigured()) {
@@ -163,38 +198,23 @@ export default function App() {
       return () => unsub();
     } else {
       setAuthLoading(false);
+      setIsInventoryLoading(false);
     }
   }, []);
 
-  // Synchronize inventory rolls and stock transactions from remote Supabase on initial load and when staff logs in
+  // Synchronize inventory rolls, batches, and transactions from remote Supabase on initial load and when staff logs in
   useEffect(() => {
-    if (!isSupabaseConfigured() || staffSession) {
-      fetchRollsFromSupabase().then((remoteRolls) => {
-        if (remoteRolls !== null) {
-          setInventoryRolls(remoteRolls);
-          saveStoredInventoryRolls(remoteRolls);
-        }
-      });
-      fetchTransactionsFromSupabase().then((remoteTxns) => {
-        if (remoteTxns !== null) {
-          setTransactions(remoteTxns);
-          saveStoredMatrixTransactions(remoteTxns);
-        }
-      });
+    if (staffSession || !isSupabaseConfigured()) {
+      revalidateRemoteInventory();
     }
-  }, [staffSession]);
+  }, [staffSession, revalidateRemoteInventory]);
 
-  // Re-sync transactions when user opens the Transactions tab
+  // Re-sync inventory when user opens the Transactions tab
   useEffect(() => {
     if (activeTab === 'transactions' && isSupabaseConfigured() && staffSession) {
-      fetchTransactionsFromSupabase().then((remoteTxns) => {
-        if (remoteTxns !== null) {
-          setTransactions(remoteTxns);
-          saveStoredMatrixTransactions(remoteTxns);
-        }
-      });
+      revalidateRemoteInventory();
     }
-  }, [activeTab, staffSession]);
+  }, [activeTab, staffSession, revalidateRemoteInventory]);
 
   // Distinct Material Names (displays ONLY material names in dropdowns)
   const uniqueMaterialNames = useMemo(() => {
@@ -1175,11 +1195,8 @@ export default function App() {
   };
 
   // Handler for individual physical roll Stock OUT
-  const handleRollStockOut = (roll: InventoryRoll) => {
-    setItems(getStoredMatrixItems());
-    setBatches(getStoredMatrixBatches());
-    setTransactions(getStoredMatrixTransactions());
-    setInventoryRolls(getStoredInventoryRolls());
+  const handleRollStockOut = async (roll: InventoryRoll) => {
+    await revalidateRemoteInventory();
     showNotification(
       `Dispatched 1 Roll of ${roll.materialName} (${roll.size}M × ${roll.rollLength}M) • Barcode: ${roll.rollBarcode}`,
       'success'
@@ -1187,22 +1204,8 @@ export default function App() {
   };
 
   // Handler for atomic multi-roll POS dispatch
-  const handleDispatchComplete = (result: any) => {
-    setItems(getStoredMatrixItems());
-    setBatches(getStoredMatrixBatches());
-    setInventoryRolls(getStoredInventoryRolls());
-    if (isSupabaseConfigured() && staffSession) {
-      fetchTransactionsFromSupabase().then((remoteTxns) => {
-        if (remoteTxns !== null) {
-          setTransactions(remoteTxns);
-          saveStoredMatrixTransactions(remoteTxns);
-        } else {
-          setTransactions(getStoredMatrixTransactions());
-        }
-      });
-    } else {
-      setTransactions(getStoredMatrixTransactions());
-    }
+  const handleDispatchComplete = async (result: any) => {
+    await revalidateRemoteInventory();
     showNotification(
       `Stock OUT Complete: ${result.totalRolls || 0} rolls dispatched under Invoice ${result.dispatchInvoiceNumber || ''}`,
       'success'
@@ -1465,39 +1468,25 @@ export default function App() {
     saveStoredMatrixTransactions(updatedTxns);
 
     if (isSupabaseConfigured() && staffSession) {
-      fetchTransactionsFromSupabase().then((remoteTxns) => {
-        if (remoteTxns !== null) {
-          setTransactions(remoteTxns);
-          saveStoredMatrixTransactions(remoteTxns);
-        }
+      await revalidateRemoteInventory();
+    } else {
+      // Offline / Local dev / test mode: create physical roll records locally
+      linesToSave.forEach((line, idx) => {
+        const normSize = normalizeNumericSize(line.width);
+        createPhysicalRollRecords(
+          stockInGeneratedBatchNumber,
+          rawInvoice.toUpperCase(),
+          line.materialName,
+          line.category,
+          normSize,
+          line.rollLength,
+          line.rollQuantity,
+          stockInDate,
+          linesToSave.length > 1 ? idx + 1 : undefined
+        );
       });
-      fetchRollsFromSupabase().then((remoteRolls) => {
-        if (remoteRolls !== null) {
-          setInventoryRolls(remoteRolls);
-          saveStoredInventoryRolls(remoteRolls);
-        }
-      });
+      setInventoryRolls(getStoredInventoryRolls());
     }
-
-    // CRITICAL ROLL BARCODE RULE:
-    // Every physical roll must have its OWN unique barcode.
-    // One barcode must NEVER represent multiple physical rolls.
-    // Stock IN receives e.g. 3 Rolls -> Create exactly 3 inventory_roll records (Roll 1, Roll 2, Roll 3)
-    linesToSave.forEach((line, idx) => {
-      const normSize = normalizeNumericSize(line.width);
-      createPhysicalRollRecords(
-        stockInGeneratedBatchNumber,
-        rawInvoice.toUpperCase(),
-        line.materialName,
-        line.category,
-        normSize,
-        line.rollLength,
-        line.rollQuantity,
-        stockInDate,
-        linesToSave.length > 1 ? idx + 1 : undefined
-      );
-    });
-    setInventoryRolls(getStoredInventoryRolls());
 
     // Prompt/Open Batch Barcode Label print modal
     setActiveBatchForPrint({
@@ -2064,6 +2053,20 @@ export default function App() {
     );
   }
 
+  if (isSupabaseConfigured() && isInventoryLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center p-4">
+        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-8 max-w-sm w-full text-center space-y-4 shadow-2xl">
+          <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <div className="space-y-1">
+            <h3 className="text-white font-bold text-base">Loading inventory...</h3>
+            <p className="text-slate-400 text-xs">Fetching live physical rolls from database</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // -------------------------------------------------------------
   // STANDALONE BATCH VIEW (If URL is /b/:batchNumber)
   // Example: https://rollprint.vercel.app/b/101026GE23542
@@ -2300,15 +2303,17 @@ export default function App() {
                 <span className="text-xs text-zinc-400 font-mono hidden xl:inline max-w-[150px] truncate">
                   {staffSession.user?.email}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setIsClearDataModalOpen(true)}
-                  className="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-800/60 hover:border-amber-600/60 cursor-pointer shadow-sm"
-                  title="Clear all test and dummy data"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span className="hidden md:inline">Clear Test Data</span>
-                </button>
+                {import.meta.env.DEV && (
+                  <button
+                    type="button"
+                    onClick={() => setIsClearDataModalOpen(true)}
+                    className="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-800/60 hover:border-amber-600/60 cursor-pointer shadow-sm"
+                    title="Clear all test and dummy data (Dev Only)"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span className="hidden md:inline">Clear Test Data</span>
+                  </button>
+                )}
                 <button
                   id="staff-logout-btn"
                   onClick={async () => {
@@ -3076,7 +3081,7 @@ export default function App() {
                       <th className="py-3 px-4">Width (M)</th>
                       <th className="py-3 px-4">Roll Length (M)</th>
                       <th className="py-3 px-4">Area / Roll</th>
-                      <th className="py-3 px-4">Unique Barcode</th>
+                      <th className="py-3 px-4">Material Code / SKU</th>
                       <th className="py-3 px-4 text-right">Current Stock</th>
                       <th className="py-3 px-4 text-center">Status</th>
                       <th className="py-3 px-4 text-center">Actions</th>
@@ -4305,22 +4310,24 @@ export default function App() {
           <span>
             Decora Sales &copy; 2026 &mdash; Built to Client Handwritten Blueprint
           </span>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsClearDataModalOpen(true)}
-              className="text-[11px] text-red-500 hover:text-red-700 font-bold flex items-center gap-1 cursor-pointer transition-colors"
-            >
-              <Trash2 className="w-3 h-3" />
-              <span>Clear All Dummy / Test Data</span>
-            </button>
-            <span className="text-slate-300">|</span>
-            <button
-              onClick={handleResetSampleData}
-              className="text-[11px] text-slate-400 hover:text-slate-600 font-medium underline cursor-pointer"
-            >
-              Restore Blueprint Sample
-            </button>
-          </div>
+          {import.meta.env.DEV && (
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setIsClearDataModalOpen(true)}
+                className="text-[11px] text-red-500 hover:text-red-700 font-bold flex items-center gap-1 cursor-pointer transition-colors"
+              >
+                <Trash2 className="w-3 h-3" />
+                <span>Clear All Dummy / Test Data</span>
+              </button>
+              <span className="text-slate-300">|</span>
+              <button
+                onClick={handleResetSampleData}
+                className="text-[11px] text-slate-400 hover:text-slate-600 font-medium underline cursor-pointer"
+              >
+                Restore Blueprint Sample
+              </button>
+            </div>
+          )}
         </div>
       </footer>
     </div>

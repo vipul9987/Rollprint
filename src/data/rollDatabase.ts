@@ -145,6 +145,13 @@ let forceProductionModeForTesting: boolean | null = null;
 
 export function setForceProductionModeForTesting(val: boolean | null): void {
   forceProductionModeForTesting = val;
+  if (val === true) {
+    memoryRollStore = null;
+  }
+}
+
+export function resetMemoryRollStoreForTesting(rolls: InventoryRoll[] | null = null): void {
+  memoryRollStore = rolls;
 }
 
 export function getEnvVar(key: string): string | undefined {
@@ -201,27 +208,28 @@ export function checkProductionDatabaseGuard(): { allowed: boolean; error?: stri
  */
 export function getStoredInventoryRolls(): InventoryRoll[] {
   try {
-    const isProdWithDb = isProductionEnvironment() && isSupabaseConfigured();
+    const isProd = isProductionEnvironment() || (typeof window !== 'undefined' && isSupabaseConfigured());
+
+    if (isProd) {
+      // In production / live app with Supabase, Supabase is the sole source of truth.
+      // NEVER read or return localStorage rolls or generateInitialRolls!
+      return memoryRollStore || [];
+    }
 
     if (typeof window === 'undefined' || !window.localStorage) {
       if (!memoryRollStore) {
-        memoryRollStore = isProdWithDb ? [] : generateInitialRolls();
+        memoryRollStore = generateInitialRolls();
       }
       return memoryRollStore;
     }
     const raw = localStorage.getItem(STORAGE_KEY_ROLLS);
     if (!raw) {
-      const initial = isProdWithDb ? [] : generateInitialRolls();
+      const initial = generateInitialRolls();
       saveStoredInventoryRolls(initial);
       return initial;
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      if (isProdWithDb) {
-        // In production with Supabase configured, remote DB is the source of truth.
-        // Never inject development opening stock / seed rolls into production!
-        return parsed;
-      }
       // Ensure seed batches (like AB12345, GT28728, GE23542) rolls are present in dev/test
       const seedRolls = generateInitialRolls();
       const existingBarcodes = new Set(parsed.map((r: InventoryRoll) => r.rollBarcode.toUpperCase()));
@@ -233,24 +241,24 @@ export function getStoredInventoryRolls(): InventoryRoll[] {
       }
       return parsed;
     }
-    const initial = isProdWithDb ? [] : generateInitialRolls();
+    const initial = generateInitialRolls();
     saveStoredInventoryRolls(initial);
     return initial;
   } catch (err) {
     if (!memoryRollStore) {
-      memoryRollStore = isProductionEnvironment() && isSupabaseConfigured() ? [] : generateInitialRolls();
+      memoryRollStore = (isProductionEnvironment() && isSupabaseConfigured()) ? [] : generateInitialRolls();
     }
     return memoryRollStore;
   }
 }
 
 /**
- * Save physical rolls into LocalStorage
+ * Save physical rolls into memory store (and LocalStorage in local dev/test mode)
  */
 export function saveStoredInventoryRolls(rolls: InventoryRoll[]): void {
   try {
     memoryRollStore = rolls;
-    if (typeof window !== 'undefined' && window.localStorage) {
+    if (typeof window !== 'undefined' && window.localStorage && !isSupabaseConfigured()) {
       localStorage.setItem(STORAGE_KEY_ROLLS, JSON.stringify(rolls));
     }
   } catch (err) {
@@ -527,14 +535,12 @@ export async function queryRollByExactBarcode(rawBarcode: string): Promise<Inven
   const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
   const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
 
-  if (supabaseUrl && supabaseKey) {
+  if (isSupabaseConfigured() && supabaseUrl && supabaseKey) {
     try {
+      const authHeaders = await getAuthHeaders();
       const endpoint = `${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls?roll_barcode=eq.${encodeURIComponent(targetCode)}&select=*`;
       const res = await fetch(endpoint, {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`
-        }
+        headers: authHeaders
       });
       if (res.ok) {
         const rows = await res.json();
@@ -545,24 +551,32 @@ export async function queryRollByExactBarcode(rawBarcode: string): Promise<Inven
             rollBarcode: row.roll_barcode || row.barcode,
             batchNumber: row.batch_number || '',
             invoiceNumber: row.invoice_number || '',
+            originalStockInInvoiceNumber: row.original_stock_in_invoice_number || row.invoice_number || '',
+            stockOutInvoiceNumber: row.stock_out_invoice_number || undefined,
             rollNumber: row.roll_number || 1,
             materialName: row.material_name || '',
-            category: row.category || 'Flex PVC',
+            category: row.category_snapshot || row.category || 'Flex PVC',
             size: String(row.size || ''),
             rollLength: Number(row.roll_length || row.initial_length) || 0,
             status: (row.status === 'AVAILABLE' || row.status === 'IN_STOCK') ? 'IN_STOCK' : 'OUT',
-            receivedDate: row.received_date || '',
+            receivedDate: row.stock_in_date || row.received_date || '',
+            stockOutDate: row.stock_out_date || undefined,
             createdAt: row.created_at || new Date().toISOString(),
             updatedAt: row.updated_at || new Date().toISOString()
           };
         }
       }
+      // When Supabase is configured, if the barcode is not found in Supabase, return null
+      return null;
     } catch (err) {
-      console.warn('Supabase queryRollByExactBarcode failed, fallback to local storage:', err);
+      console.warn('Supabase queryRollByExactBarcode network error:', err);
+      if (isProductionEnvironment()) {
+        return null;
+      }
     }
   }
 
-  // 2. Query Local Database for EXACT match
+  // 2. Query Local Database for EXACT match (Local dev/test fixture mode)
   const rolls = getStoredInventoryRolls();
   const matched = rolls.find(
     (r) => r.rollBarcode.toUpperCase() === targetCode ||
@@ -776,31 +790,23 @@ export async function executeRollStockOutTransaction(
   const updatedTxns = [txn, ...transactions];
   saveStoredMatrixTransactions(updatedTxns);
 
-  // 5. Sync to Supabase if configured
+  // 5. Sync to Supabase via audited RPC if configured
   const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
   const supabaseKey = getEnvVar('VITE_SUPABASE_ANON_KEY');
-  if (supabaseUrl && supabaseKey) {
+  if (isSupabaseConfigured() && supabaseUrl && supabaseKey) {
     try {
-      // Patch inventory_roll status to OUT
-      await fetch(
-        `${supabaseUrl.replace(/\/$/, '')}/rest/v1/inventory_rolls?roll_barcode=eq.${encodeURIComponent(roll.rollBarcode)}`,
-        {
-          method: 'PATCH',
-          headers: {
-            apikey: supabaseKey,
-            Authorization: `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-            Prefer: 'return=minimal'
-          },
-          body: JSON.stringify({
-            status: 'CONSUMED',
-            remaining_length: 0,
-            updated_at: new Date().toISOString()
-          })
-        }
-      );
+      const authHeaders = await getAuthHeaders();
+      await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/execute_roll_dispatch`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          p_out_invoice: cleanOutInvoice,
+          p_out_date: cleanOutDate,
+          p_roll_barcodes: [roll.rollBarcode]
+        })
+      });
     } catch (e) {
-      console.warn('Failed to update roll status in Supabase:', e);
+      console.warn('Failed to dispatch roll in Supabase RPC:', e);
     }
   }
 
@@ -911,6 +917,23 @@ export async function executeAtomicRollDispatch(
           error: `Supabase Atomic Dispatch Failed: ${msg}`
         };
       }
+
+      // Supabase RPC succeeded! Fetch fresh state
+      const freshRolls = await fetchRollsFromSupabase();
+      if (freshRolls !== null) {
+        memoryRollStore = freshRolls;
+      }
+      const dispatched = (freshRolls || []).filter((r) =>
+        barcodeList.some((code) => code.toUpperCase() === r.rollBarcode.toUpperCase())
+      );
+
+      return {
+        success: true,
+        dispatchInvoiceNumber: cleanInvoice,
+        dispatchDate: cleanDate,
+        totalRolls: barcodeList.length,
+        dispatchedRolls: dispatched
+      };
     } catch (e: any) {
       console.warn('Supabase RPC call failed:', e);
       if (isProductionEnvironment()) {
