@@ -1144,3 +1144,52 @@ export async function executeAtomicStockInRpc(
 
   return { success: true };
 }
+
+/**
+ * Clear all operational test and dummy data (batches, rolls, transactions, dispatches).
+ * Resets local storage and invokes clear_test_inventory on remote Supabase if connected.
+ */
+export async function clearOperationalTestData(): Promise<{
+  success: boolean;
+  supabaseCleared: boolean;
+  message: string;
+}> {
+  // 1. Clear LocalStorage operational data
+  saveStoredInventoryRolls([]);
+  saveStoredMatrixBatches([]);
+  saveStoredMatrixTransactions([]);
+
+  const cleanItems = INITIAL_MATRIX_ITEMS.map((item) => ({
+    ...item,
+    openingStock: 0
+  }));
+  saveStoredMatrixItems(cleanItems);
+
+  // 2. Clear remote Supabase operational tables if configured
+  let supabaseCleared = false;
+  const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
+  if (isSupabaseConfigured() && supabaseUrl) {
+    try {
+      const authHeaders = await getAuthHeaders();
+      const res = await fetch(`${supabaseUrl.replace(/\/$/, '')}/rest/v1/rpc/clear_test_inventory`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({})
+      });
+      if (res.ok) {
+        supabaseCleared = true;
+      }
+    } catch (e) {
+      console.warn('clear_test_inventory RPC call failed:', e);
+    }
+  }
+
+  return {
+    success: true,
+    supabaseCleared,
+    message: supabaseCleared
+      ? 'All test data cleared from local storage and remote Supabase!'
+      : 'Local test data cleared. To also wipe remote Supabase tables, run migration 006 or TRUNCATE in Supabase.'
+  };
+}
+

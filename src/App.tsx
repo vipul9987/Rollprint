@@ -30,7 +30,8 @@ import {
   Download,
   FileSpreadsheet,
   Copy,
-  LogOut
+  LogOut,
+  AlertTriangle
 } from 'lucide-react';
 import { StaffLoginView } from './components/StaffLoginView';
 import { getStaffSession, signOutStaff, onStaffAuthStateChange, isSupabaseConfigured } from './lib/supabase';
@@ -77,7 +78,8 @@ import {
   checkProductionDatabaseGuard,
   fetchRollsFromSupabase,
   fetchTransactionsFromSupabase,
-  executeAtomicStockInRpc
+  executeAtomicStockInRpc,
+  clearOperationalTestData
 } from './data/rollDatabase';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
@@ -118,6 +120,10 @@ export default function App() {
 
   // Show inactive materials toggle in Material Master
   const [showInactive, setShowInactive] = useState<boolean>(false);
+
+  // Clear dummy / test data modal state
+  const [isClearDataModalOpen, setIsClearDataModalOpen] = useState<boolean>(false);
+  const [isClearingData, setIsClearingData] = useState<boolean>(false);
 
   // Synchronize derived stock values & areas with physical roll source of truth
   const itemsWithStock: MatrixItemWithStock[] = useMemo(() => {
@@ -2010,6 +2016,27 @@ export default function App() {
     }
   };
 
+  const handleConfirmClearData = async () => {
+    setIsClearingData(true);
+    try {
+      const res = await clearOperationalTestData();
+      const cleanItems = INITIAL_MATRIX_ITEMS.map((item) => ({
+        ...item,
+        openingStock: 0
+      }));
+      setItems(cleanItems);
+      setBatches([]);
+      setTransactions([]);
+      setInventoryRolls([]);
+      setIsClearDataModalOpen(false);
+      showNotification(res.message, 'success');
+    } catch (e: any) {
+      showNotification(`Failed to clear test data: ${e?.message || 'Error'}`, 'error');
+    } finally {
+      setIsClearingData(false);
+    }
+  };
+
   // -------------------------------------------------------------
   // AUTHENTICATION GATE (Phase 1 & Phase 12 Security Rule)
   // When Supabase is configured:
@@ -2273,6 +2300,15 @@ export default function App() {
                 <span className="text-xs text-zinc-400 font-mono hidden xl:inline max-w-[150px] truncate">
                   {staffSession.user?.email}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setIsClearDataModalOpen(true)}
+                  className="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-800/60 hover:border-amber-600/60 cursor-pointer shadow-sm"
+                  title="Clear all test and dummy data"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span className="hidden md:inline">Clear Test Data</span>
+                </button>
                 <button
                   id="staff-logout-btn"
                   onClick={async () => {
@@ -4179,18 +4215,112 @@ export default function App() {
         </div>
       )}
 
+      {/* Clear Operational Test Data Confirmation Modal */}
+      {isClearDataModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-rose-50/70">
+              <div className="flex items-center space-x-2 text-rose-900 font-bold text-sm">
+                <AlertTriangle className="w-5 h-5 text-rose-600" />
+                <span>Clear All Dummy / Test Data</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsClearDataModalOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200/60 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs text-slate-600">
+              <p className="text-sm font-semibold text-slate-900">
+                Are you ready to start fresh with real client stock?
+              </p>
+              <p>
+                This action will wipe all test batches, physical rolls, and transaction history from local storage and remote Supabase, resetting the inventory balance to <strong>0 rolls</strong>.
+              </p>
+
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 font-mono text-[11px]">
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>Physical Inventory Rolls:</span>
+                  <span className="font-bold text-rose-600">Will be cleared (0)</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>Stock Batches:</span>
+                  <span className="font-bold text-rose-600">Will be cleared (0)</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>Transaction History:</span>
+                  <span className="font-bold text-rose-600">Will be cleared (0)</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-700">
+                  <span>Materials Catalog:</span>
+                  <span className="font-bold text-emerald-700">Preserved (0 stock)</span>
+                </div>
+              </div>
+
+              {isSupabaseConfigured() && (
+                <p className="text-[11px] text-slate-500 italic">
+                  Note: Connected to Supabase. This will execute <code className="font-mono bg-slate-100 px-1 rounded text-slate-700">clear_test_inventory</code> RPC to wipe remote operational test tables.
+                </p>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end space-x-2 text-xs">
+              <button
+                type="button"
+                disabled={isClearingData}
+                onClick={() => setIsClearDataModalOpen(false)}
+                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold rounded-xl transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isClearingData}
+                onClick={handleConfirmClearData}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-bold rounded-xl shadow-md transition-all flex items-center space-x-2 cursor-pointer"
+              >
+                {isClearingData ? (
+                  <>
+                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Clearing Data...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Yes, Wipe All Test Data</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* App Footer */}
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500 print:hidden">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>
             Decora Sales &copy; 2026 &mdash; Built to Client Handwritten Blueprint
           </span>
-          <button
-            onClick={handleResetSampleData}
-            className="text-[11px] text-slate-400 hover:text-indigo-600 font-medium underline"
-          >
-            Reset Client Blueprint Sample Data
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setIsClearDataModalOpen(true)}
+              className="text-[11px] text-red-500 hover:text-red-700 font-bold flex items-center gap-1 cursor-pointer transition-colors"
+            >
+              <Trash2 className="w-3 h-3" />
+              <span>Clear All Dummy / Test Data</span>
+            </button>
+            <span className="text-slate-300">|</span>
+            <button
+              onClick={handleResetSampleData}
+              className="text-[11px] text-slate-400 hover:text-slate-600 font-medium underline cursor-pointer"
+            >
+              Restore Blueprint Sample
+            </button>
+          </div>
         </div>
       </footer>
     </div>
