@@ -1182,11 +1182,7 @@ export async function clearOperationalTestData(): Promise<{
   saveStoredMatrixBatches([]);
   saveStoredMatrixTransactions([]);
 
-  const cleanItems = INITIAL_MATRIX_ITEMS.map((item) => ({
-    ...item,
-    openingStock: 0
-  }));
-  saveStoredMatrixItems(cleanItems);
+  saveStoredMatrixItems([]);
 
   // 2. Clear remote Supabase operational tables if configured
   let supabaseCleared = false;

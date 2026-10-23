@@ -16,7 +16,7 @@ const STORAGE_KEY_BATCHES = 'rollprint_client_batches_v1';
 /**
  * Standard Width Columns for Client Summary Tables
  */
-export const FLEX_SUMMARY_WIDTHS = ['1.02', '1.32', '1.63', '1.93', '2.20', '2.54', '3.20'];
+export const FLEX_SUMMARY_WIDTHS = ['1.02', '1.32', '1.63', '1.93', '2.54'];
 export const VINYL_SUMMARY_WIDTHS = ['0.94', '0.98', '1.02', '1.06', '1.27', '1.52', '1.37'];
 export const PVC_SHEET_SIZES = ['8×4', '6×3', '5×10'];
 export const PVC_THICKNESSES = ['2mm', '3mm', '4mm', '5mm'];
@@ -754,33 +754,23 @@ export function getStoredMatrixItems(): MatrixInventoryItem[] {
     const isLiveDb = typeof window !== 'undefined' && isSupabaseConfigured();
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_ITEMS) : null;
     if (!raw) {
-      const itemsToSave = INITIAL_MATRIX_ITEMS.map((item) => ({
-        ...item,
-        openingStock: isLiveDb ? 0 : item.openingStock
-      }));
-      if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY_ITEMS, JSON.stringify(itemsToSave));
-      }
-      return itemsToSave;
+      return [];
     }
     const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
     return parsed.map((item: any) => ({
       ...item,
       summaryGroup: normalizeSummaryGroup(item.summaryGroup || item.dashboardGroup, item.category),
       dashboardGroup: normalizeSummaryGroup(item.dashboardGroup || item.summaryGroup, item.category),
       displayOrder: typeof item.displayOrder === 'number'
         ? item.displayOrder
-        : getMaterialRowDisplayOrder(item.materialName, INITIAL_MATRIX_ITEMS, item.summaryGroup),
+        : 100,
       rollLengthMtr: item.rollLengthMtr !== undefined ? item.rollLengthMtr : 70,
       active: item.active !== undefined ? item.active : true,
       openingStock: isLiveDb ? 0 : (item.openingStock !== undefined ? item.openingStock : 0)
     }));
   } catch {
-    const isLiveDb = typeof window !== 'undefined' && isSupabaseConfigured();
-    return INITIAL_MATRIX_ITEMS.map((item) => ({
-      ...item,
-      openingStock: isLiveDb ? 0 : item.openingStock
-    }));
+    return [];
   }
 }
 
@@ -810,7 +800,7 @@ export async function fetchMaterialsFromSupabase(): Promise<MatrixInventoryItem[
         .select('*')
         .order('display_order', { ascending: true });
 
-      if (!tableErr && Array.isArray(tableData) && tableData.length > 0) {
+      if (!tableErr && Array.isArray(tableData)) {
         return tableData.map((row: any) => ({
           id: row.id,
           materialName: row.material_name,
@@ -835,26 +825,27 @@ export async function fetchMaterialsFromSupabase(): Promise<MatrixInventoryItem[
 
     // 2. Read from authenticated staff user metadata (universal remote persistence across all browsers)
     const { data: userData, error: userErr } = await supabase.auth.getUser();
-    if (!userErr && userData?.user?.user_metadata?.material_catalog) {
-      const rawCatalog = userData.user.user_metadata.material_catalog;
-      if (Array.isArray(rawCatalog) && rawCatalog.length > 0) {
+    if (!userErr && userData?.user) {
+      const rawCatalog = userData.user.user_metadata?.material_catalog;
+      if (Array.isArray(rawCatalog)) {
         return rawCatalog.map((item: any) => ({
           ...item,
           summaryGroup: normalizeSummaryGroup(item.summaryGroup || item.dashboardGroup, item.category),
           dashboardGroup: normalizeSummaryGroup(item.dashboardGroup || item.summaryGroup, item.category),
           displayOrder: typeof item.displayOrder === 'number'
             ? item.displayOrder
-            : getMaterialRowDisplayOrder(item.materialName, rawCatalog, item.summaryGroup),
+            : 100,
           active: item.active !== undefined ? item.active : true,
           openingStock: 0
         }));
       }
+      return [];
     }
 
-    return null;
+    return [];
   } catch (err) {
     console.warn('fetchMaterialsFromSupabase network error:', err);
-    return null;
+    return [];
   }
 }
 
@@ -1114,25 +1105,16 @@ export function computeDashboardMatrixTables(
   const allCatalog = catalogItems || itemsWithStock;
   const activeItems = itemsWithStock.filter((i) => i.active);
 
-  // 1. Flex / Backlit
+  // 1. Flex / Backlit: Visible widths are strictly 1.02, 1.32, 1.63, 1.93, 2.54 (2.20 and 3.20 removed)
   const flexItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'FLEX_ROLL');
-  const rawFlexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName)));
-  CLIENT_FLEX_MATERIALS_ORDER.forEach((m) => {
-    if (!rawFlexMaterials.includes(m)) rawFlexMaterials.push(m);
-  });
-  const flexMaterials = rawFlexMaterials.sort((a, b) => {
+  const flexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName))).sort((a, b) => {
     const orderA = getMaterialRowDisplayOrder(a, allCatalog, 'FLEX_ROLL');
     const orderB = getMaterialRowDisplayOrder(b, allCatalog, 'FLEX_ROLL');
     if (orderA !== orderB) return orderA - orderB;
     return a.localeCompare(b);
   });
 
-  const flexWidths = Array.from(
-    new Set([
-      ...FLEX_SUMMARY_WIDTHS,
-      ...flexItems.map((i) => normalizeNumericSize(i.variantSize))
-    ])
-  ).sort((a, b) => parseFloat(a) - parseFloat(b));
+  const flexWidths = FLEX_SUMMARY_WIDTHS; // ['1.02', '1.32', '1.63', '1.93', '2.54']
 
   const flexRows = flexMaterials.map((matName) => {
     const matItems = flexItems.filter((i) => i.materialName === matName);
@@ -1140,8 +1122,9 @@ export function computeDashboardMatrixTables(
     matItems.forEach((i) => {
       cells[normalizeNumericSize(i.variantSize)] = i;
     });
-    const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
-    const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
+    // Calculate total ONLY from the visible columns
+    const rowTotalRolls = flexWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
+    const rowTotalArea = Number(flexWidths.reduce((sum, w) => sum + (cells[w]?.totalAreaMtr2 || 0), 0).toFixed(2));
     return {
       materialName: matName,
       category: matItems[0]?.category || 'Flex PVC',
@@ -1154,23 +1137,14 @@ export function computeDashboardMatrixTables(
 
   // 2. Vinyl / Lamination
   const vinylItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'VINYL_ROLL');
-  const rawVinylMaterials = Array.from(new Set(vinylItems.map((i) => i.materialName)));
-  CLIENT_VINYL_MATERIALS_ORDER.forEach((m) => {
-    if (!rawVinylMaterials.includes(m)) rawVinylMaterials.push(m);
-  });
-  const vinylMaterials = rawVinylMaterials.sort((a, b) => {
+  const vinylMaterials = Array.from(new Set(vinylItems.map((i) => i.materialName))).sort((a, b) => {
     const orderA = getMaterialRowDisplayOrder(a, allCatalog, 'VINYL_ROLL');
     const orderB = getMaterialRowDisplayOrder(b, allCatalog, 'VINYL_ROLL');
     if (orderA !== orderB) return orderA - orderB;
     return a.localeCompare(b);
   });
 
-  const vinylWidths = Array.from(
-    new Set([
-      ...VINYL_SUMMARY_WIDTHS,
-      ...vinylItems.map((i) => normalizeNumericSize(i.variantSize))
-    ])
-  ).sort((a, b) => parseFloat(a) - parseFloat(b));
+  const vinylWidths = VINYL_SUMMARY_WIDTHS;
 
   const vinylRows = vinylMaterials.map((matName) => {
     const matItems = vinylItems.filter((i) => i.materialName === matName);
@@ -1178,8 +1152,8 @@ export function computeDashboardMatrixTables(
     matItems.forEach((i) => {
       cells[normalizeNumericSize(i.variantSize)] = i;
     });
-    const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
-    const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
+    const rowTotalRolls = vinylWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
+    const rowTotalArea = Number(vinylWidths.reduce((sum, w) => sum + (cells[w]?.totalAreaMtr2 || 0), 0).toFixed(2));
     return {
       materialName: matName,
       category: matItems[0]?.category || 'Self Adhesive Vinyl',

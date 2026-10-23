@@ -205,11 +205,13 @@ assert(metrics.totalStockOut === 0, 'Total Stock OUT across baseline is 0 rolls'
 // ------------------------------------------------------------------
 console.log('\n--- Test Suite 6: Multi-Summary Table Structures ---');
 
-// Verify Flex Summary Widths
+// Verify Flex Summary Widths (2.20 and 3.20 removed per Client Requirement)
 assert(
-  JSON.stringify(FLEX_SUMMARY_WIDTHS) === JSON.stringify(['1.02', '1.32', '1.63', '1.93', '2.20', '2.54', '3.20']),
-  'Flex Summary has exact 7 widths: 1.02, 1.32, 1.63, 1.93, 2.20, 2.54, 3.20'
+  JSON.stringify(FLEX_SUMMARY_WIDTHS) === JSON.stringify(['1.02', '1.32', '1.63', '1.93', '2.54']),
+  'Flex Summary has exact 5 widths: 1.02, 1.32, 1.63, 1.93, 2.54 (2.20 & 3.20 removed)'
 );
+assert(!FLEX_SUMMARY_WIDTHS.includes('2.20'), 'Flex Summary does NOT contain 2.20');
+assert(!FLEX_SUMMARY_WIDTHS.includes('3.20'), 'Flex Summary does NOT contain 3.20');
 
 // Verify Vinyl Summary Widths (0.94, 0.98, 1.02, 1.06, 1.27, 1.52, 1.37)
 assert(
@@ -2297,17 +2299,28 @@ await (async () => {
     `[Test 1] No duplicate Backlit Sunlex row created: exactly 1 row found (got ${sunlexRows.length})`
   );
 
-  // Check columns: 2.20 width appears in flexWidths
+  // Check columns: 2.20 and 3.20 are REMOVED from Flex Summary matrix
   assert(
-    test1Tables.flexWidths.includes('2.20'),
-    `[Test 1] 2.20 width column dynamically included in Flex matrix columns`
+    !test1Tables.flexWidths.includes('2.20'),
+    `[Test 1] 2.20 width column is REMOVED from Flex Summary matrix`
+  );
+  assert(
+    !test1Tables.flexWidths.includes('3.20'),
+    `[Test 1] 3.20 width column is REMOVED from Flex Summary matrix`
   );
 
-  // Check cell: 2.20 cell exists under the existing row
-  const sunlexRow = sunlexRows[0];
+  // Manual entry preserves 2.20 in database/catalog
   assert(
-    sunlexRow.cells['2.20'] !== undefined && sunlexRow.cells['2.20']?.variantSize === '2.20',
-    `[Test 1] 2.20 column is populated under existing Backlit Sunlex row`
+    sunlex220.variantSize === '2.20',
+    `[Test 1] Manual width 2.20 preserved in material master record (not prohibited globally)`
+  );
+
+  // Total calculation only includes visible columns (1.02, 1.32, 1.63, 1.93, 2.54)
+  const sunlexRow = sunlexRows[0];
+  const expectedVisibleTotal = test1Tables.flexWidths.reduce((sum, w) => sum + (sunlexRow.cells[w]?.currentStock || 0), 0);
+  assert(
+    sunlexRow.totalRolls === expectedVisibleTotal,
+    `[Test 1] Visible row total calculates ONLY from visible columns (got ${sunlexRow.totalRolls}, expected ${expectedVisibleTotal})`
   );
 
   // ==================================================================
@@ -2682,6 +2695,180 @@ await (async () => {
     testZeroStockTables.flexMaterials.includes(targetMaterialName),
     `[Rule 10] Material '${targetMaterialName}' remains visible in matrix even when stock reaches 0 rolls`
   );
+  // ==================================================================
+  // TEST SUITE 31 — CLIENT MATERIAL RESET & SUMMARY WIDTH CLEANUP
+  // ==================================================================
+  console.log('\n--- Test Suite 31: Client Material Reset & 2.20/3.20 Summary Width Cleanup ---');
+
+  // 1. Empty state catalog produces 0 dashboard rows and does not crash
+  const emptyCatalog: MatrixInventoryItem[] = [];
+  const emptyCalculated = calculateMatrixWithStock(emptyCatalog, []);
+  const emptyTables = computeDashboardMatrixTables(emptyCalculated, emptyCatalog);
+
+  assert(
+    emptyTables.flexRows.length === 0,
+    '[Test Suite 31.1] Empty catalog produces exactly 0 rows in Flex matrix (no ghost sample materials)'
+  );
+  assert(
+    emptyTables.vinylRows.length === 0,
+    '[Test Suite 31.1] Empty catalog produces exactly 0 rows in Vinyl matrix'
+  );
+  assert(
+    emptyTables.flexWidths.length === 5 &&
+    !emptyTables.flexWidths.includes('2.20') &&
+    !emptyTables.flexWidths.includes('3.20'),
+    '[Test Suite 31.1] Flex Summary matrix columns strictly [1.02, 1.32, 1.63, 1.93, 2.54] (2.20 and 3.20 absent)'
+  );
+
+  // 2. Client creates brand new QA Client Material (1.63, 50M, displayOrder: 10)
+  const qaClientMaterial: MatrixInventoryItem = {
+    id: 'mat-qa-client-163',
+    materialName: 'QA Client Material',
+    category: 'Flex PVC',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'QA-CLIENT-1.63',
+    openingStock: 0,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-10-23',
+    displayOrder: 10,
+    dashboardGroup: 'FLEX_ROLL'
+  };
+
+  const singleCatalog = [qaClientMaterial];
+  const singleCalculated = calculateMatrixWithStock(singleCatalog, []);
+  const singleTables = computeDashboardMatrixTables(singleCalculated, singleCatalog);
+
+  assert(
+    singleTables.flexRows.length === 1 && singleTables.flexRows[0].materialName === 'QA Client Material',
+    '[Test Suite 31.2] Brand-new QA Client Material renders as exactly 1 row in Flex matrix'
+  );
+  assert(
+    singleTables.flexRows[0].totalRolls === 0,
+    '[Test Suite 31.2] New material starts with exactly 0 rolls stock'
+  );
+
+  // 3. Stock IN test: 3 rolls of 1.63
+  const qaInRolls: InventoryRoll[] = [
+    {
+      id: 'qa-r01',
+      rollBarcode: 'QA-IN-001-R01',
+      rollNumber: 1,
+      batchNumber: '231026QAIN01',
+      invoiceNumber: 'QA-MATERIAL-IN-001',
+      materialName: 'QA Client Material',
+      category: 'Flex PVC',
+      size: '1.63',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-23',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z'
+    },
+    {
+      id: 'qa-r02',
+      rollBarcode: 'QA-IN-001-R02',
+      rollNumber: 2,
+      batchNumber: '231026QAIN01',
+      invoiceNumber: 'QA-MATERIAL-IN-001',
+      materialName: 'QA Client Material',
+      category: 'Flex PVC',
+      size: '1.63',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-23',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z'
+    },
+    {
+      id: 'qa-r03',
+      rollBarcode: 'QA-IN-001-R03',
+      rollNumber: 3,
+      batchNumber: '231026QAIN01',
+      invoiceNumber: 'QA-MATERIAL-IN-001',
+      materialName: 'QA Client Material',
+      category: 'Flex PVC',
+      size: '1.63',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-23',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z'
+    }
+  ];
+
+  const qaInCalculated = calculateMatrixWithStock(singleCatalog, [], qaInRolls);
+  const qaInTables = computeDashboardMatrixTables(qaInCalculated, singleCatalog);
+  const qaRowIn = qaInTables.flexRows[0];
+
+  assert(
+    qaRowIn.cells['1.63']?.currentStock === 3,
+    '[Test Suite 31.3] Stock IN 3 rolls updates cell 1.63 to exactly 3 Rolls'
+  );
+  assert(
+    qaRowIn.totalRolls === 3,
+    '[Test Suite 31.3] Visible row total correctly shows 3 rolls'
+  );
+
+  // 4. Stock OUT test: 1 roll dispatched (3 -> 2)
+  const qaOutRolls = qaInRolls.map((r, idx) =>
+    idx === 0
+      ? { ...r, status: 'OUT' as const, stockOutInvoiceNumber: 'DS/QA/001', stockOutDate: '2026-10-23' }
+      : r
+  );
+
+  const qaOutCalculated = calculateMatrixWithStock(singleCatalog, [], qaOutRolls);
+  const qaOutTables = computeDashboardMatrixTables(qaOutCalculated, singleCatalog);
+  const qaRowOut = qaOutTables.flexRows[0];
+
+  assert(
+    qaRowOut.cells['1.63']?.currentStock === 2,
+    '[Test Suite 31.4] Stock OUT 1 roll updates cell 1.63: 3 -> 2 Rolls'
+  );
+  assert(
+    qaRowOut.totalRolls === 2,
+    '[Test Suite 31.4] Visible row total updates: 3 -> 2 Rolls'
+  );
+
+  // 5. Total calculation strictly excludes hidden 2.20 / 3.20
+  // Even if a roll with width 2.20 exists in stock, it must NOT be added to visible row total
+  const roll220: InventoryRoll = {
+    id: 'qa-r220',
+    rollBarcode: 'QA-IN-220-R01',
+    rollNumber: 1,
+    batchNumber: '231026QAIN220',
+    invoiceNumber: 'QA-MATERIAL-IN-220',
+    materialName: 'QA Client Material',
+    category: 'Flex PVC',
+    size: '2.20',
+    rollLength: 50,
+    status: 'IN_STOCK',
+    receivedDate: '2026-10-23',
+    createdAt: '2026-10-23T00:00:00Z',
+    updatedAt: '2026-10-23T00:00:00Z'
+  };
+
+  const hiddenWidthRolls = [...qaOutRolls, roll220]; // 2 rolls at 1.63 + 1 roll at 2.20 = 3 rolls in stock
+  const hiddenCalculated = calculateMatrixWithStock(singleCatalog, [], hiddenWidthRolls);
+  const hiddenTables = computeDashboardMatrixTables(hiddenCalculated, singleCatalog);
+  const hiddenRow = hiddenTables.flexRows[0];
+
+  assert(
+    !hiddenTables.flexWidths.includes('2.20'),
+    '[Test Suite 31.5] Flex Summary visible columns still exclude 2.20'
+  );
+  assert(
+    hiddenRow.totalRolls === 2,
+    `[Test Suite 31.5] Visible total strictly excludes 2.20 roll stock: visible total is 2 rolls (got ${hiddenRow.totalRolls})`
+  );
+  const visibleGrandTotalRolls = hiddenTables.flexRows.reduce((sum, r) => sum + r.totalRolls, 0);
+  assert(
+    visibleGrandTotalRolls === 2,
+    `[Test Suite 31.5] Grand total strictly excludes 2.20 roll stock: grand total is 2 rolls (got ${visibleGrandTotalRolls})`
+  );
+
   console.log('\n====================================================');
   console.log(`QA TEST RESULTS: ${testsPassed} PASSED, ${testsFailed} FAILED`);
   console.log('====================================================');

@@ -48,11 +48,6 @@ import {
   VINYL_SUMMARY_WIDTHS,
   PVC_SHEET_SIZES,
   PVC_THICKNESSES,
-  CLIENT_FLEX_MATERIALS_ORDER,
-  CLIENT_VINYL_MATERIALS_ORDER,
-  INITIAL_MATRIX_ITEMS,
-  INITIAL_MATRIX_TRANSACTIONS,
-  INITIAL_MATRIX_BATCHES,
   generateBatchNumber,
   formatDateToDDMMYY,
   normalizeInvoiceForBatch,
@@ -82,8 +77,7 @@ import {
   checkProductionDatabaseGuard,
   fetchRollsFromSupabase,
   fetchTransactionsFromSupabase,
-  executeAtomicStockInRpc,
-  clearOperationalTestData
+  executeAtomicStockInRpc
 } from './data/rollDatabase';
 import { MobileItemView } from './components/MobileItemView';
 import { CameraScannerModal } from './components/CameraScannerModal';
@@ -131,9 +125,7 @@ export default function App() {
   // Show inactive materials toggle in Material Master
   const [showInactive, setShowInactive] = useState<boolean>(false);
 
-  // Clear dummy / test data modal state
-  const [isClearDataModalOpen, setIsClearDataModalOpen] = useState<boolean>(false);
-  const [isClearingData, setIsClearingData] = useState<boolean>(false);
+
 
   // Synchronize derived stock values & areas with physical roll source of truth
   const itemsWithStock: MatrixItemWithStock[] = useMemo(() => {
@@ -184,7 +176,7 @@ export default function App() {
         setBatches(remoteBatches);
         saveStoredMatrixBatches(remoteBatches);
       }
-      if (remoteMaterials !== null && remoteMaterials.length > 0) {
+      if (remoteMaterials !== null) {
         setItems(remoteMaterials);
         saveStoredMatrixItems(remoteMaterials);
       }
@@ -2002,25 +1994,16 @@ export default function App() {
   const summaryTablesData = useMemo(() => {
     const activeItems = itemsWithStock.filter((i) => i.active);
 
-    // 1. Flex / Backlit Roll Materials
+    // 1. Flex / Backlit Roll Materials (Strictly 1.02, 1.32, 1.63, 1.93, 2.54)
     const flexItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'FLEX_ROLL');
-    const rawFlexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName)));
-    CLIENT_FLEX_MATERIALS_ORDER.forEach((m) => {
-      if (!rawFlexMaterials.includes(m)) rawFlexMaterials.push(m);
-    });
-    const flexMaterials = rawFlexMaterials.sort((a, b) => {
+    const flexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName))).sort((a, b) => {
       const orderA = getMaterialRowDisplayOrder(a, items, 'FLEX_ROLL');
       const orderB = getMaterialRowDisplayOrder(b, items, 'FLEX_ROLL');
       if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
     });
 
-    const flexWidths = Array.from(
-      new Set([
-        ...FLEX_SUMMARY_WIDTHS,
-        ...flexItems.map((i) => normalizeNumericSize(i.variantSize))
-      ])
-    ).sort((a, b) => parseFloat(a) - parseFloat(b));
+    const flexWidths = FLEX_SUMMARY_WIDTHS; // ['1.02', '1.32', '1.63', '1.93', '2.54']
 
     const flexRows = flexMaterials.map((matName) => {
       const matItems = flexItems.filter((i) => i.materialName === matName);
@@ -2028,8 +2011,9 @@ export default function App() {
       matItems.forEach((i) => {
         cells[normalizeNumericSize(i.variantSize)] = i;
       });
-      const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
-      const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
+      // Calculate row total ONLY from the visible columns
+      const rowTotalRolls = flexWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
+      const rowTotalArea = Number(flexWidths.reduce((sum, w) => sum + (cells[w]?.totalAreaMtr2 || 0), 0).toFixed(2));
       return {
         materialName: matName,
         category: matItems[0]?.category || 'Flex PVC',
@@ -2050,24 +2034,14 @@ export default function App() {
 
     // 2. Vinyl / Lamination Roll Materials
     const vinylItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'VINYL_ROLL');
-    const rawVinylMaterials = Array.from(new Set(vinylItems.map((i) => i.materialName)));
-    // Ensure all standard vinyl materials are present even if 0 stock
-    CLIENT_VINYL_MATERIALS_ORDER.forEach((m) => {
-      if (!rawVinylMaterials.includes(m)) rawVinylMaterials.push(m);
-    });
-    const vinylMaterials = rawVinylMaterials.sort((a, b) => {
+    const vinylMaterials = Array.from(new Set(vinylItems.map((i) => i.materialName))).sort((a, b) => {
       const orderA = getMaterialRowDisplayOrder(a, items, 'VINYL_ROLL');
       const orderB = getMaterialRowDisplayOrder(b, items, 'VINYL_ROLL');
       if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
     });
 
-    const vinylWidths = Array.from(
-      new Set([
-        ...VINYL_SUMMARY_WIDTHS,
-        ...vinylItems.map((i) => normalizeNumericSize(i.variantSize))
-      ])
-    ).sort((a, b) => parseFloat(a) - parseFloat(b));
+    const vinylWidths = VINYL_SUMMARY_WIDTHS;
 
     const vinylRows = vinylMaterials.map((matName) => {
       const matItems = vinylItems.filter((i) => i.materialName === matName);
@@ -2075,8 +2049,8 @@ export default function App() {
       matItems.forEach((i) => {
         cells[normalizeNumericSize(i.variantSize)] = i;
       });
-      const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
-      const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
+      const rowTotalRolls = vinylWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
+      const rowTotalArea = Number(vinylWidths.reduce((sum, w) => sum + (cells[w]?.totalAreaMtr2 || 0), 0).toFixed(2));
       return {
         materialName: matName,
         category: matItems[0]?.category || 'Self Adhesive Vinyl',
@@ -2097,7 +2071,7 @@ export default function App() {
 
     // 3. PVC / Rigid Sheet Materials
     const pvcItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'RIGID_PVC');
-    const pvcRows = PVC_SHEET_SIZES.map((sheetSize) => {
+    const pvcRows = pvcItems.length > 0 ? PVC_SHEET_SIZES.map((sheetSize) => {
       const sizeItems = pvcItems.filter((i) => i.variantSize === sheetSize);
       const cells: { [thickness: string]: MatrixItemWithStock | undefined } = {};
       sizeItems.forEach((i) => {
@@ -2114,7 +2088,7 @@ export default function App() {
         totalSheets: rowTotalSheets,
         totalAreaMtr2: rowTotalArea
       };
-    });
+    }) : [];
 
     // PVC column totals
     const pvcColTotals: { [thickness: string]: number } = {};
@@ -2143,38 +2117,7 @@ export default function App() {
     };
   }, [itemsWithStock, items]);
 
-  const handleResetSampleData = () => {
-    if (window.confirm('Reset inventory and transaction history to the baseline client blueprint dataset?')) {
-      setItems(INITIAL_MATRIX_ITEMS);
-      setTransactions(INITIAL_MATRIX_TRANSACTIONS);
-      setBatches(INITIAL_MATRIX_BATCHES);
-      saveStoredMatrixItems(INITIAL_MATRIX_ITEMS);
-      saveStoredMatrixTransactions(INITIAL_MATRIX_TRANSACTIONS);
-      saveStoredMatrixBatches(INITIAL_MATRIX_BATCHES);
-      showNotification('Restored baseline blueprint dataset with client batches.');
-    }
-  };
 
-  const handleConfirmClearData = async () => {
-    setIsClearingData(true);
-    try {
-      const res = await clearOperationalTestData();
-      const cleanItems = INITIAL_MATRIX_ITEMS.map((item) => ({
-        ...item,
-        openingStock: 0
-      }));
-      setItems(cleanItems);
-      setBatches([]);
-      setTransactions([]);
-      setInventoryRolls([]);
-      setIsClearDataModalOpen(false);
-      showNotification(res.message, 'success');
-    } catch (e: any) {
-      showNotification(`Failed to clear test data: ${e?.message || 'Error'}`, 'error');
-    } finally {
-      setIsClearingData(false);
-    }
-  };
 
   // -------------------------------------------------------------
   // AUTHENTICATION GATE (Phase 1 & Phase 12 Security Rule)
@@ -2453,17 +2396,7 @@ export default function App() {
                 <span className="text-xs text-zinc-400 font-mono hidden xl:inline max-w-[150px] truncate">
                   {staffSession.user?.email}
                 </span>
-                {import.meta.env.DEV && (
-                  <button
-                    type="button"
-                    onClick={() => setIsClearDataModalOpen(true)}
-                    className="px-3 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all text-amber-300 hover:text-amber-200 hover:bg-amber-950/40 border border-amber-800/60 hover:border-amber-600/60 cursor-pointer shadow-sm"
-                    title="Clear all test and dummy data (Dev Only)"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span className="hidden md:inline">Clear Test Data</span>
-                  </button>
-                )}
+
                 <button
                   id="staff-logout-btn"
                   onClick={async () => {
@@ -2721,8 +2654,30 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-200">
-                            {summaryTablesData.flexRows.map((row) => (
-                              <tr key={row.materialName} className="hover:bg-indigo-50/40 transition-colors">
+                            {summaryTablesData.flexRows.length === 0 ? (
+                              <tr>
+                                <td
+                                  colSpan={summaryTablesData.flexWidths.length + 3}
+                                  className="py-10 text-center text-slate-500 font-medium bg-slate-50/50"
+                                >
+                                  <div className="flex flex-col items-center justify-center space-y-2">
+                                    <p className="text-xs font-semibold text-slate-600">No Flex / Backlit materials added yet.</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveTab('materials');
+                                        openAddModal();
+                                      }}
+                                      className="inline-flex items-center text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                                    >
+                                      + Add Material
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : (
+                              summaryTablesData.flexRows.map((row) => (
+                                <tr key={row.materialName} className="hover:bg-indigo-50/40 transition-colors">
                                 <td className="py-2.5 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
                                   <div className="leading-tight">
                                     <span className="text-xs font-bold text-slate-900">{row.materialName}</span>
@@ -2795,7 +2750,8 @@ export default function App() {
                                   {row.totalAreaMtr2.toLocaleString()}
                                 </td>
                               </tr>
-                            ))}
+                            ))
+                          )}
                           </tbody>
                           <tfoot className="border-t-2 border-slate-300 bg-slate-100 font-bold">
                             <tr>
@@ -2862,8 +2818,30 @@ export default function App() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-200">
-                            {summaryTablesData.vinylRows.map((row) => (
-                              <tr key={row.materialName} className="hover:bg-emerald-50/40 transition-colors">
+                            {summaryTablesData.vinylRows.length === 0 ? (
+                              <tr>
+                                <td
+                                  colSpan={summaryTablesData.vinylWidths.length + 3}
+                                  className="py-10 text-center text-slate-500 font-medium bg-slate-50/50"
+                                >
+                                  <div className="flex flex-col items-center justify-center space-y-2">
+                                    <p className="text-xs font-semibold text-slate-600">No Vinyl / Lamination materials added yet.</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveTab('materials');
+                                        openAddModal();
+                                      }}
+                                      className="inline-flex items-center text-xs font-bold text-emerald-600 hover:text-emerald-800 underline cursor-pointer"
+                                    >
+                                      + Add Material
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : (
+                              summaryTablesData.vinylRows.map((row) => (
+                                <tr key={row.materialName} className="hover:bg-emerald-50/40 transition-colors">
                                 <td className="py-2.5 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
                                   <div className="leading-tight">
                                     <span className="text-xs font-bold text-slate-900">{row.materialName}</span>
@@ -2950,7 +2928,8 @@ export default function App() {
                                   {row.totalAreaMtr2.toLocaleString()}
                                 </td>
                               </tr>
-                            ))}
+                            ))
+                          )}
                           </tbody>
                           <tfoot className="border-t-2 border-slate-300 bg-slate-100 font-bold">
                             <tr>
@@ -3121,46 +3100,64 @@ export default function App() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
-                        {displayedItems.map((item) => (
-                          <tr key={item.id} className="hover:bg-slate-50 transition-colors">
-                            <td className="py-3 px-4 font-bold text-slate-900">{item.materialName}</td>
-                            <td className="py-3 px-4 text-slate-600">{item.category}</td>
-                            <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.variantSize} M</td>
-                            <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.rollLengthMtr} M</td>
-                            <td className="py-3 px-4 text-right font-mono text-slate-600">{item.areaPerRoll} m²</td>
-                            <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
-                              {item.currentStock} Rolls
-                            </td>
-                            <td className="py-3 px-4 text-right font-mono font-bold text-indigo-700">
-                              {item.totalAreaMtr2.toLocaleString()} m²
-                            </td>
-                            <td className="py-3 px-4 text-center">
-                              {item.status === 'IN_STOCK' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                  In Stock
-                                </span>
-                              )}
-                              {item.status === 'LOW_STOCK' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                                  Low Stock
-                                </span>
-                              )}
-                              {item.status === 'OUT_OF_STOCK' && (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
-                                  Out of Stock
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-center">
+                        {displayedItems.length === 0 ? (
+                          <tr>
+                            <td colSpan={9} className="py-12 text-center text-slate-500">
+                              <p className="text-sm font-semibold text-slate-700 mb-2">No materials added yet.</p>
                               <button
-                                onClick={() => setModalItem(item)}
-                                className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-md text-[11px] border border-indigo-200"
+                                type="button"
+                                onClick={() => {
+                                  setActiveTab('materials');
+                                  openAddModal();
+                                }}
+                                className="inline-flex items-center text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
                               >
-                                Update Stock
+                                + Add Material
                               </button>
                             </td>
                           </tr>
-                        ))}
+                        ) : (
+                          displayedItems.map((item) => (
+                            <tr key={item.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="py-3 px-4 font-bold text-slate-900">{item.materialName}</td>
+                              <td className="py-3 px-4 text-slate-600">{item.category}</td>
+                              <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.variantSize} M</td>
+                              <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.rollLengthMtr} M</td>
+                              <td className="py-3 px-4 text-right font-mono text-slate-600">{item.areaPerRoll} m²</td>
+                              <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
+                                {item.currentStock} Rolls
+                              </td>
+                              <td className="py-3 px-4 text-right font-mono font-bold text-indigo-700">
+                                {item.totalAreaMtr2.toLocaleString()} m²
+                              </td>
+                              <td className="py-3 px-4 text-center">
+                                {item.status === 'IN_STOCK' && (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    In Stock
+                                  </span>
+                                )}
+                                {item.status === 'LOW_STOCK' && (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                    Low Stock
+                                  </span>
+                                )}
+                                {item.status === 'OUT_OF_STOCK' && (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
+                                    Out of Stock
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 text-center">
+                                <button
+                                  onClick={() => setModalItem(item)}
+                                  className="px-3 py-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-md text-[11px] border border-indigo-200"
+                                >
+                                  Update Stock
+                                </button>
+                              </td>
+                            </tr>
+                          ))
+                        )}
                       </tbody>
                     </table>
                   </div>
@@ -3240,7 +3237,30 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {displayedItems.map((item) => (
+                    {displayedItems.length === 0 ? (
+                      <tr>
+                        <td colSpan={11} className="py-16 text-center">
+                          <div className="flex flex-col items-center justify-center space-y-3">
+                            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                              <Layers className="w-6 h-6" />
+                            </div>
+                            <p className="text-base font-bold text-slate-700">No materials added yet.</p>
+                            <p className="text-xs text-slate-500 max-w-sm">
+                              Get started by adding your first material specification. All dimensions and roll lengths will be tracked live.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={openAddModal}
+                              className="mt-2 inline-flex items-center px-4 py-2 border border-transparent text-sm font-semibold rounded-lg shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 transition cursor-pointer"
+                            >
+                              <Plus className="w-4 h-4 mr-2" />
+                              Add Material
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ) : (
+                      displayedItems.map((item) => (
                       <tr
                         key={item.id}
                         className={`hover:bg-slate-50 transition-colors ${
@@ -3322,7 +3342,8 @@ export default function App() {
                           </div>
                         </td>
                       </tr>
-                    ))}
+                    ))
+                  )}
                   </tbody>
                 </table>
               </div>
@@ -3476,13 +3497,31 @@ export default function App() {
                         }}
                         className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
                       >
-                        <option value="">-- Select Material --</option>
+                        <option value="">
+                          {uniqueMaterialNames.length === 0 ? '-- No materials created yet --' : '-- Select Material --'}
+                        </option>
                         {uniqueMaterialNames.map((mat) => (
                           <option key={mat} value={mat}>
                             {mat}
                           </option>
                         ))}
                       </select>
+                      {uniqueMaterialNames.length === 0 && (
+                        <p className="mt-1.5 text-[11px] text-amber-700 font-medium flex items-center gap-1">
+                          <span>⚠️ No materials found. Please</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab('materials');
+                              openAddModal();
+                            }}
+                            className="text-indigo-600 font-bold underline hover:text-indigo-800 cursor-pointer"
+                          >
+                            create a material in Material Master
+                          </button>
+                          <span>first.</span>
+                        </p>
+                      )}
                     </div>
 
                     <div>
@@ -4426,89 +4465,7 @@ export default function App() {
         </div>
       )}
 
-      {/* Clear Operational Test Data Confirmation Modal */}
-      {isClearDataModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full overflow-hidden flex flex-col">
-            <div className="p-4 border-b border-slate-200 flex items-center justify-between bg-rose-50/70">
-              <div className="flex items-center space-x-2 text-rose-900 font-bold text-sm">
-                <AlertTriangle className="w-5 h-5 text-rose-600" />
-                <span>Clear All Dummy / Test Data</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsClearDataModalOpen(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-200/60 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
 
-            <div className="p-5 space-y-4 text-xs text-slate-600">
-              <p className="text-sm font-semibold text-slate-900">
-                Are you ready to start fresh with real client stock?
-              </p>
-              <p>
-                This action will wipe all test batches, physical rolls, and transaction history from local storage and remote Supabase, resetting the inventory balance to <strong>0 rolls</strong>.
-              </p>
-
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5 font-mono text-[11px]">
-                <div className="flex items-center justify-between text-slate-700">
-                  <span>Physical Inventory Rolls:</span>
-                  <span className="font-bold text-rose-600">Will be cleared (0)</span>
-                </div>
-                <div className="flex items-center justify-between text-slate-700">
-                  <span>Stock Batches:</span>
-                  <span className="font-bold text-rose-600">Will be cleared (0)</span>
-                </div>
-                <div className="flex items-center justify-between text-slate-700">
-                  <span>Transaction History:</span>
-                  <span className="font-bold text-rose-600">Will be cleared (0)</span>
-                </div>
-                <div className="flex items-center justify-between text-slate-700">
-                  <span>Materials Catalog:</span>
-                  <span className="font-bold text-emerald-700">Preserved (0 stock)</span>
-                </div>
-              </div>
-
-              {isSupabaseConfigured() && (
-                <p className="text-[11px] text-slate-500 italic">
-                  Note: Connected to Supabase. This will execute <code className="font-mono bg-slate-100 px-1 rounded text-slate-700">clear_test_inventory</code> RPC to wipe remote operational test tables.
-                </p>
-              )}
-            </div>
-
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end space-x-2 text-xs">
-              <button
-                type="button"
-                disabled={isClearingData}
-                onClick={() => setIsClearDataModalOpen(false)}
-                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold rounded-xl transition-colors cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isClearingData}
-                onClick={handleConfirmClearData}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-40 text-white font-bold rounded-xl shadow-md transition-all flex items-center space-x-2 cursor-pointer"
-              >
-                {isClearingData ? (
-                  <>
-                    <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>Clearing Data...</span>
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-3.5 h-3.5" />
-                    <span>Yes, Wipe All Test Data</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* App Footer */}
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500 print:hidden">
@@ -4516,24 +4473,6 @@ export default function App() {
           <span>
             Decora Sales &copy; 2026 &mdash; Built to Client Handwritten Blueprint
           </span>
-          {import.meta.env.DEV && (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setIsClearDataModalOpen(true)}
-                className="text-[11px] text-red-500 hover:text-red-700 font-bold flex items-center gap-1 cursor-pointer transition-colors"
-              >
-                <Trash2 className="w-3 h-3" />
-                <span>Clear All Dummy / Test Data</span>
-              </button>
-              <span className="text-slate-300">|</span>
-              <button
-                onClick={handleResetSampleData}
-                className="text-[11px] text-slate-400 hover:text-slate-600 font-medium underline cursor-pointer"
-              >
-                Restore Blueprint Sample
-              </button>
-            </div>
-          )}
         </div>
       </footer>
     </div>
