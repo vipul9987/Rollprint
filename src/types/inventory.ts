@@ -12,6 +12,8 @@ export interface MatrixInventoryItem {
   materialName: string; // e.g. "Backlit Sunlex", "Premium M 9", "Vinyl Gloss 80 Mic", "PVC Foam Sheet"
   category: string; // e.g. "Flex PVC", "Backlit", "Frontlit Flex", "Self Adhesive Vinyl", "Lamination Film", "Rigid PVC"
   summaryGroup?: InventorySummaryGroup; // "FLEX_ROLL" | "VINYL_ROLL" | "RIGID_PVC"
+  dashboardGroup?: InventorySummaryGroup; // Alias for summaryGroup
+  displayOrder?: number; // Integer order for deterministic matrix row placement (e.g. 10, 20, 30...)
   variantSize: string; // Width in metres (e.g. "1.02", "1.32") or Sheet Size (e.g. "8×4")
   rollLengthMtr: number; // Length per roll in metres (e.g. 50, 70), or 0 for sheets
   secondaryVariant?: string; // Thickness (e.g. "2mm", "3mm", "5mm" for sheets)

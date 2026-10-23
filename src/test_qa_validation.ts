@@ -21,7 +21,14 @@ import {
   getStoredMatrixBatches,
   createPhysicalRollRecords,
   validateUniqueRollBarcode,
-  queryRollByExactBarcode
+  queryRollByExactBarcode,
+  computeDashboardMatrixTables,
+  getMaterialRowDisplayOrder,
+  normalizeSummaryGroup,
+  saveMaterialsToSupabase,
+  fetchMaterialsFromSupabase,
+  saveStoredMatrixItems,
+  getStoredMatrixItems
 } from './data/inventoryStore';
 import {
   executeRollStockOutTransaction,
@@ -2246,8 +2253,435 @@ await (async () => {
   setForceProductionModeForTesting(null);
 
   // ------------------------------------------------------------------
-  // SUMMARY
+  // TEST SUITE 30: CLIENT REQUIREMENT — MATERIAL MASTER → DASHBOARD MATRIX SYNCHRONIZATION
+  // Tests 1 to 7 matching the specification
   // ------------------------------------------------------------------
+  console.log('\n--- TEST SUITE 30: Material Master -> Dashboard Matrix Synchronization ---');
+
+  // Baseline items setup
+  const baseItems: MatrixInventoryItem[] = JSON.parse(JSON.stringify(INITIAL_MATRIX_ITEMS));
+
+  // ==================================================================
+  // TEST 1 — EXISTING MATERIAL NEW WIDTH
+  // Existing: Backlit Sunlex / 1.63
+  // Add: Backlit Sunlex / 2.20
+  // EXPECTED:
+  // No duplicate Backlit Sunlex row.
+  // 2.20 appears under the existing row.
+  // ==================================================================
+  console.log('\n>> Test 1: Existing Material + New Width');
+  const sunlex220: MatrixInventoryItem = {
+    id: 'test-sunlex-220',
+    materialName: 'Backlit Sunlex',
+    category: 'Backlit',
+    variantSize: '2.20',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'SUNLEX-2.20-50M',
+    openingStock: 0,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-10-23',
+    displayOrder: 10,
+    dashboardGroup: 'FLEX_ROLL'
+  };
+
+  const test1Items = [...baseItems, sunlex220];
+  const test1Calculated = calculateMatrixWithStock(test1Items, []);
+  const test1Tables = computeDashboardMatrixTables(test1Calculated, test1Items);
+
+  // Check rows: exactly one Backlit Sunlex row in flexRows
+  const sunlexRows = test1Tables.flexRows.filter((r) => r.materialName === 'Backlit Sunlex');
+  assert(
+    sunlexRows.length === 1,
+    `[Test 1] No duplicate Backlit Sunlex row created: exactly 1 row found (got ${sunlexRows.length})`
+  );
+
+  // Check columns: 2.20 width appears in flexWidths
+  assert(
+    test1Tables.flexWidths.includes('2.20'),
+    `[Test 1] 2.20 width column dynamically included in Flex matrix columns`
+  );
+
+  // Check cell: 2.20 cell exists under the existing row
+  const sunlexRow = sunlexRows[0];
+  assert(
+    sunlexRow.cells['2.20'] !== undefined && sunlexRow.cells['2.20']?.variantSize === '2.20',
+    `[Test 1] 2.20 column is populated under existing Backlit Sunlex row`
+  );
+
+  // ==================================================================
+  // TEST 2 — NEW MATERIAL ORDER
+  // Existing: Material A order 10, Material B order 20
+  // Create: Material New order 15
+  // EXPECTED Dashboard: Material A, Material New, Material B
+  // NOT: Material A, Material B, Material New
+  // ==================================================================
+  console.log('\n>> Test 2: New Material Order (Deterministic Placement)');
+  const matA: MatrixInventoryItem = {
+    id: 'mat-a-163',
+    materialName: 'Material A Alpha',
+    category: 'Backlit',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'MAT-A-1.63',
+    openingStock: 0,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-10-20',
+    displayOrder: 10,
+    dashboardGroup: 'FLEX_ROLL'
+  };
+  const matB: MatrixInventoryItem = {
+    id: 'mat-b-163',
+    materialName: 'Material B Beta',
+    category: 'Backlit',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'MAT-B-1.63',
+    openingStock: 0,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-10-21',
+    displayOrder: 20,
+    dashboardGroup: 'FLEX_ROLL'
+  };
+  const matNew: MatrixInventoryItem = {
+    id: 'mat-new-163',
+    materialName: 'Material New Gamma',
+    category: 'Backlit',
+    variantSize: '1.63',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'MAT-NEW-1.63',
+    openingStock: 0,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-10-23', // Created LATER than A and B
+    displayOrder: 15, // Display order placed between 10 and 20
+    dashboardGroup: 'FLEX_ROLL'
+  };
+
+  const test2Items = [matA, matB, matNew]; // Even though appended at array end
+  const test2Calculated = calculateMatrixWithStock(test2Items, []);
+  const test2Tables = computeDashboardMatrixTables(test2Calculated, test2Items);
+
+  const idxA = test2Tables.flexMaterials.indexOf('Material A Alpha');
+  const idxNew = test2Tables.flexMaterials.indexOf('Material New Gamma');
+  const idxB = test2Tables.flexMaterials.indexOf('Material B Beta');
+
+  assert(
+    idxA < idxNew && idxNew < idxB,
+    `[Test 2] Material New (order 15) placed between Material A (order 10) and Material B (order 20): ` +
+    `indices [${idxA}, ${idxNew}, ${idxB}]`
+  );
+  assert(
+    idxNew !== test2Tables.flexMaterials.length - 1,
+    `[Test 2] Material New is NOT appended at global bottom of Dashboard`
+  );
+
+  // ==================================================================
+  // TEST 3 — EDIT ORDER
+  // Change: Material B: 20 -> 5
+  // EXPECTED: Material B automatically moves before Material A.
+  // ==================================================================
+  console.log('\n>> Test 3: Edit Order (Row Repositioning)');
+  const matBEdited: MatrixInventoryItem = {
+    ...matB,
+    displayOrder: 5 // Changed from 20 to 5
+  };
+
+  const test3Items = [matA, matBEdited, matNew];
+  const test3Calculated = calculateMatrixWithStock(test3Items, []);
+  const test3Tables = computeDashboardMatrixTables(test3Calculated, test3Items);
+
+  const idxBAfterEdit = test3Tables.flexMaterials.indexOf('Material B Beta');
+  const idxAAfterEdit = test3Tables.flexMaterials.indexOf('Material A Alpha');
+  const idxNewAfterEdit = test3Tables.flexMaterials.indexOf('Material New Gamma');
+
+  assert(
+    idxBAfterEdit < idxAAfterEdit && idxAAfterEdit < idxNewAfterEdit,
+    `[Test 3] Material B (changed to order 5) moved before Material A (10) and Material New (15): ` +
+    `order is [B: ${idxBAfterEdit}, A: ${idxAAfterEdit}, New: ${idxNewAfterEdit}]`
+  );
+
+  // ==================================================================
+  // TEST 4 — CHANGE GROUP
+  // Change a QA material from: FLEX_BACKLIT to: VINYL_LAMINATION
+  // EXPECTED:
+  // Disappears from Flex matrix and appears in Vinyl/Lamination matrix in correct position.
+  // No duplicate.
+  // ==================================================================
+  console.log('\n>> Test 4: Change Category / Dashboard Group');
+  const qaMaterialFlex: MatrixInventoryItem = {
+    id: 'qa-hybrid-01',
+    materialName: 'QA Hybrid Film',
+    category: 'Flex PVC',
+    variantSize: '1.27',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'QA-HYB-1.27',
+    openingStock: 0,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-10-23',
+    displayOrder: 15,
+    dashboardGroup: 'FLEX_ROLL'
+  };
+
+  // Initially in Flex
+  const test4InitialItems = [...baseItems, qaMaterialFlex];
+  const test4InitialTables = computeDashboardMatrixTables(calculateMatrixWithStock(test4InitialItems, []), test4InitialItems);
+  assert(
+    test4InitialTables.flexMaterials.includes('QA Hybrid Film'),
+    `[Test 4] QA Hybrid Film initially present in Flex matrix`
+  );
+  assert(
+    !test4InitialTables.vinylMaterials.includes('QA Hybrid Film'),
+    `[Test 4] QA Hybrid Film initially absent from Vinyl matrix`
+  );
+
+  // Move to VINYL_ROLL
+  const qaMaterialVinyl: MatrixInventoryItem = {
+    ...qaMaterialFlex,
+    category: 'Self Adhesive Vinyl',
+    dashboardGroup: 'VINYL_ROLL',
+    displayOrder: 25
+  };
+  const test4MovedItems = [...baseItems, qaMaterialVinyl];
+  const test4MovedTables = computeDashboardMatrixTables(calculateMatrixWithStock(test4MovedItems, []), test4MovedItems);
+
+  assert(
+    !test4MovedTables.flexMaterials.includes('QA Hybrid Film'),
+    `[Test 4] QA Hybrid Film completely removed from Flex matrix`
+  );
+  assert(
+    test4MovedTables.vinylMaterials.includes('QA Hybrid Film'),
+    `[Test 4] QA Hybrid Film appears in Vinyl matrix in correct position`
+  );
+  const totalOccurrences =
+    test4MovedTables.flexRows.filter((r) => r.materialName === 'QA Hybrid Film').length +
+    test4MovedTables.vinylRows.filter((r) => r.materialName === 'QA Hybrid Film').length;
+  assert(
+    totalOccurrences === 1,
+    `[Test 4] Exactly 1 occurrence exists across all matrices (no duplicate): got ${totalOccurrences}`
+  );
+
+  // ==================================================================
+  // TEST 5 — CROSS-BROWSER SYNCHRONIZATION
+  // Browser A: create/update material ordering
+  // Browser B: refresh
+  // EXPECTED: identical Dashboard structure and order
+  // ==================================================================
+  console.log('\n>> Test 5: Cross-Browser Remote Synchronization');
+  // Browser A saves updated catalog with custom display orders
+  const catalogForBrowserA: MatrixInventoryItem[] = [
+    ...baseItems,
+    {
+      id: 'custom-cross-sync-01',
+      materialName: 'Synced Star Flex',
+      category: 'Flex PVC',
+      variantSize: '1.63',
+      rollLengthMtr: 50,
+      unit: 'Rolls',
+      barcode: 'SYNCED-1.63-50M',
+      openingStock: 0,
+      minStock: 2,
+      active: true,
+      createdAt: '2026-10-23',
+      displayOrder: 12, // Custom order between 10 and 20
+      dashboardGroup: 'FLEX_ROLL'
+    }
+  ];
+
+  // Test Live Supabase Remote Persistence & Cross-Browser Synchronization
+  let remoteSavePassed = false;
+  let fetchedForBrowserB: MatrixInventoryItem[] | null = null;
+
+  try {
+    const envPath = path.resolve(process.cwd(), '.env.local');
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, 'utf-8');
+      const envLocal: Record<string, string> = {};
+      for (const line of content.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const idx = trimmed.indexOf('=');
+        if (idx !== -1) envLocal[trimmed.substring(0, idx).trim()] = trimmed.substring(idx + 1).trim();
+      }
+      if (envLocal.VITE_SUPABASE_URL && envLocal.VITE_SUPABASE_ANON_KEY) {
+        const { createClient } = await import('@supabase/supabase-js');
+        const testClient = createClient(envLocal.VITE_SUPABASE_URL, envLocal.VITE_SUPABASE_ANON_KEY);
+        const { data: staffLogin } = await testClient.auth.signInWithPassword({
+          email: 'staff@rollprint.com',
+          password: 'RollPrintStaff2026!'
+        });
+        if (staffLogin?.user) {
+          const { error: updErr } = await testClient.auth.updateUser({
+            data: { material_catalog: catalogForBrowserA }
+          });
+          remoteSavePassed = !updErr;
+          const { data: getUserData } = await testClient.auth.getUser();
+          const remoteCatalog = getUserData?.user?.user_metadata?.material_catalog;
+          if (Array.isArray(remoteCatalog) && remoteCatalog.length >= catalogForBrowserA.length) {
+            fetchedForBrowserB = remoteCatalog;
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Test 5 live Supabase check error:', err);
+  }
+
+  assert(
+    remoteSavePassed,
+    `[Test 5] Browser A persists material catalog remotely to Supabase without errors`
+  );
+
+  // Browser B fetches remote catalog on refresh
+  assert(
+    fetchedForBrowserB !== null && fetchedForBrowserB.length >= catalogForBrowserA.length,
+    `[Test 5] Browser B receives remote authoritative catalog from Supabase`
+  );
+
+  if (fetchedForBrowserB) {
+    const tablesBrowserA = computeDashboardMatrixTables(calculateMatrixWithStock(catalogForBrowserA, []), catalogForBrowserA);
+    const tablesBrowserB = computeDashboardMatrixTables(calculateMatrixWithStock(fetchedForBrowserB, []), fetchedForBrowserB);
+
+    assert(
+      tablesBrowserB.flexMaterials.includes('Synced Star Flex'),
+      `[Test 5] Browser B matrix includes newly added material from Browser A`
+    );
+    assert(
+      tablesBrowserA.flexMaterials.indexOf('Synced Star Flex') === tablesBrowserB.flexMaterials.indexOf('Synced Star Flex'),
+      `[Test 5] Browser A and Browser B produce IDENTICAL row placement order for Synced Star Flex`
+    );
+  }
+
+  // ==================================================================
+  // TEST 6 — STOCK IN MAPPING
+  // Stock IN 3 physical rolls against newly created material variant.
+  // EXPECTED:
+  // correct Dashboard row + correct width column = 3 Rolls
+  // No new row appended elsewhere.
+  // ==================================================================
+  console.log('\n>> Test 6: Stock IN Mapping to Existing Dashboard Row');
+  const targetMaterialName = 'Backlit Sunlex';
+  const targetWidth = '2.20';
+
+  // Create 3 physical rolls in stock for Backlit Sunlex 2.20
+  const stockInRolls: InventoryRoll[] = [
+    {
+      id: 'roll-sync-01',
+      rollBarcode: '231026TEST01-R01',
+      rollNumber: 1,
+      batchNumber: '231026TEST01',
+      invoiceNumber: 'TEST01',
+      materialName: targetMaterialName,
+      category: 'Backlit',
+      size: targetWidth,
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-23',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z'
+    },
+    {
+      id: 'roll-sync-02',
+      rollBarcode: '231026TEST01-R02',
+      rollNumber: 2,
+      batchNumber: '231026TEST01',
+      invoiceNumber: 'TEST01',
+      materialName: targetMaterialName,
+      category: 'Backlit',
+      size: targetWidth,
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-23',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z'
+    },
+    {
+      id: 'roll-sync-03',
+      rollBarcode: '231026TEST01-R03',
+      rollNumber: 3,
+      batchNumber: '231026TEST01',
+      invoiceNumber: 'TEST01',
+      materialName: targetMaterialName,
+      category: 'Backlit',
+      size: targetWidth,
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-23',
+      createdAt: '2026-10-23T00:00:00Z',
+      updatedAt: '2026-10-23T00:00:00Z'
+    }
+  ];
+
+  const test6Calculated = calculateMatrixWithStock(test1Items, [], stockInRolls);
+  const test6Tables = computeDashboardMatrixTables(test6Calculated, test1Items);
+
+  const sunlexTest6Row = test6Tables.flexRows.find((r) => r.materialName === targetMaterialName);
+  assert(
+    sunlexTest6Row !== undefined,
+    `[Test 6] Backlit Sunlex row exists in Flex matrix`
+  );
+  assert(
+    sunlexTest6Row?.cells[targetWidth]?.currentStock === 3,
+    `[Test 6] Backlit Sunlex [${targetWidth}] cell displays exactly 3 Rolls (got ${sunlexTest6Row?.cells[targetWidth]?.currentStock})`
+  );
+  assert(
+    test6Tables.flexRows.filter((r) => r.materialName === targetMaterialName).length === 1,
+    `[Test 6] No duplicate Backlit Sunlex row was created anywhere in Dashboard`
+  );
+
+  // ==================================================================
+  // TEST 7 — STOCK OUT MAPPING & POSITION STABILITY
+  // Stock OUT one of those rolls.
+  // EXPECTED:
+  // same Dashboard row/column changes: 3 -> 2
+  // Position does not change.
+  // ==================================================================
+  console.log('\n>> Test 7: Stock OUT Mapping & Deterministic Row Position Stability');
+  const sunlexPosBefore = test6Tables.flexMaterials.indexOf(targetMaterialName);
+
+  // Transition roll 1 to OUT
+  const stockAfterOutRolls: InventoryRoll[] = stockInRolls.map((r, idx) =>
+    idx === 0
+      ? { ...r, status: 'OUT' as const, stockOutInvoiceNumber: 'DS/26-27/999', stockOutDate: '2026-10-23' }
+      : r
+  );
+
+  const test7Calculated = calculateMatrixWithStock(test1Items, [], stockAfterOutRolls);
+  const test7Tables = computeDashboardMatrixTables(test7Calculated, test1Items);
+
+  const sunlexTest7Row = test7Tables.flexRows.find((r) => r.materialName === targetMaterialName);
+  const sunlexPosAfter = test7Tables.flexMaterials.indexOf(targetMaterialName);
+
+  assert(
+    sunlexTest7Row?.cells[targetWidth]?.currentStock === 2,
+    `[Test 7] Stock OUT of 1 roll updates cell value: 3 -> 2 Rolls (got ${sunlexTest7Row?.cells[targetWidth]?.currentStock})`
+  );
+  assert(
+    sunlexPosBefore === sunlexPosAfter,
+    `[Test 7] Dashboard row position does NOT move when stock changes: position before=${sunlexPosBefore}, after=${sunlexPosAfter}`
+  );
+
+  // ==================================================================
+  // RULE 10 — ZERO STOCK PERSISTENCE
+  // Active material with 0 rolls remains visible in its matrix.
+  // ==================================================================
+  console.log('\n>> Rule 10: Zero Stock Material Visibility');
+  const zeroStockRolls: InventoryRoll[] = [];
+  const testZeroStockCalculated = calculateMatrixWithStock(test1Items, [], zeroStockRolls);
+  const testZeroStockTables = computeDashboardMatrixTables(testZeroStockCalculated, test1Items);
+
+  assert(
+    testZeroStockTables.flexMaterials.includes(targetMaterialName),
+    `[Rule 10] Material '${targetMaterialName}' remains visible in matrix even when stock reaches 0 rolls`
+  );
   console.log('\n====================================================');
   console.log(`QA TEST RESULTS: ${testsPassed} PASSED, ${testsFailed} FAILED`);
   console.log('====================================================');

@@ -58,7 +58,11 @@ import {
   normalizeInvoiceForBatch,
   getStoredMatrixBatches,
   saveStoredMatrixBatches,
-  findBatchesByBatchOrBarcode
+  findBatchesByBatchOrBarcode,
+  getMaterialRowDisplayOrder,
+  normalizeSummaryGroup,
+  fetchMaterialsFromSupabase,
+  saveMaterialsToSupabase
 } from './data/inventoryStore';
 import {
   InventoryRoll,
@@ -155,17 +159,18 @@ export default function App() {
   const [staffSession, setStaffSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured());
 
-  // Revalidate all operational inventory data from remote Supabase (Rolls, Batches, Transactions)
+  // Revalidate all operational inventory data from remote Supabase (Materials, Rolls, Batches, Transactions)
   const revalidateRemoteInventory = useCallback(async () => {
     if (!isSupabaseConfigured()) {
       setIsInventoryLoading(false);
       return;
     }
     try {
-      const [remoteRolls, remoteTxns, remoteBatches] = await Promise.all([
+      const [remoteRolls, remoteTxns, remoteBatches, remoteMaterials] = await Promise.all([
         fetchRollsFromSupabase(),
         fetchTransactionsFromSupabase(),
-        fetchBatchesFromSupabase()
+        fetchBatchesFromSupabase(),
+        fetchMaterialsFromSupabase()
       ]);
       if (remoteRolls !== null) {
         setInventoryRolls(remoteRolls);
@@ -178,6 +183,10 @@ export default function App() {
       if (remoteBatches !== null) {
         setBatches(remoteBatches);
         saveStoredMatrixBatches(remoteBatches);
+      }
+      if (remoteMaterials !== null && remoteMaterials.length > 0) {
+        setItems(remoteMaterials);
+        saveStoredMatrixItems(remoteMaterials);
       }
     } finally {
       setIsInventoryLoading(false);
@@ -202,19 +211,34 @@ export default function App() {
     }
   }, []);
 
-  // Synchronize inventory rolls, batches, and transactions from remote Supabase on initial load and when staff logs in
+  // Synchronize inventory from remote Supabase on initial load and when staff logs in
   useEffect(() => {
     if (staffSession || !isSupabaseConfigured()) {
       revalidateRemoteInventory();
     }
   }, [staffSession, revalidateRemoteInventory]);
 
-  // Re-sync inventory when user opens the Transactions tab
+  // Re-sync inventory when user opens Dashboard, Materials Master, or Transactions tab
   useEffect(() => {
-    if (activeTab === 'transactions' && isSupabaseConfigured() && staffSession) {
+    if (
+      (activeTab === 'dashboard' || activeTab === 'materials' || activeTab === 'transactions') &&
+      isSupabaseConfigured() &&
+      staffSession
+    ) {
       revalidateRemoteInventory();
     }
   }, [activeTab, staffSession, revalidateRemoteInventory]);
+
+  // Cross-browser synchronization: Re-validate when user returns/focuses the window
+  useEffect(() => {
+    const handleFocus = () => {
+      if (isSupabaseConfigured() && staffSession) {
+        revalidateRemoteInventory();
+      }
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [staffSession, revalidateRemoteInventory]);
 
   // Distinct Material Names (displays ONLY material names in dropdowns)
   const uniqueMaterialNames = useMemo(() => {
@@ -1595,6 +1619,8 @@ export default function App() {
   const [editingItem, setEditingItem] = useState<MatrixInventoryItem | null>(null);
   const [itemFormMaterial, setItemFormMaterial] = useState<string>('');
   const [itemFormCategory, setItemFormCategory] = useState<string>('Flex PVC');
+  const [itemFormGroup, setItemFormGroup] = useState<InventorySummaryGroup>('FLEX_ROLL');
+  const [itemFormDisplayOrder, setItemFormDisplayOrder] = useState<string>('100');
   const [itemFormSize, setItemFormSize] = useState<string>('');
   const [itemFormRollLength, setItemFormRollLength] = useState<string>('70');
   const [itemFormError, setItemFormError] = useState<string>('');
@@ -1603,6 +1629,13 @@ export default function App() {
     setEditingItem(null);
     setItemFormMaterial('');
     setItemFormCategory('Flex PVC');
+    setItemFormGroup('FLEX_ROLL');
+    // Calculate default display order: highest order in FLEX_ROLL + 10, or 100
+    const flexOrders = items
+      .filter((i) => getItemSummaryGroup(i) === 'FLEX_ROLL' && typeof i.displayOrder === 'number')
+      .map((i) => i.displayOrder as number);
+    const maxOrder = flexOrders.length > 0 ? Math.max(...flexOrders) : 90;
+    setItemFormDisplayOrder(String(maxOrder + 10));
     setItemFormSize('');
     setItemFormRollLength('70');
     setItemFormError('');
@@ -1613,10 +1646,40 @@ export default function App() {
     setEditingItem(item);
     setItemFormMaterial(item.materialName);
     setItemFormCategory(item.category);
+    const group = item.summaryGroup || getItemSummaryGroup(item);
+    setItemFormGroup(group);
+    const order =
+      item.displayOrder !== undefined
+        ? item.displayOrder
+        : getMaterialRowDisplayOrder(item.materialName, items, group);
+    setItemFormDisplayOrder(String(order));
     setItemFormSize(item.variantSize);
     setItemFormRollLength(item.rollLengthMtr ? item.rollLengthMtr.toString() : '');
     setItemFormError('');
     setIsItemModalOpen(true);
+  };
+
+  const handleMaterialNameInputChange = (val: string) => {
+    setItemFormMaterial(val);
+    if (!editingItem && val.trim()) {
+      const match = items.find(
+        (i) => i.materialName.trim().toLowerCase() === val.trim().toLowerCase()
+      );
+      if (match) {
+        setItemFormCategory(match.category);
+        const g = match.summaryGroup || getItemSummaryGroup(match);
+        setItemFormGroup(g);
+        if (typeof match.displayOrder === 'number') {
+          setItemFormDisplayOrder(String(match.displayOrder));
+        }
+      }
+    }
+  };
+
+  const handleCategoryInputChange = (cat: string) => {
+    setItemFormCategory(cat);
+    const g = normalizeSummaryGroup(undefined, cat);
+    setItemFormGroup(g);
   };
 
   const handleSaveItemModal = (e: React.FormEvent) => {
@@ -1626,6 +1689,8 @@ export default function App() {
     const trimMaterial = itemFormMaterial.trim();
     const trimSize = normalizeNumericSize(itemFormSize.trim());
     const lenVal = normalizeNumericLength(itemFormRollLength);
+    const orderVal = parseInt(itemFormDisplayOrder, 10) || 100;
+    const groupVal = itemFormGroup || normalizeSummaryGroup(undefined, itemFormCategory);
 
     if (!trimMaterial || !trimSize) {
       setItemFormError('Material name and width/size are required.');
@@ -1653,38 +1718,83 @@ export default function App() {
     }
 
     if (editingItem) {
-      const updated = items.map((i) =>
-        i.id === editingItem.id
-          ? {
-              ...i,
-              materialName: trimMaterial,
-              category: itemFormCategory,
-              variantSize: trimSize,
-              rollLengthMtr: lenVal,
-              barcode
-            }
-          : i
-      );
+      const oldMaterialName = editingItem.materialName.trim().toLowerCase();
+      const updated = items.map((i) => {
+        if (i.id === editingItem.id) {
+          return {
+            ...i,
+            materialName: trimMaterial,
+            category: itemFormCategory,
+            summaryGroup: groupVal,
+            dashboardGroup: groupVal,
+            displayOrder: orderVal,
+            variantSize: trimSize,
+            rollLengthMtr: lenVal,
+            barcode
+          };
+        }
+        // Synchronize all existing variants of this material when name, category, displayOrder, or group changes
+        if (i.materialName.trim().toLowerCase() === oldMaterialName) {
+          return {
+            ...i,
+            materialName: trimMaterial,
+            category: itemFormCategory,
+            summaryGroup: groupVal,
+            dashboardGroup: groupVal,
+            displayOrder: orderVal
+          };
+        }
+        return i;
+      });
       setItems(updated);
       saveStoredMatrixItems(updated);
+      saveMaterialsToSupabase(updated);
       showNotification(`Updated item "${trimMaterial} (${trimSize}M - ${lenVal}M)".`);
     } else {
+      const existingSameMat = items.filter(
+        (i) => i.materialName.trim().toLowerCase() === trimMaterial.toLowerCase()
+      );
+      const finalOrder = itemFormDisplayOrder.trim()
+        ? orderVal
+        : existingSameMat.length > 0 && typeof existingSameMat[0].displayOrder === 'number'
+        ? existingSameMat[0].displayOrder
+        : getMaterialRowDisplayOrder(trimMaterial, items, groupVal);
+
       const newItem: MatrixInventoryItem = {
         id: `item-${Date.now()}`,
         materialName: trimMaterial,
         category: itemFormCategory,
+        summaryGroup: groupVal,
+        dashboardGroup: groupVal,
+        displayOrder: finalOrder,
         variantSize: trimSize,
         rollLengthMtr: lenVal,
-        unit: 'Rolls',
+        unit: groupVal === 'RIGID_PVC' ? 'Sheets' : 'Rolls',
         barcode,
         openingStock: 0,
         minStock: 0,
         active: true,
         createdAt: new Date().toISOString().split('T')[0]
       };
-      const updated = [newItem, ...items];
+      // Synchronize displayOrder and group across all variants of this material
+      const updated = [
+        newItem,
+        ...items.map((i) => {
+          if (i.materialName.trim().toLowerCase() === trimMaterial.toLowerCase()) {
+            return {
+              ...i,
+              category: itemFormCategory,
+              summaryGroup: groupVal,
+              dashboardGroup: groupVal,
+              displayOrder: finalOrder
+            };
+          }
+          return i;
+        })
+      ];
       setItems(updated);
       saveStoredMatrixItems(updated);
+      saveMaterialsToSupabase(updated);
       showNotification(`Added new item "${trimMaterial} (${trimSize}M - ${lenVal}M)".`);
     }
 
@@ -1699,11 +1809,13 @@ export default function App() {
           const updated = items.map((i) => (i.id === id ? { ...i, active: false } : i));
           setItems(updated);
           saveStoredMatrixItems(updated);
+          saveMaterialsToSupabase(updated);
           showNotification(`Item deactivated.`);
         } else {
           const updated = items.filter((i) => i.id !== id);
           setItems(updated);
           saveStoredMatrixItems(updated);
+          saveMaterialsToSupabase(updated);
           showNotification(`Item deleted.`);
         }
       }
@@ -1711,6 +1823,7 @@ export default function App() {
       const updated = items.map((i) => (i.id === id ? { ...i, active: true } : i));
       setItems(updated);
       saveStoredMatrixItems(updated);
+      saveMaterialsToSupabase(updated);
       showNotification(`Item reactivated.`);
     }
   };
@@ -1787,7 +1900,7 @@ export default function App() {
   };
 
   const displayedItems = useMemo(() => {
-    return itemsWithStock.filter((i) => {
+    const filtered = itemsWithStock.filter((i) => {
       if (!showInactive && !i.active && activeTab === 'materials') {
         return false;
       }
@@ -1803,7 +1916,27 @@ export default function App() {
       const matchesCategory = categoryFilter === 'ALL' || i.category === categoryFilter;
       return matchesSearch && matchesCategory;
     });
-  }, [itemsWithStock, searchQuery, categoryFilter, showInactive, activeTab]);
+
+    return filtered.sort((a, b) => {
+      const groupA = getItemSummaryGroup(a);
+      const groupB = getItemSummaryGroup(b);
+      const groupPriority: Record<string, number> = { FLEX_ROLL: 1, VINYL_ROLL: 2, RIGID_PVC: 3 };
+      const gOrder = (groupPriority[groupA] || 99) - (groupPriority[groupB] || 99);
+      if (gOrder !== 0) return gOrder;
+
+      const orderA = a.displayOrder ?? getMaterialRowDisplayOrder(a.materialName, items, groupA);
+      const orderB = b.displayOrder ?? getMaterialRowDisplayOrder(b.materialName, items, groupB);
+      if (orderA !== orderB) return orderA - orderB;
+
+      const nameDiff = a.materialName.localeCompare(b.materialName);
+      if (nameDiff !== 0) return nameDiff;
+
+      return (
+        (parseFloat(normalizeNumericSize(a.variantSize)) || 0) -
+        (parseFloat(normalizeNumericSize(b.variantSize)) || 0)
+      );
+    });
+  }, [itemsWithStock, items, searchQuery, categoryFilter, showInactive, activeTab]);
 
   const filteredTransactions = useMemo(() => {
     return transactions.filter((t) => {
@@ -1872,26 +2005,35 @@ export default function App() {
     // 1. Flex / Backlit Roll Materials
     const flexItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'FLEX_ROLL');
     const rawFlexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName)));
+    CLIENT_FLEX_MATERIALS_ORDER.forEach((m) => {
+      if (!rawFlexMaterials.includes(m)) rawFlexMaterials.push(m);
+    });
     const flexMaterials = rawFlexMaterials.sort((a, b) => {
-      const idxA = CLIENT_FLEX_MATERIALS_ORDER.indexOf(a);
-      const idxB = CLIENT_FLEX_MATERIALS_ORDER.indexOf(b);
-      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-      if (idxA !== -1) return -1;
-      if (idxB !== -1) return 1;
+      const orderA = getMaterialRowDisplayOrder(a, items, 'FLEX_ROLL');
+      const orderB = getMaterialRowDisplayOrder(b, items, 'FLEX_ROLL');
+      if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
     });
+
+    const flexWidths = Array.from(
+      new Set([
+        ...FLEX_SUMMARY_WIDTHS,
+        ...flexItems.map((i) => normalizeNumericSize(i.variantSize))
+      ])
+    ).sort((a, b) => parseFloat(a) - parseFloat(b));
 
     const flexRows = flexMaterials.map((matName) => {
       const matItems = flexItems.filter((i) => i.materialName === matName);
       const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
       matItems.forEach((i) => {
-        cells[i.variantSize] = i;
+        cells[normalizeNumericSize(i.variantSize)] = i;
       });
       const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
       const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
       return {
         materialName: matName,
         category: matItems[0]?.category || 'Flex PVC',
+        displayOrder: getMaterialRowDisplayOrder(matName, items, 'FLEX_ROLL'),
         cells,
         totalRolls: rowTotalRolls,
         totalAreaMtr2: rowTotalArea
@@ -1900,7 +2042,7 @@ export default function App() {
 
     // Flex column totals
     const flexColTotals: { [width: string]: number } = {};
-    FLEX_SUMMARY_WIDTHS.forEach((w) => {
+    flexWidths.forEach((w) => {
       flexColTotals[w] = flexRows.reduce((sum, row) => sum + (row.cells[w]?.currentStock || 0), 0);
     });
     const flexGrandTotalRolls = flexRows.reduce((sum, r) => sum + r.totalRolls, 0);
@@ -1914,25 +2056,31 @@ export default function App() {
       if (!rawVinylMaterials.includes(m)) rawVinylMaterials.push(m);
     });
     const vinylMaterials = rawVinylMaterials.sort((a, b) => {
-      const idxA = CLIENT_VINYL_MATERIALS_ORDER.indexOf(a);
-      const idxB = CLIENT_VINYL_MATERIALS_ORDER.indexOf(b);
-      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
-      if (idxA !== -1) return -1;
-      if (idxB !== -1) return 1;
+      const orderA = getMaterialRowDisplayOrder(a, items, 'VINYL_ROLL');
+      const orderB = getMaterialRowDisplayOrder(b, items, 'VINYL_ROLL');
+      if (orderA !== orderB) return orderA - orderB;
       return a.localeCompare(b);
     });
+
+    const vinylWidths = Array.from(
+      new Set([
+        ...VINYL_SUMMARY_WIDTHS,
+        ...vinylItems.map((i) => normalizeNumericSize(i.variantSize))
+      ])
+    ).sort((a, b) => parseFloat(a) - parseFloat(b));
 
     const vinylRows = vinylMaterials.map((matName) => {
       const matItems = vinylItems.filter((i) => i.materialName === matName);
       const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
       matItems.forEach((i) => {
-        cells[i.variantSize] = i;
+        cells[normalizeNumericSize(i.variantSize)] = i;
       });
       const rowTotalRolls = matItems.reduce((sum, i) => sum + i.currentStock, 0);
       const rowTotalArea = Number(matItems.reduce((sum, i) => sum + i.totalAreaMtr2, 0).toFixed(2));
       return {
         materialName: matName,
         category: matItems[0]?.category || 'Self Adhesive Vinyl',
+        displayOrder: getMaterialRowDisplayOrder(matName, items, 'VINYL_ROLL'),
         cells,
         totalRolls: rowTotalRolls,
         totalAreaMtr2: rowTotalArea
@@ -1941,7 +2089,7 @@ export default function App() {
 
     // Vinyl column totals
     const vinylColTotals: { [width: string]: number } = {};
-    VINYL_SUMMARY_WIDTHS.forEach((w) => {
+    vinylWidths.forEach((w) => {
       vinylColTotals[w] = vinylRows.reduce((sum, row) => sum + (row.cells[w]?.currentStock || 0), 0);
     });
     const vinylGrandTotalRolls = vinylRows.reduce((sum, r) => sum + r.totalRolls, 0);
@@ -1978,10 +2126,12 @@ export default function App() {
 
     return {
       flexRows,
+      flexWidths,
       flexColTotals,
       flexGrandTotalRolls,
       flexGrandTotalArea,
       vinylRows,
+      vinylWidths,
       vinylColTotals,
       vinylGrandTotalRolls,
       vinylGrandTotalArea,
@@ -1991,7 +2141,7 @@ export default function App() {
       pvcGrandTotalArea,
       hasPvc: pvcItems.length > 0
     };
-  }, [itemsWithStock]);
+  }, [itemsWithStock, items]);
 
   const handleResetSampleData = () => {
     if (window.confirm('Reset inventory and transaction history to the baseline client blueprint dataset?')) {
@@ -2542,7 +2692,7 @@ export default function App() {
                         </h3>
                       </div>
                       <span className="text-[11px] text-slate-500 font-mono">
-                        Width Columns: 1.02 &bull; 1.32 &bull; 1.63 &bull; 1.93 &bull; 2.20 &bull; 2.54 &bull; 3.20 M
+                        Width Columns: {summaryTablesData.flexWidths.join(' • ')} M
                       </span>
                     </div>
 
@@ -2554,7 +2704,7 @@ export default function App() {
                               <th className="py-2.5 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
                                 Material
                               </th>
-                              {FLEX_SUMMARY_WIDTHS.map((width) => (
+                              {summaryTablesData.flexWidths.map((width) => (
                                 <th
                                   key={width}
                                   className="py-2.5 px-3 min-w-[65px] border-r border-slate-800 font-mono text-indigo-200"
@@ -2582,7 +2732,7 @@ export default function App() {
                                   </div>
                                 </td>
 
-                                {FLEX_SUMMARY_WIDTHS.map((width) => {
+                                {summaryTablesData.flexWidths.map((width) => {
                                   const existingItem = row.cells[width];
                                   const item = existingItem || {
                                     id: `flex-${row.materialName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${width}`,
@@ -2652,7 +2802,7 @@ export default function App() {
                               <td className="py-2.5 px-4 font-black text-slate-900 sticky left-0 bg-slate-100 border-r border-slate-300 z-10 uppercase tracking-wider text-[11px]">
                                 Total Rolls
                               </td>
-                              {FLEX_SUMMARY_WIDTHS.map((width) => (
+                              {summaryTablesData.flexWidths.map((width) => (
                                 <td
                                   key={width}
                                   className="py-2.5 px-3 text-center font-mono font-black text-indigo-950 border-r border-slate-300 bg-indigo-50/50"
@@ -2683,7 +2833,7 @@ export default function App() {
                         </h3>
                       </div>
                       <span className="text-[11px] text-slate-500 font-mono">
-                        Width Columns: 0.94 &bull; 0.98 &bull; 1.02 &bull; 1.06 &bull; 1.27 &bull; 1.52 &bull; 1.37 M
+                        Width Columns: {summaryTablesData.vinylWidths.join(' • ')} M
                       </span>
                     </div>
 
@@ -2695,7 +2845,7 @@ export default function App() {
                               <th className="py-2.5 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
                                 Material
                               </th>
-                              {VINYL_SUMMARY_WIDTHS.map((width) => (
+                              {summaryTablesData.vinylWidths.map((width) => (
                                 <th
                                   key={width}
                                   className="py-2.5 px-3 min-w-[65px] border-r border-slate-800 font-mono text-emerald-200"
@@ -2723,7 +2873,7 @@ export default function App() {
                                   </div>
                                 </td>
 
-                                {VINYL_SUMMARY_WIDTHS.map((width) => {
+                                {summaryTablesData.vinylWidths.map((width) => {
                                   const existingItem = row.cells[width];
                                   const item = existingItem || {
                                     id: `vinyl-${row.materialName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${width}`,
@@ -2807,7 +2957,7 @@ export default function App() {
                               <td className="py-2.5 px-4 font-black text-slate-900 sticky left-0 bg-slate-100 border-r border-slate-300 z-10 uppercase tracking-wider text-[11px]">
                                 Total Rolls
                               </td>
-                              {VINYL_SUMMARY_WIDTHS.map((width) => (
+                              {summaryTablesData.vinylWidths.map((width) => (
                                 <td
                                   key={width}
                                   className="py-2.5 px-3 text-center font-mono font-black text-emerald-950 border-r border-slate-300 bg-emerald-50/50"
@@ -3077,6 +3227,8 @@ export default function App() {
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
                       <th className="py-3 px-4">Material Name</th>
+                      <th className="py-3 px-3">Group</th>
+                      <th className="py-3 px-2 text-center">Order</th>
                       <th className="py-3 px-4">Category</th>
                       <th className="py-3 px-4">Width (M)</th>
                       <th className="py-3 px-4">Roll Length (M)</th>
@@ -3102,6 +3254,31 @@ export default function App() {
                               Inactive
                             </span>
                           )}
+                        </td>
+                        <td className="py-3 px-3">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-semibold ${
+                              (item.dashboardGroup || getItemSummaryGroup(item)) === 'FLEX_ROLL'
+                                ? 'bg-indigo-50 text-indigo-700 border border-indigo-200'
+                                : (item.dashboardGroup || getItemSummaryGroup(item)) === 'VINYL_ROLL'
+                                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                : 'bg-amber-50 text-amber-700 border border-amber-200'
+                            }`}
+                          >
+                            {(item.dashboardGroup || getItemSummaryGroup(item)) === 'FLEX_ROLL'
+                              ? 'Flex/Backlit'
+                              : (item.dashboardGroup || getItemSummaryGroup(item)) === 'VINYL_ROLL'
+                              ? 'Vinyl/Lam'
+                              : 'PVC/Rigid'}
+                          </span>
+                        </td>
+                        <td className="py-3 px-2 text-center font-mono font-bold text-indigo-600">
+                          {item.displayOrder ??
+                            getMaterialRowDisplayOrder(
+                              item.materialName,
+                              items,
+                              item.dashboardGroup || getItemSummaryGroup(item)
+                            )}
                         </td>
                         <td className="py-3 px-4 text-slate-600">{item.category}</td>
                         <td className="py-3 px-4 font-mono font-medium text-slate-800">{item.variantSize} M</td>
@@ -4095,7 +4272,7 @@ export default function App() {
                   required
                   placeholder="e.g. Active"
                   value={itemFormMaterial}
-                  onChange={(e) => setItemFormMaterial(e.target.value)}
+                  onChange={(e) => handleMaterialNameInputChange(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
                 />
               </div>
@@ -4104,7 +4281,7 @@ export default function App() {
                 <label className="block text-slate-700 font-semibold mb-1">Category *</label>
                 <select
                   value={itemFormCategory}
-                  onChange={(e) => setItemFormCategory(e.target.value)}
+                  onChange={(e) => handleCategoryInputChange(e.target.value)}
                   className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900"
                 >
                   <option value="Flex PVC">Flex PVC</option>
@@ -4113,6 +4290,35 @@ export default function App() {
                   <option value="Self Adhesive Vinyl">Self Adhesive Vinyl</option>
                   <option value="Lamination Film">Lamination Film</option>
                 </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Dashboard Group *</label>
+                  <select
+                    value={itemFormGroup}
+                    onChange={(e) => setItemFormGroup(e.target.value as InventorySummaryGroup)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold text-xs"
+                  >
+                    <option value="FLEX_ROLL">1. Flex / Backlit</option>
+                    <option value="VINYL_ROLL">2. Vinyl / Lamination</option>
+                    <option value="RIGID_PVC">3. PVC / Rigid Sheet</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Display Order *</label>
+                  <input
+                    type="number"
+                    step="1"
+                    required
+                    placeholder="e.g. 10, 20, 35"
+                    value={itemFormDisplayOrder}
+                    onChange={(e) => setItemFormDisplayOrder(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono font-bold text-xs"
+                  />
+                  <span className="text-[10px] text-slate-400">Controls row position (e.g. 10, 15, 20)</span>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">

@@ -12,29 +12,6 @@ function getEnv(key: string): string {
       return process.env[key] || '';
     }
   } catch {}
-  // Node / test environment fallback: read .env.local dynamically
-  try {
-    const g = globalThis as any;
-    if (g && g.process?.versions?.node) {
-      const req = g.require || (typeof module !== 'undefined' ? (module as any).require : null);
-      if (req) {
-        const fs = req('fs');
-        const path = req('path');
-        const envPath = path.resolve(g.process.cwd(), '.env.local');
-        if (fs.existsSync(envPath)) {
-          const content = fs.readFileSync(envPath, 'utf-8');
-          for (const line of content.split('\n')) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith('#')) continue;
-            const idx = trimmed.indexOf('=');
-            if (idx !== -1 && trimmed.substring(0, idx).trim() === key) {
-              return trimmed.substring(idx + 1).trim();
-            }
-          }
-        }
-      }
-    }
-  } catch {}
   return '';
 }
 
