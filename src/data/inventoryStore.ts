@@ -1137,6 +1137,21 @@ export function computeDashboardMatrixTables(
     const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
     matItems.forEach((i) => {
       cells[normalizeNumericSize(i.variantSize)] = i;
+      cells[i.variantSize.trim()] = i;
+    });
+    flexWidths.forEach((w) => {
+      if (!cells[w]) {
+        const targetNum = parseFloat(w);
+        const matched = matItems.find((i) => {
+          const itemNum = parseFloat(i.variantSize);
+          return (!isNaN(targetNum) && !isNaN(itemNum) && Math.abs(itemNum - targetNum) < 0.005) ||
+            normalizeNumericSize(i.variantSize) === normalizeNumericSize(w) ||
+            i.variantSize.trim() === w.trim();
+        });
+        if (matched) {
+          cells[w] = matched;
+        }
+      }
     });
     // Calculate total ONLY from the visible columns
     const rowTotalRolls = flexWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
@@ -1167,6 +1182,21 @@ export function computeDashboardMatrixTables(
     const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
     matItems.forEach((i) => {
       cells[normalizeNumericSize(i.variantSize)] = i;
+      cells[i.variantSize.trim()] = i;
+    });
+    vinylWidths.forEach((w) => {
+      if (!cells[w]) {
+        const targetNum = parseFloat(w);
+        const matched = matItems.find((i) => {
+          const itemNum = parseFloat(i.variantSize);
+          return (!isNaN(targetNum) && !isNaN(itemNum) && Math.abs(itemNum - targetNum) < 0.005) ||
+            normalizeNumericSize(i.variantSize) === normalizeNumericSize(w) ||
+            i.variantSize.trim() === w.trim();
+        });
+        if (matched) {
+          cells[w] = matched;
+        }
+      }
     });
     const rowTotalRolls = vinylWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
     const rowTotalArea = Number(vinylWidths.reduce((sum, w) => sum + (cells[w]?.totalAreaMtr2 || 0), 0).toFixed(2));

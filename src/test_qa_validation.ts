@@ -2869,6 +2869,53 @@ await (async () => {
     `[Test Suite 31.5] Grand total strictly excludes 2.20 roll stock: grand total is 2 rolls (got ${visibleGrandTotalRolls})`
   );
 
+  // 6. Test Suite 31.6: Width matching for decimal roll sizes (e.g. "3.2" matching "3.20" column)
+  const tufanEcoMat: MatrixInventoryItem = {
+    id: 'mat-tufan-eco-32',
+    materialName: 'Tufan Eco',
+    category: 'Flex PVC',
+    variantSize: '3.2', // entered as 3.2
+    rollLengthMtr: 70,
+    unit: 'Rolls',
+    barcode: 'TUFAN-ECO-3.2-70M',
+    openingStock: 0,
+    minStock: 2,
+    active: true,
+    createdAt: '2026-10-24',
+    displayOrder: 6,
+    dashboardGroup: 'FLEX_ROLL'
+  };
+
+  const tufanRolls: InventoryRoll[] = Array.from({ length: 10 }, (_, i) => ({
+    id: `tufan-roll-${i + 1}`,
+    rollBarcode: `TUFAN-R0${i + 1}`,
+    rollNumber: i + 1,
+    batchNumber: '241026TUFAN01',
+    invoiceNumber: 'INV-TUFAN-01',
+    materialName: 'Tufan Eco',
+    category: 'Flex PVC',
+    size: '3.2',
+    rollLength: 70,
+    status: 'IN_STOCK',
+    receivedDate: '2026-10-24',
+    createdAt: '2026-10-24T00:00:00.000Z',
+    updatedAt: '2026-10-24T00:00:00.000Z'
+  }));
+
+  const tufanCalc = calculateMatrixWithStock([tufanEcoMat], [], tufanRolls);
+  const tufanTables = computeDashboardMatrixTables(tufanCalc, [tufanEcoMat]);
+  const tufanRow = tufanTables.flexRows.find((r) => r.materialName === 'Tufan Eco');
+
+  assert(!!tufanRow, '[Test Suite 31.6] Tufan Eco row exists in flex matrix');
+  assert(
+    tufanRow?.cells['3.20']?.currentStock === 10,
+    `[Test Suite 31.6] Tufan Eco entered with width '3.2' matches '3.20' column with 10 rolls (got ${tufanRow?.cells['3.20']?.currentStock})`
+  );
+  assert(
+    tufanRow?.totalRolls === 10,
+    `[Test Suite 31.6] Tufan Eco row total correctly calculates 10 rolls (got ${tufanRow?.totalRolls})`
+  );
+
   console.log('\n====================================================');
   console.log(`QA TEST RESULTS: ${testsPassed} PASSED, ${testsFailed} FAILED`);
   console.log('====================================================');
