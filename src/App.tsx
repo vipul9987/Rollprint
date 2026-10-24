@@ -111,7 +111,7 @@ export default function App() {
   const isSupabaseLive = isSupabaseConfigured();
 
   // Core Data State (In production with Supabase, remote DB is the only source of truth!)
-  const [items, setItems] = useState<MatrixInventoryItem[]>(() => getStoredMatrixItems());
+  const [items, setItems] = useState<MatrixInventoryItem[]>(() => isSupabaseLive ? [] : getStoredMatrixItems());
   const [transactions, setTransactions] = useState<MatrixStockTransaction[]>(() => isSupabaseLive ? [] : getStoredMatrixTransactions());
   const [batches, setBatches] = useState<MatrixBatch[]>(() => isSupabaseLive ? [] : getStoredMatrixBatches());
   const [inventoryRolls, setInventoryRolls] = useState<InventoryRoll[]>(() => isSupabaseLive ? [] : getStoredInventoryRolls());
@@ -1820,6 +1820,15 @@ export default function App() {
     }
   };
 
+  const handleWipeAllMaterials = async () => {
+    if (window.confirm('Are you sure you want to wipe all materials? The catalog will be completely emptied so the client can create materials from scratch.')) {
+      setItems([]);
+      saveStoredMatrixItems([]);
+      await saveMaterialsToSupabase([]);
+      showNotification('All materials wiped. Catalog is now empty.');
+    }
+  };
+
   // -------------------------------------------------------------
   // BARCODE LABELS PAGE STATE (BATCH-BASED CODE128 BARCODES ONLY)
   // -------------------------------------------------------------
@@ -1994,7 +2003,7 @@ export default function App() {
   const summaryTablesData = useMemo(() => {
     const activeItems = itemsWithStock.filter((i) => i.active);
 
-    // 1. Flex / Backlit Roll Materials (Strictly 1.02, 1.32, 1.63, 1.93, 2.54)
+    // 1. Flex / Backlit Roll Materials (1.02, 1.32, 1.63, 1.93, 2.54, 3.20)
     const flexItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'FLEX_ROLL');
     const flexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName))).sort((a, b) => {
       const orderA = getMaterialRowDisplayOrder(a, items, 'FLEX_ROLL');
@@ -2003,7 +2012,7 @@ export default function App() {
       return a.localeCompare(b);
     });
 
-    const flexWidths = FLEX_SUMMARY_WIDTHS; // ['1.02', '1.32', '1.63', '1.93', '2.54']
+    const flexWidths = FLEX_SUMMARY_WIDTHS; // ['1.02', '1.32', '1.63', '1.93', '2.54', '3.20']
 
     const flexRows = flexMaterials.map((matName) => {
       const matItems = flexItems.filter((i) => i.materialName === matName);
@@ -3200,6 +3209,17 @@ export default function App() {
                   <Plus className="w-4 h-4" />
                   <span>Add Material Item</span>
                 </button>
+
+                {items.length > 0 && (
+                  <button
+                    onClick={handleWipeAllMaterials}
+                    className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-semibold flex items-center space-x-1 transition-colors"
+                    title="Wipe all materials from catalog"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Wipe All</span>
+                  </button>
+                )}
               </div>
             </div>
 

@@ -9,14 +9,14 @@ import {
 } from '../types/inventory';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
-const STORAGE_KEY_ITEMS = 'rollprint_client_excel_matrix_v8';
+const STORAGE_KEY_ITEMS = 'rollprint_client_materials_v10';
 const STORAGE_KEY_TRANSACTIONS = 'rollprint_client_excel_txns_v8';
 const STORAGE_KEY_BATCHES = 'rollprint_client_batches_v1';
 
 /**
  * Standard Width Columns for Client Summary Tables
  */
-export const FLEX_SUMMARY_WIDTHS = ['1.02', '1.32', '1.63', '1.93', '2.54'];
+export const FLEX_SUMMARY_WIDTHS = ['1.02', '1.32', '1.63', '1.93', '2.54', '3.20'];
 export const VINYL_SUMMARY_WIDTHS = ['0.94', '0.98', '1.02', '1.06', '1.27', '1.52', '1.37'];
 export const PVC_SHEET_SIZES = ['8×4', '6×3', '5×10'];
 export const PVC_THICKNESSES = ['2mm', '3mm', '4mm', '5mm'];
@@ -747,10 +747,18 @@ export const INITIAL_MATRIX_ITEMS: MatrixInventoryItem[] = [
   { id: 'pvc-5x10-5mm', materialName: 'PVC Foam Sheet', category: 'Rigid PVC', summaryGroup: 'RIGID_PVC', dashboardGroup: 'RIGID_PVC', displayOrder: 30, variantSize: '5×10', secondaryVariant: '5mm', rollLengthMtr: 0, unit: 'Sheets', barcode: 'PVC-FOAM-SHEET-5X10-5MM', openingStock: 1, minStock: 2, active: true, createdAt: '2026-09-01' }
 ];
 
+export const SAMPLE_ITEM_IDS = new Set(INITIAL_MATRIX_ITEMS.map((i) => i.id));
+
 export const INITIAL_MATRIX_TRANSACTIONS: MatrixStockTransaction[] = [];
 
 export function getStoredMatrixItems(): MatrixInventoryItem[] {
   try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem('rollprint_client_excel_matrix_v8');
+      localStorage.removeItem('rollprint_client_excel_matrix_v7');
+      localStorage.removeItem('rollprint_client_excel_matrix_v6');
+      localStorage.removeItem('rollprint_client_excel_matrix_v5');
+    }
     const isLiveDb = typeof window !== 'undefined' && isSupabaseConfigured();
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(STORAGE_KEY_ITEMS) : null;
     if (!raw) {
@@ -758,7 +766,9 @@ export function getStoredMatrixItems(): MatrixInventoryItem[] {
     }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.map((item: any) => ({
+    // Strictly filter out any legacy sample materials so catalog starts completely empty
+    const clean = parsed.filter((item: any) => !SAMPLE_ITEM_IDS.has(item.id));
+    return clean.map((item: any) => ({
       ...item,
       summaryGroup: normalizeSummaryGroup(item.summaryGroup || item.dashboardGroup, item.category),
       dashboardGroup: normalizeSummaryGroup(item.dashboardGroup || item.summaryGroup, item.category),
@@ -801,7 +811,8 @@ export async function fetchMaterialsFromSupabase(): Promise<MatrixInventoryItem[
         .order('display_order', { ascending: true });
 
       if (!tableErr && Array.isArray(tableData)) {
-        return tableData.map((row: any) => ({
+        const cleanRows = tableData.filter((row: any) => !SAMPLE_ITEM_IDS.has(row.id));
+        return cleanRows.map((row: any) => ({
           id: row.id,
           materialName: row.material_name,
           category: row.category,
@@ -828,7 +839,12 @@ export async function fetchMaterialsFromSupabase(): Promise<MatrixInventoryItem[
     if (!userErr && userData?.user) {
       const rawCatalog = userData.user.user_metadata?.material_catalog;
       if (Array.isArray(rawCatalog)) {
-        return rawCatalog.map((item: any) => ({
+        const cleanCatalog = rawCatalog.filter((item: any) => !SAMPLE_ITEM_IDS.has(item.id));
+        // If remote metadata contained legacy sample items, automatically purge it on remote Supabase
+        if (cleanCatalog.length !== rawCatalog.length) {
+          supabase.auth.updateUser({ data: { material_catalog: cleanCatalog } }).catch(() => {});
+        }
+        return cleanCatalog.map((item: any) => ({
           ...item,
           summaryGroup: normalizeSummaryGroup(item.summaryGroup || item.dashboardGroup, item.category),
           dashboardGroup: normalizeSummaryGroup(item.dashboardGroup || item.summaryGroup, item.category),
@@ -1105,7 +1121,7 @@ export function computeDashboardMatrixTables(
   const allCatalog = catalogItems || itemsWithStock;
   const activeItems = itemsWithStock.filter((i) => i.active);
 
-  // 1. Flex / Backlit: Visible widths are strictly 1.02, 1.32, 1.63, 1.93, 2.54 (2.20 and 3.20 removed)
+  // 1. Flex / Backlit: Visible widths are 1.02, 1.32, 1.63, 1.93, 2.54, 3.20 (2.20 removed)
   const flexItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'FLEX_ROLL');
   const flexMaterials = Array.from(new Set(flexItems.map((i) => i.materialName))).sort((a, b) => {
     const orderA = getMaterialRowDisplayOrder(a, allCatalog, 'FLEX_ROLL');
@@ -1114,7 +1130,7 @@ export function computeDashboardMatrixTables(
     return a.localeCompare(b);
   });
 
-  const flexWidths = FLEX_SUMMARY_WIDTHS; // ['1.02', '1.32', '1.63', '1.93', '2.54']
+  const flexWidths = FLEX_SUMMARY_WIDTHS; // ['1.02', '1.32', '1.63', '1.93', '2.54', '3.20']
 
   const flexRows = flexMaterials.map((matName) => {
     const matItems = flexItems.filter((i) => i.materialName === matName);

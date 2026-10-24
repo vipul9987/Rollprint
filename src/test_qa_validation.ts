@@ -205,13 +205,13 @@ assert(metrics.totalStockOut === 0, 'Total Stock OUT across baseline is 0 rolls'
 // ------------------------------------------------------------------
 console.log('\n--- Test Suite 6: Multi-Summary Table Structures ---');
 
-// Verify Flex Summary Widths (2.20 and 3.20 removed per Client Requirement)
+// Verify Flex Summary Widths (3.20 present, 2.20 excluded)
 assert(
-  JSON.stringify(FLEX_SUMMARY_WIDTHS) === JSON.stringify(['1.02', '1.32', '1.63', '1.93', '2.54']),
-  'Flex Summary has exact 5 widths: 1.02, 1.32, 1.63, 1.93, 2.54 (2.20 & 3.20 removed)'
+  JSON.stringify(FLEX_SUMMARY_WIDTHS) === JSON.stringify(['1.02', '1.32', '1.63', '1.93', '2.54', '3.20']),
+  'Flex Summary has exact 6 widths: 1.02, 1.32, 1.63, 1.93, 2.54, 3.20 (2.20 removed)'
 );
 assert(!FLEX_SUMMARY_WIDTHS.includes('2.20'), 'Flex Summary does NOT contain 2.20');
-assert(!FLEX_SUMMARY_WIDTHS.includes('3.20'), 'Flex Summary does NOT contain 3.20');
+assert(FLEX_SUMMARY_WIDTHS.includes('3.20'), 'Flex Summary contains 3.20');
 
 // Verify Vinyl Summary Widths (0.94, 0.98, 1.02, 1.06, 1.27, 1.52, 1.37)
 assert(
@@ -2299,14 +2299,14 @@ await (async () => {
     `[Test 1] No duplicate Backlit Sunlex row created: exactly 1 row found (got ${sunlexRows.length})`
   );
 
-  // Check columns: 2.20 and 3.20 are REMOVED from Flex Summary matrix
+  // Check columns: 2.20 is REMOVED from Flex Summary matrix, 3.20 is PRESENT
   assert(
     !test1Tables.flexWidths.includes('2.20'),
     `[Test 1] 2.20 width column is REMOVED from Flex Summary matrix`
   );
   assert(
-    !test1Tables.flexWidths.includes('3.20'),
-    `[Test 1] 3.20 width column is REMOVED from Flex Summary matrix`
+    test1Tables.flexWidths.includes('3.20'),
+    `[Test 1] 3.20 width column is PRESENT in Flex Summary matrix`
   );
 
   // Manual entry preserves 2.20 in database/catalog
@@ -2714,10 +2714,10 @@ await (async () => {
     '[Test Suite 31.1] Empty catalog produces exactly 0 rows in Vinyl matrix'
   );
   assert(
-    emptyTables.flexWidths.length === 5 &&
+    emptyTables.flexWidths.length === 6 &&
     !emptyTables.flexWidths.includes('2.20') &&
-    !emptyTables.flexWidths.includes('3.20'),
-    '[Test Suite 31.1] Flex Summary matrix columns strictly [1.02, 1.32, 1.63, 1.93, 2.54] (2.20 and 3.20 absent)'
+    emptyTables.flexWidths.includes('3.20'),
+    '[Test Suite 31.1] Flex Summary matrix columns strictly [1.02, 1.32, 1.63, 1.93, 2.54, 3.20] (2.20 absent, 3.20 present)'
   );
 
   // 2. Client creates brand new QA Client Material (1.63, 50M, displayOrder: 10)
