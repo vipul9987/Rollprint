@@ -1115,6 +1115,23 @@ export async function executeAtomicStockInRpc(
   stockInDate: string,
   items: Array<{ materialName: string; category?: string; width: string; rollLength: number; rollQuantity: number }>
 ): Promise<{ success: boolean; data?: any; error?: string }> {
+  // Validate Star Material size restrictions for Stock IN
+  for (const it of items) {
+    const cat = it.category || '';
+    const isStar = cat === 'Star Material' || cat === 'STAR_MATERIAL' || cat.toUpperCase() === 'STAR_MATERIAL' || cat.toLowerCase() === 'star material';
+    if (isStar) {
+      const allowed = ['1.02', '1.30', '1.60', '1.90', '2.54', '3.20'];
+      const num = parseFloat(it.width);
+      const isAllowed = allowed.includes(it.width.trim()) || [1.02, 1.30, 1.60, 1.90, 2.54, 3.20].some((a) => Math.abs(a - num) < 0.005);
+      if (!isAllowed) {
+        return {
+          success: false,
+          error: 'Invalid size for Star Material. Please select one of the allowed sizes: 1.02, 1.30, 1.60, 1.90, 2.54, 3.20.'
+        };
+      }
+    }
+  }
+
   const supabaseUrl = getEnvVar('VITE_SUPABASE_URL');
   const hasSupabase = isSupabaseConfigured();
 

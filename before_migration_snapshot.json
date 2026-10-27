@@ -1,0 +1,21 @@
+{
+  "captured_at": "2026-10-27T05:02:41.403Z",
+  "counts": {
+    "materials": -1,
+    "material_catalog": -1,
+    "stock_batches": -1,
+    "stock_batch_items": -1,
+    "inventory_rolls": -1,
+    "stock_transactions": -1,
+    "stock_out_dispatches": -1,
+    "stock_out_dispatch_items": -1
+  },
+  "rollStats": {
+    "total": 0,
+    "in_stock": 0,
+    "out": 0,
+    "other": 0
+  },
+  "materialsCount": 0,
+  "catalogCount": 0
+}

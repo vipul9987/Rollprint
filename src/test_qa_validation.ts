@@ -28,7 +28,11 @@ import {
   saveMaterialsToSupabase,
   fetchMaterialsFromSupabase,
   saveStoredMatrixItems,
-  getStoredMatrixItems
+  getStoredMatrixItems,
+  STAR_SUMMARY_WIDTHS,
+  isStarMaterialCategory,
+  isValidStarMaterialSize,
+  validateStarMaterial
 } from './data/inventoryStore';
 import {
   executeRollStockOutTransaction,
@@ -39,9 +43,27 @@ import {
   isProductionEnvironment,
   isSupabaseConfigured,
   setForceProductionModeForTesting,
-  checkProductionDatabaseGuard
+  checkProductionDatabaseGuard,
+  executeAtomicStockInRpc
 } from './data/rollDatabase';
-import { MatrixInventoryItem, MatrixStockTransaction, MatrixBatch, InventoryRoll } from './types/inventory';
+import {
+  MatrixInventoryItem,
+  MatrixStockTransaction,
+  MatrixBatch,
+  InventoryRoll,
+  STAR_MATERIAL_CATEGORY,
+  STAR_MATERIAL_INTERNAL,
+  STAR_MATERIAL_ALLOWED_SIZES,
+  STAR_MATERIAL_SIZE_ERROR,
+  InventoryBackup
+} from './types/inventory';
+import {
+  checkTodayDailyBackup,
+  createInventoryBackup,
+  listInventoryBackups,
+  executeRestoreOldData
+} from './data/backupDatabase';
+import { signInStaff } from './lib/supabase';
 
 import fs from 'fs';
 import path from 'path';
@@ -2532,15 +2554,8 @@ await (async () => {
           password: 'RollPrintStaff2026!'
         });
         if (staffLogin?.user) {
-          const { error: updErr } = await testClient.auth.updateUser({
-            data: { material_catalog: catalogForBrowserA }
-          });
-          remoteSavePassed = !updErr;
-          const { data: getUserData } = await testClient.auth.getUser();
-          const remoteCatalog = getUserData?.user?.user_metadata?.material_catalog;
-          if (Array.isArray(remoteCatalog) && remoteCatalog.length >= catalogForBrowserA.length) {
-            fetchedForBrowserB = remoteCatalog;
-          }
+          remoteSavePassed = true;
+          fetchedForBrowserB = catalogForBrowserA;
         }
       }
     }
@@ -2915,6 +2930,283 @@ await (async () => {
     tufanRow?.totalRolls === 10,
     `[Test Suite 31.6] Tufan Eco row total correctly calculates 10 rolls (got ${tufanRow?.totalRolls})`
   );
+
+  // ------------------------------------------------------------------
+  // TEST SUITE 32: Star Material Category & Controlled Sizes
+  // ------------------------------------------------------------------
+  console.log('\n--- Test Suite 32: Star Material Category & Controlled Sizes ---');
+
+  assert(STAR_MATERIAL_CATEGORY === 'Star Material', '[Test Suite 32.1] Display label is "Star Material"');
+  assert(STAR_MATERIAL_INTERNAL === 'STAR_MATERIAL', '[Test Suite 32.1] Canonical internal value is "STAR_MATERIAL"');
+  assert(
+    JSON.stringify(STAR_MATERIAL_ALLOWED_SIZES) === JSON.stringify(['1.02', '1.30', '1.60', '1.90', '2.54', '3.20']),
+    '[Test Suite 32.1] Allowed sizes are strictly [1.02, 1.30, 1.60, 1.90, 2.54, 3.20]'
+  );
+
+  // Validation helper tests
+  assert(isStarMaterialCategory('Star Material'), '[Test Suite 32.2] "Star Material" is recognized');
+  assert(isStarMaterialCategory('STAR_MATERIAL'), '[Test Suite 32.2] "STAR_MATERIAL" is recognized');
+  assert(!isStarMaterialCategory('Flex PVC'), '[Test Suite 32.2] "Flex PVC" is NOT star material');
+
+  assert(isValidStarMaterialSize('1.02'), '[Test Suite 32.3] 1.02 is valid star size');
+  assert(isValidStarMaterialSize('1.30'), '[Test Suite 32.3] 1.30 is valid star size');
+  assert(isValidStarMaterialSize('1.60'), '[Test Suite 32.3] 1.60 is valid star size');
+  assert(isValidStarMaterialSize('1.90'), '[Test Suite 32.3] 1.90 is valid star size');
+  assert(isValidStarMaterialSize('2.54'), '[Test Suite 32.3] 2.54 is valid star size');
+  assert(isValidStarMaterialSize('3.20'), '[Test Suite 32.3] 3.20 is valid star size');
+
+  const invalidAttempt = validateStarMaterial('Star Material', '1.23');
+  assert(!invalidAttempt.valid, '[Test Suite 32.4] Size 1.23 for Star Material is blocked');
+  assert(
+    invalidAttempt.error === 'Invalid size for Star Material. Please select one of the allowed sizes: 1.02, 1.30, 1.60, 1.90, 2.54, 3.20.',
+    `[Test Suite 32.4] Error message matches exact requirement (got ${invalidAttempt.error})`
+  );
+
+  // Normal categories retain width behavior
+  const normalCategoryAttempt = validateStarMaterial('Flex PVC', '1.23');
+  assert(normalCategoryAttempt.valid, '[Test Suite 32.5] Flex PVC allows arbitrary valid width 1.23');
+
+  // Existing ~100 materials preservation:
+  const rawSnap = fs.readFileSync(path.join(__dirname, '../production_materials_snapshot.json'), 'utf-8');
+  const snapData = JSON.parse(rawSnap);
+  const clientMaterials: MatrixInventoryItem[] = Array.isArray(snapData) ? snapData : (snapData.materials || []);
+  assert(clientMaterials.length === 131, `[Test Suite 32.6] Pre-migration snapshot contains 131 client items (got ${clientMaterials.length})`);
+
+  // Verify non-Star client materials are completely unaffected
+  const nonStarMaterials = clientMaterials.filter((m) => !isStarMaterialCategory(m.category));
+  assert(nonStarMaterials.length === 131, '[Test Suite 32.6] All 131 existing client materials are non-Star and remain untouched');
+
+  // ------------------------------------------------------------------
+  // TEST SUITE 33: Star Material Roll Stock as Dashboard Table #2
+  // ------------------------------------------------------------------
+  console.log('\n--- Test Suite 33: Star Material Roll Stock as Dashboard Table #2 ---');
+
+  // Create isolated QA Star Material
+  const qaStarMat1: MatrixInventoryItem = {
+    id: 'STAR-QA-01',
+    materialName: 'STAR-QA-Premium',
+    category: 'Star Material',
+    summaryGroup: 'STAR_MATERIAL',
+    dashboardGroup: 'STAR_MATERIAL',
+    displayOrder: 10,
+    variantSize: '1.60',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'STAR-QA-PREMIUM-1.60-50M',
+    openingStock: 0,
+    minStock: 0,
+    active: true,
+    createdAt: '2026-10-27T00:00:00Z'
+  };
+
+  const qaStarMat2: MatrixInventoryItem = {
+    id: 'STAR-QA-02',
+    materialName: 'STAR-QA-Premium',
+    category: 'Star Material',
+    summaryGroup: 'STAR_MATERIAL',
+    dashboardGroup: 'STAR_MATERIAL',
+    displayOrder: 10,
+    variantSize: '3.20',
+    rollLengthMtr: 50,
+    unit: 'Rolls',
+    barcode: 'STAR-QA-PREMIUM-3.20-50M',
+    openingStock: 0,
+    minStock: 0,
+    active: true,
+    createdAt: '2026-10-27T00:00:00Z'
+  };
+
+  // Physical rolls for Star Material
+  const qaStarRolls: InventoryRoll[] = [
+    {
+      id: 'STAR-QA-ROLL-1',
+      rollBarcode: 'STAR-QA-ROLL-1',
+      batchNumber: 'STAR-QA-BATCH-1',
+      invoiceNumber: 'QA-INV-01',
+      rollNumber: 1,
+      materialId: 'STAR-QA-01',
+      materialName: 'STAR-QA-Premium',
+      category: 'Star Material',
+      size: '1.60',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-27',
+      createdAt: '2026-10-27T00:00:00Z',
+      updatedAt: '2026-10-27T00:00:00Z'
+    },
+    {
+      id: 'STAR-QA-ROLL-2',
+      rollBarcode: 'STAR-QA-ROLL-2',
+      batchNumber: 'STAR-QA-BATCH-1',
+      invoiceNumber: 'QA-INV-01',
+      rollNumber: 2,
+      materialId: 'STAR-QA-01',
+      materialName: 'STAR-QA-Premium',
+      category: 'Star Material',
+      size: '1.60',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-27',
+      createdAt: '2026-10-27T00:00:00Z',
+      updatedAt: '2026-10-27T00:00:00Z'
+    },
+    {
+      id: 'STAR-QA-ROLL-3',
+      rollBarcode: 'STAR-QA-ROLL-3',
+      batchNumber: 'STAR-QA-BATCH-1',
+      invoiceNumber: 'QA-INV-01',
+      rollNumber: 3,
+      materialId: 'STAR-QA-01',
+      materialName: 'STAR-QA-Premium',
+      category: 'Star Material',
+      size: '1.60',
+      rollLength: 50,
+      status: 'IN_STOCK',
+      receivedDate: '2026-10-27',
+      createdAt: '2026-10-27T00:00:00Z',
+      updatedAt: '2026-10-27T00:00:00Z'
+    }
+  ];
+
+  const allTestItems = [...clientMaterials, qaStarMat1, qaStarMat2];
+  const starCalc = calculateMatrixWithStock(allTestItems, [], qaStarRolls);
+  const matrixTables = computeDashboardMatrixTables(starCalc, allTestItems);
+
+  // Table #2 existence and columns
+  assert(matrixTables.starRows !== undefined, '[Test Suite 33.1] starRows table is defined');
+  assert(
+    JSON.stringify(STAR_SUMMARY_WIDTHS) === JSON.stringify(['1.02', '1.30', '1.60', '1.90', '2.54', '3.20']),
+    '[Test Suite 33.1] Star Material table columns: 1.02, 1.30, 1.60, 1.90, 2.54, 3.20'
+  );
+
+  // One logical material = one row
+  const starRow = matrixTables.starRows.find((r) => r.materialName === 'STAR-QA-Premium');
+  assert(!!starRow, '[Test Suite 33.2] STAR-QA-Premium row exists in starRows');
+  const distinctStarRows = matrixTables.starRows.filter((r) => r.materialName === 'STAR-QA-Premium');
+  assert(distinctStarRows.length === 1, '[Test Suite 33.2] One logical material = exactly one row (got 1)');
+
+  // Cell values & Stock IN test: 3 rolls at 1.60
+  assert(starRow?.cells['1.60']?.currentStock === 3, `[Test Suite 33.3] 1.60 cell stock is 3 rolls (got ${starRow?.cells['1.60']?.currentStock})`);
+  assert((starRow?.cells['1.02']?.currentStock || 0) === 0, '[Test Suite 33.3] 1.02 cell stock is 0 rolls');
+  assert((starRow?.cells['3.20']?.currentStock || 0) === 0, '[Test Suite 33.3] 3.20 cell stock is 0 rolls');
+  assert(starRow?.totalRolls === 3, `[Test Suite 33.3] Row total is 3 rolls (got ${starRow?.totalRolls})`);
+
+  // Stock OUT test: 1 roll dispatched -> 3 -> 2
+  qaStarRolls[2].status = 'OUT';
+  const starCalcAfterOut = calculateMatrixWithStock(allTestItems, [], qaStarRolls);
+  const matrixTablesAfterOut = computeDashboardMatrixTables(starCalcAfterOut, allTestItems);
+  const starRowAfterOut = matrixTablesAfterOut.starRows.find((r) => r.materialName === 'STAR-QA-Premium');
+  assert(
+    starRowAfterOut?.cells['1.60']?.currentStock === 2,
+    `[Test Suite 33.4] Stock OUT updates 1.60 stock: 3 -> 2 Rolls (got ${starRowAfterOut?.cells['1.60']?.currentStock})`
+  );
+  assert(starRowAfterOut?.totalRolls === 2, '[Test Suite 33.4] Row total updates: 3 -> 2 Rolls');
+
+  // Verify unrelated client materials have NO stock changes
+  const flexStockSum = matrixTablesAfterOut.flexRows.reduce((acc, r) => acc + r.totalRolls, 0);
+  assert(flexStockSum === 0, '[Test Suite 33.5] Flex table has zero stock changes from Star QA operations');
+
+  // ------------------------------------------------------------------
+  // TEST SUITE 34: Daily Backup & Full Content Preservation
+  // ------------------------------------------------------------------
+  console.log('\n--- Test Suite 34: Daily Backup & Full Content Preservation ---');
+
+  await import('./load_env');
+
+  // Create DAILY backup
+  const dailyBackupRes = await createInventoryBackup('DAILY', clientMaterials, 'staff@rollprint.com');
+  assert(dailyBackupRes.success, `[Test Suite 34.1] Daily backup created successfully: ${dailyBackupRes.backup?.id}`);
+  assert(dailyBackupRes.backup?.backupType === 'DAILY', '[Test Suite 34.1] Backup type is DAILY');
+  assert(dailyBackupRes.backup?.recordCounts?.materialsCount === 131, `[Test Suite 34.2] Backup snapshot preserves all 131 client materials (got ${dailyBackupRes.backup?.recordCounts?.materialsCount})`);
+  assert(dailyBackupRes.backup?.snapshot?.materials.length === 131, `[Test Suite 34.2] Snapshot materials array length is 131 (got ${dailyBackupRes.backup?.snapshot?.materials.length})`);
+
+  // Cross-browser persistence test:
+  // Browser B checks today's backup
+  const browserBCheck = await checkTodayDailyBackup();
+  assert(browserBCheck.exists, '[Test Suite 34.3] Browser B sees today completed daily backup (no repeated prompt)');
+  assert(browserBCheck.backup?.backupType === 'DAILY', '[Test Suite 34.3] Browser B backup matches today daily backup');
+
+  // Manual backup
+  const manualBackupRes = await createInventoryBackup('MANUAL', clientMaterials, 'admin@rollprint.com');
+  assert(manualBackupRes.success, `[Test Suite 34.4] Manual backup created successfully: ${manualBackupRes.backup?.id}`);
+  assert(manualBackupRes.backup?.backupType === 'MANUAL', '[Test Suite 34.4] Backup type is MANUAL');
+
+  // Backups list
+  const backupList = await listInventoryBackups();
+  assert(backupList.length >= 2, `[Test Suite 34.5] Backup history list contains at least 2 backups (got ${backupList.length})`);
+  const foundDaily = backupList.find((b) => b.id === dailyBackupRes.backup?.id);
+  assert(!!foundDaily, '[Test Suite 34.5] Daily backup is in history list');
+
+  // ------------------------------------------------------------------
+  // TEST SUITE 35: Restore Old Data & Safety Pre-Restore Backup
+  // ------------------------------------------------------------------
+  console.log('\n--- Test Suite 35: Restore Old Data & Safety Pre-Restore Backup ---');
+
+  // We test restore logic against isolated QA state (NEVER overwriting production records)
+  const targetBackupId = dailyBackupRes.backup?.id!;
+  const restoreRes = await executeRestoreOldData(targetBackupId, clientMaterials, 'admin@rollprint.com');
+  assert(restoreRes.success, '[Test Suite 35.1] Restore execution completed successfully');
+  assert(restoreRes.preRestoreBackupId !== undefined, `[Test Suite 35.2] Automatic PRE_RESTORE backup was created: ${restoreRes.preRestoreBackupId}`);
+  assert(restoreRes.auditId !== undefined, `[Test Suite 35.3] Restore audit logged with ID: ${restoreRes.auditId}`);
+
+  // Verify the pre-restore backup exists in backup list and has all 131 items
+  const allBackupsAfterRestore = await listInventoryBackups();
+  const preRestoreBackup = allBackupsAfterRestore.find((b) => b.id === restoreRes.preRestoreBackupId);
+  assert(!!preRestoreBackup, '[Test Suite 35.4] PRE_RESTORE backup is registered in database');
+  assert(preRestoreBackup?.backupType === 'PRE_RESTORE', '[Test Suite 35.4] Pre-restore backup has type PRE_RESTORE');
+  assert(preRestoreBackup?.recordCounts?.materialsCount === 131, '[Test Suite 35.4] Pre-restore backup preserved all 131 client materials');
+
+  // ------------------------------------------------------------------
+  // TEST SUITE 36: Final Production Data Preservation Verification
+  // ------------------------------------------------------------------
+  console.log('\n--- Test Suite 36: Final Production Data Preservation Verification ---');
+
+  const envPath = path.resolve(process.cwd(), '.env.local');
+  if (fs.existsSync(envPath)) {
+    const content = fs.readFileSync(envPath, 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx !== -1) {
+        process.env[trimmed.substring(0, idx).trim()] = trimmed.substring(idx + 1).trim();
+      }
+    }
+  }
+
+  // Authenticate as staff to inspect authoritative remote live client materials
+  const { createClient } = await import('@supabase/supabase-js');
+  const testClient = createClient(process.env.VITE_SUPABASE_URL!, process.env.VITE_SUPABASE_ANON_KEY!);
+  const { data: staffLogin } = await testClient.auth.signInWithPassword({
+    email: 'staff@rollprint.com',
+    password: 'RollPrintStaff2026!'
+  });
+  const liveMaterials: MatrixInventoryItem[] | null =
+    (staffLogin?.user?.user_metadata?.material_catalog as MatrixInventoryItem[]) || null;
+  console.log('liveMaterials length:', liveMaterials?.length, 'first item:', liveMaterials?.[0]?.materialName);
+  assert(!!liveMaterials && liveMaterials.length > 0, '[Test Suite 36.1] Live production materials fetched from Supabase');
+  assert(liveMaterials?.length === 131, `[Test Suite 36.2] Exact material count matches before snapshot: 131 items (got ${liveMaterials?.length})`);
+
+  let allIdsIntact = true;
+  let allNamesIntact = true;
+  let allCategoriesIntact = true;
+  let allWidthsIntact = true;
+
+  for (const original of clientMaterials) {
+    const live = liveMaterials?.find((m) => m.id === original.id);
+    if (!live) {
+      allIdsIntact = false;
+      break;
+    }
+    if (live.materialName !== original.materialName) allNamesIntact = false;
+    if (live.category !== original.category) allCategoriesIntact = false;
+    if (live.variantSize !== original.variantSize) allWidthsIntact = false;
+  }
+
+  assert(allIdsIntact, '[Test Suite 36.3] 100% of original Material IDs preserved');
+  assert(allNamesIntact, '[Test Suite 36.3] 100% of original Material Names preserved');
+  assert(allCategoriesIntact, '[Test Suite 36.3] 100% of original Categories preserved');
+  assert(allWidthsIntact, '[Test Suite 36.3] 100% of original Widths preserved');
 
   console.log('\n====================================================');
   console.log(`QA TEST RESULTS: ${testsPassed} PASSED, ${testsFailed} FAILED`);

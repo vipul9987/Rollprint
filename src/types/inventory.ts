@@ -5,7 +5,63 @@
  * Summary Groups: FLEX_ROLL, VINYL_ROLL, RIGID_PVC
  */
 
-export type InventorySummaryGroup = 'FLEX_ROLL' | 'VINYL_ROLL' | 'RIGID_PVC';
+export type InventorySummaryGroup = 'FLEX_ROLL' | 'STAR_MATERIAL' | 'VINYL_ROLL' | 'RIGID_PVC';
+
+export const STAR_MATERIAL_CATEGORY = 'Star Material';
+export const STAR_MATERIAL_INTERNAL = 'STAR_MATERIAL';
+export const STAR_MATERIAL_ALLOWED_SIZES = ['1.02', '1.30', '1.60', '1.90', '2.54', '3.20'] as const;
+export type StarMaterialAllowedSize = typeof STAR_MATERIAL_ALLOWED_SIZES[number];
+export const STAR_MATERIAL_SIZE_ERROR =
+  'Invalid size for Star Material. Please select one of the allowed sizes: 1.02, 1.30, 1.60, 1.90, 2.54, 3.20.';
+
+export type BackupType = 'DAILY' | 'MANUAL' | 'PRE_RESTORE';
+
+export interface InventoryBackupRecordCounts {
+  materialsCount: number;
+  physicalRollsCount: number;
+  inStockCount: number;
+  outStockCount: number;
+  batchesCount: number;
+  batchItemsCount: number;
+  transactionsCount: number;
+  dispatchesCount: number;
+  dispatchItemsCount: number;
+}
+
+export interface InventoryBackupSnapshot {
+  materials: MatrixInventoryItem[];
+  inventoryRolls: InventoryRoll[];
+  stockBatches: MatrixBatch[];
+  stockTransactions: MatrixStockTransaction[];
+  stockOutDispatches?: StockOutDispatch[];
+  stockOutDispatchItems?: StockOutDispatchItem[];
+  dashboardConfig?: {
+    displayOrders: Record<string, number>;
+    summaryGroups: Record<string, InventorySummaryGroup>;
+  };
+}
+
+export interface InventoryBackup {
+  id: string;
+  backupDate: string; // YYYY-MM-DD
+  backupType: BackupType;
+  createdBy: string;
+  createdAt: string;
+  recordCounts: InventoryBackupRecordCounts;
+  snapshot?: InventoryBackupSnapshot;
+  status: 'COMPLETED' | 'FAILED';
+}
+
+export interface InventoryRestoreAudit {
+  id: string;
+  backupId: string;
+  restoredBy: string;
+  restoredAt: string;
+  preRestoreBackupId?: string;
+  status: 'SUCCESS' | 'FAILED';
+  notes?: string;
+}
+
 
 export interface MatrixInventoryItem {
   id: string;

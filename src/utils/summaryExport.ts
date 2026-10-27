@@ -1,5 +1,6 @@
 import {
   FLEX_SUMMARY_WIDTHS,
+  STAR_SUMMARY_WIDTHS,
   VINYL_SUMMARY_WIDTHS,
   PVC_THICKNESSES
 } from '../data/inventoryStore';
@@ -16,6 +17,16 @@ export interface SummaryTablesExportData {
   flexColTotals: { [width: string]: number };
   flexGrandTotalRolls: number;
   flexGrandTotalArea: number;
+  starRows?: Array<{
+    materialName: string;
+    category: string;
+    cells: { [width: string]: MatrixItemWithStock | undefined };
+    totalRolls: number;
+    totalAreaMtr2: number;
+  }>;
+  starColTotals?: { [width: string]: number };
+  starGrandTotalRolls?: number;
+  starGrandTotalArea?: number;
   vinylRows: Array<{
     materialName: string;
     category: string;
@@ -50,7 +61,7 @@ function escapeCsvField(val: string | number | undefined | null): string {
 
 /**
  * Generates an Excel-ready CSV string for the entire Summary Matrix
- * (Flex / Backlit, Vinyl / Lamination, PVC Rigid Sheets).
+ * (Flex / Backlit, Star Material, Vinyl / Lamination, PVC Rigid Sheets).
  */
 export function generateSummaryCsv(data: SummaryTablesExportData): string {
   const lines: string[] = [];
@@ -90,8 +101,44 @@ export function generateSummaryCsv(data: SummaryTablesExportData): string {
   lines.push('');
   lines.push('');
 
-  // Table 2: Vinyl / Lamination Roll Stock
-  lines.push('TABLE 2: VINYL / LAMINATION ROLL STOCK');
+  // Table 2: Star Material Roll Stock
+  if (data.starRows && data.starRows.length > 0) {
+    lines.push('TABLE 2: STAR MATERIAL ROLL STOCK');
+    const starHeader = [
+      'Material Name',
+      'Category',
+      ...STAR_SUMMARY_WIDTHS.map((w) => `${w} M`),
+      'Total Rolls',
+      'Total Area (m²)'
+    ];
+    lines.push(starHeader.map(escapeCsvField).join(','));
+
+    data.starRows.forEach((row) => {
+      const rowFields = [
+        row.materialName,
+        row.category,
+        ...STAR_SUMMARY_WIDTHS.map((w) => row.cells[w]?.currentStock ?? 0),
+        row.totalRolls,
+        row.totalAreaMtr2
+      ];
+      lines.push(rowFields.map(escapeCsvField).join(','));
+    });
+
+    const starTotalsRow = [
+      'TOTAL ROLLS',
+      '',
+      ...STAR_SUMMARY_WIDTHS.map((w) => data.starColTotals?.[w] ?? 0),
+      data.starGrandTotalRolls ?? 0,
+      data.starGrandTotalArea ?? 0
+    ];
+    lines.push(starTotalsRow.map(escapeCsvField).join(','));
+
+    lines.push('');
+    lines.push('');
+  }
+
+  // Table 3: Vinyl / Lamination Roll Stock
+  lines.push('TABLE 3: VINYL / LAMINATION ROLL STOCK');
   const vinylHeader = [
     'Material Name',
     'Category',
@@ -121,11 +168,11 @@ export function generateSummaryCsv(data: SummaryTablesExportData): string {
   ];
   lines.push(vinylTotalsRow.map(escapeCsvField).join(','));
 
-  // Table 3: PVC Foam Sheet Stock (if present)
+  // Table 4: PVC Rigid Sheet Stock
   if (data.hasPvc && data.pvcRows.length > 0) {
     lines.push('');
     lines.push('');
-    lines.push('TABLE 3: PVC / RIGID SHEET STOCK');
+    lines.push('TABLE 4: PVC / RIGID SHEET STOCK');
     const pvcHeader = [
       'Sheet Size',
       'Material Name',
@@ -160,12 +207,11 @@ export function generateSummaryCsv(data: SummaryTablesExportData): string {
 }
 
 /**
- * Downloads the summary CSV file with UTF-8 BOM for Microsoft Excel & Google Sheets compatibility.
+ * Triggers browser file download of CSV export.
  */
-export function downloadSummaryCsvFile(data: SummaryTablesExportData): void {
+export function downloadSummaryCsv(data: SummaryTablesExportData): void {
   const csvContent = generateSummaryCsv(data);
-  // Prepend UTF-8 BOM \uFEFF for Excel compatibility
-  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   const dateStr = new Date().toISOString().split('T')[0];
@@ -176,6 +222,8 @@ export function downloadSummaryCsvFile(data: SummaryTablesExportData): void {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
+
+export const downloadSummaryCsvFile = downloadSummaryCsv;
 
 /**
  * Generates TSV (Tab Separated Values) for 1-click clipboard paste directly into Google Sheets.
@@ -197,9 +245,26 @@ export function copySummaryTsvForGoogleSheets(data: SummaryTablesExportData): Pr
   });
   lines.push(['TOTAL ROLLS', '', ...FLEX_SUMMARY_WIDTHS.map((w) => data.flexColTotals[w] ?? 0), data.flexGrandTotalRolls, data.flexGrandTotalArea].join('\t'));
 
+  // Table 2: Star Material
+  if (data.starRows && data.starRows.length > 0) {
+    lines.push('');
+    lines.push('2. STAR MATERIAL ROLL STOCK');
+    lines.push(['Material', 'Category', ...STAR_SUMMARY_WIDTHS.map((w) => `${w} M`), 'Total Rolls', 'Total Area (m²)'].join('\t'));
+    data.starRows.forEach((row) => {
+      lines.push([
+        row.materialName,
+        row.category,
+        ...STAR_SUMMARY_WIDTHS.map((w) => row.cells[w]?.currentStock ?? 0),
+        row.totalRolls,
+        row.totalAreaMtr2
+      ].join('\t'));
+    });
+    lines.push(['TOTAL ROLLS', '', ...STAR_SUMMARY_WIDTHS.map((w) => data.starColTotals?.[w] ?? 0), data.starGrandTotalRolls ?? 0, data.starGrandTotalArea ?? 0].join('\t'));
+  }
+
   lines.push('');
-  // Table 2: Vinyl
-  lines.push('2. VINYL / LAMINATION ROLL STOCK');
+  // Table 3: Vinyl
+  lines.push('3. VINYL / LAMINATION ROLL STOCK');
   lines.push(['Material', 'Category', ...VINYL_SUMMARY_WIDTHS.map((w) => `${w} M`), 'Total Rolls', 'Total Area (m²)'].join('\t'));
   data.vinylRows.forEach((row) => {
     lines.push([
@@ -214,7 +279,7 @@ export function copySummaryTsvForGoogleSheets(data: SummaryTablesExportData): Pr
 
   if (data.hasPvc && data.pvcRows.length > 0) {
     lines.push('');
-    lines.push('3. PVC / RIGID SHEET STOCK');
+    lines.push('4. PVC / RIGID SHEET STOCK');
     lines.push(['Sheet Size', 'Material', ...PVC_THICKNESSES, 'Total Sheets', 'Total Area (m²)'].join('\t'));
     data.pvcRows.forEach((row) => {
       lines.push([

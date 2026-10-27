@@ -31,7 +31,8 @@ import {
   FileSpreadsheet,
   Copy,
   LogOut,
-  AlertTriangle
+  AlertTriangle,
+  Database
 } from 'lucide-react';
 import { StaffLoginView } from './components/StaffLoginView';
 import { getStaffSession, signOutStaff, onStaffAuthStateChange, isSupabaseConfigured } from './lib/supabase';
@@ -45,6 +46,7 @@ import {
   generateMatrixBarcode,
   getItemSummaryGroup,
   FLEX_SUMMARY_WIDTHS,
+  STAR_SUMMARY_WIDTHS,
   VINYL_SUMMARY_WIDTHS,
   PVC_SHEET_SIZES,
   PVC_THICKNESSES,
@@ -57,7 +59,10 @@ import {
   getMaterialRowDisplayOrder,
   normalizeSummaryGroup,
   fetchMaterialsFromSupabase,
-  saveMaterialsToSupabase
+  saveMaterialsToSupabase,
+  isStarMaterialCategory,
+  isValidStarMaterialSize,
+  validateStarMaterial
 } from './data/inventoryStore';
 import {
   InventoryRoll,
@@ -66,7 +71,11 @@ import {
   MatrixItemWithStock,
   InventorySummaryGroup,
   MatrixBatch,
-  MatrixBatchItem
+  MatrixBatchItem,
+  STAR_MATERIAL_CATEGORY,
+  STAR_MATERIAL_INTERNAL,
+  STAR_MATERIAL_ALLOWED_SIZES,
+  STAR_MATERIAL_SIZE_ERROR
 } from './types/inventory';
 import {
   getStoredInventoryRolls,
@@ -89,8 +98,11 @@ import { BatchDetailPage } from './components/BatchDetailPage';
 import { StockDetailsDialog } from './components/StockDetailsDialog';
 import { fetchBatchesFromSupabase } from './data/batchDatabase';
 import { downloadSummaryCsvFile, copySummaryTsvForGoogleSheets } from './utils/summaryExport';
+import { DailyBackupModal } from './components/DailyBackupModal';
+import { BackupRestoreView } from './components/BackupRestoreView';
+import { checkTodayDailyBackup, isDailyBackupDismissedForSession } from './data/backupDatabase';
 
-type TabType = 'dashboard' | 'scan' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels';
+type TabType = 'dashboard' | 'scan' | 'materials' | 'stock-in' | 'stock-out' | 'transactions' | 'qr-labels' | 'backup';
 type DashboardViewMode = 'matrix' | 'table';
 type VerificationStatus = 'IDLE' | 'VERIFIED' | 'MISMATCH';
 
@@ -138,9 +150,9 @@ export default function App() {
   }, [itemsWithStock, transactions]);
 
   // Global Toast Notification State
-  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [notification, setNotification] = useState<{ message: string; type: 'success' | 'warning' | 'error' | 'info' } | null>(null);
 
-  const showNotification = (message: string, type: 'success' | 'error' = 'success') => {
+  const showNotification = (message: string, type: 'success' | 'warning' | 'error' | 'info' = 'success') => {
     setNotification({ message, type });
     setTimeout(() => {
       setNotification(null);
@@ -150,6 +162,20 @@ export default function App() {
   // Staff Authentication State (Supabase Auth)
   const [staffSession, setStaffSession] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseConfigured());
+
+  // Daily Backup Modal State
+  const [isDailyBackupModalOpen, setIsDailyBackupModalOpen] = useState<boolean>(false);
+
+  // Check today's database-backed daily backup on successful staff login of business day
+  useEffect(() => {
+    if (staffSession && !isDailyBackupDismissedForSession()) {
+      checkTodayDailyBackup().then((res) => {
+        if (!res.exists) {
+          setIsDailyBackupModalOpen(true);
+        }
+      });
+    }
+  }, [staffSession]);
 
   // Revalidate all operational inventory data from remote Supabase (Materials, Rolls, Batches, Transactions)
   const revalidateRemoteInventory = useCallback(async () => {
@@ -1261,6 +1287,13 @@ export default function App() {
     const areaM2 = Number((parsedWidth * normLength * qty).toFixed(2));
     const category = stockInAutoCategory || 'Flex PVC';
 
+    if (isStarMaterialCategory(category)) {
+      if (!isValidStarMaterialSize(normWidth)) {
+        setStockInError(STAR_MATERIAL_SIZE_ERROR);
+        return;
+      }
+    }
+
     if (editingDraftItemId) {
       setDraftBatchItems((prev) =>
         prev.map((item) =>
@@ -1368,6 +1401,15 @@ export default function App() {
         rollQuantity: qty,
         areaM2
       });
+    }
+
+    for (const line of linesToSave) {
+      if (isStarMaterialCategory(line.category)) {
+        if (!isValidStarMaterialSize(line.width)) {
+          setStockInError(STAR_MATERIAL_SIZE_ERROR);
+          return;
+        }
+      }
     }
 
     // Phase 7: Atomic Stock IN RPC Execution on Supabase
@@ -1687,6 +1729,13 @@ export default function App() {
     if (!trimMaterial || !trimSize) {
       setItemFormError('Material name and width/size are required.');
       return;
+    }
+
+    if (isStarMaterialCategory(itemFormCategory)) {
+      if (!isValidStarMaterialSize(trimSize)) {
+        setItemFormError(STAR_MATERIAL_SIZE_ERROR);
+        return;
+      }
     }
 
     if (!lenVal || lenVal <= 0) {
@@ -2056,7 +2105,61 @@ export default function App() {
     const flexGrandTotalRolls = flexRows.reduce((sum, r) => sum + r.totalRolls, 0);
     const flexGrandTotalArea = Number(flexRows.reduce((sum, r) => sum + r.totalAreaMtr2, 0).toFixed(2));
 
-    // 2. Vinyl / Lamination Roll Materials
+    // 2. Star Material Roll Stock (Controlled Sizes: 1.02, 1.30, 1.60, 1.90, 2.54, 3.20)
+    const starItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'STAR_MATERIAL');
+    const starMaterials = Array.from(new Set(starItems.map((i) => i.materialName))).sort((a, b) => {
+      const orderA = getMaterialRowDisplayOrder(a, items, 'STAR_MATERIAL');
+      const orderB = getMaterialRowDisplayOrder(b, items, 'STAR_MATERIAL');
+      if (orderA !== orderB) return orderA - orderB;
+      return a.localeCompare(b);
+    });
+
+    const starWidths = STAR_SUMMARY_WIDTHS; // ['1.02', '1.30', '1.60', '1.90', '2.54', '3.20']
+
+    const starRows = starMaterials.map((matName) => {
+      const matItems = starItems.filter((i) => i.materialName === matName);
+      const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
+      matItems.forEach((i) => {
+        cells[normalizeNumericSize(i.variantSize)] = i;
+        cells[i.variantSize.trim()] = i;
+      });
+      starWidths.forEach((w) => {
+        if (!cells[w]) {
+          const targetNum = parseFloat(w);
+          const matched = matItems.find((i) => {
+            const itemNum = parseFloat(i.variantSize);
+            return (
+              (!isNaN(targetNum) && !isNaN(itemNum) && Math.abs(itemNum - targetNum) < 0.005) ||
+              normalizeNumericSize(i.variantSize) === normalizeNumericSize(w) ||
+              i.variantSize.trim() === w.trim()
+            );
+          });
+          if (matched) {
+            cells[w] = matched;
+          }
+        }
+      });
+      const rowTotalRolls = starWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
+      const rowTotalArea = Number(starWidths.reduce((sum, w) => sum + (cells[w]?.totalAreaMtr2 || 0), 0).toFixed(2));
+      return {
+        materialName: matName,
+        category: matItems[0]?.category || 'Star Material',
+        displayOrder: getMaterialRowDisplayOrder(matName, items, 'STAR_MATERIAL'),
+        cells,
+        totalRolls: rowTotalRolls,
+        totalAreaMtr2: rowTotalArea
+      };
+    });
+
+    // Star column totals
+    const starColTotals: { [width: string]: number } = {};
+    starWidths.forEach((w) => {
+      starColTotals[w] = starRows.reduce((sum, row) => sum + (row.cells[w]?.currentStock || 0), 0);
+    });
+    const starGrandTotalRolls = starRows.reduce((sum, r) => sum + r.totalRolls, 0);
+    const starGrandTotalArea = Number(starRows.reduce((sum, r) => sum + r.totalAreaMtr2, 0).toFixed(2));
+
+    // 3. Vinyl / Lamination Roll Materials
     const vinylItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'VINYL_ROLL');
     const vinylMaterials = Array.from(new Set(vinylItems.map((i) => i.materialName))).sort((a, b) => {
       const orderA = getMaterialRowDisplayOrder(a, items, 'VINYL_ROLL');
@@ -2108,7 +2211,7 @@ export default function App() {
     const vinylGrandTotalRolls = vinylRows.reduce((sum, r) => sum + r.totalRolls, 0);
     const vinylGrandTotalArea = Number(vinylRows.reduce((sum, r) => sum + r.totalAreaMtr2, 0).toFixed(2));
 
-    // 3. PVC / Rigid Sheet Materials
+    // 4. PVC / Rigid Sheet Materials
     const pvcItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'RIGID_PVC');
     const pvcRows = pvcItems.length > 0 ? PVC_SHEET_SIZES.map((sheetSize) => {
       const sizeItems = pvcItems.filter((i) => i.variantSize === sheetSize);
@@ -2143,6 +2246,11 @@ export default function App() {
       flexColTotals,
       flexGrandTotalRolls,
       flexGrandTotalArea,
+      starRows,
+      starWidths,
+      starColTotals,
+      starGrandTotalRolls,
+      starGrandTotalArea,
       vinylRows,
       vinylWidths,
       vinylColTotals,
@@ -2426,6 +2534,18 @@ export default function App() {
               >
                 <BarcodeIcon className="w-3.5 h-3.5" />
                 <span>Roll Barcode Labels</span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('backup')}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-semibold flex items-center space-x-1.5 transition-all whitespace-nowrap cursor-pointer ${
+                  activeTab === 'backup'
+                    ? 'bg-[#27272A] text-[#D4A84B] border border-[#C59B3F]/50 shadow-sm'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/60'
+                }`}
+              >
+                <Database className="w-3.5 h-3.5" />
+                <span>Backup &amp; Restore</span>
               </button>
             </nav>
 
@@ -2818,13 +2938,179 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* TABLE 2: VINYL / LAMINATION MATERIALS */}
+                  {/* ------------------------------------------------------------- */}
+                  {/* TABLE 2: STAR MATERIAL ROLL STOCK                             */}
+                  {/* ------------------------------------------------------------- */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className="w-2 h-2 rounded-full bg-amber-500"></span>
+                        <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
+                          2. Star Material Roll Stock
+                        </h3>
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        Controlled Sizes: {summaryTablesData.starWidths.join(' • ')} M
+                      </span>
+                    </div>
+
+                    <div className="border border-slate-200 rounded-xl overflow-hidden shadow-xs">
+                      <div className="overflow-x-auto">
+                        <table className="w-full border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-900 text-white font-bold text-center">
+                              <th className="py-2.5 px-4 text-left font-black tracking-wide text-xs w-52 sticky left-0 bg-slate-900 z-10 border-r border-slate-800">
+                                Material
+                              </th>
+                              {summaryTablesData.starWidths.map((width) => (
+                                <th
+                                  key={width}
+                                  className="py-2.5 px-3 min-w-[65px] border-r border-slate-800 font-mono text-amber-200"
+                                >
+                                  {width}
+                                </th>
+                              ))}
+                              <th className="py-2.5 px-4 bg-slate-950 font-black text-white min-w-[85px] border-r border-slate-800">
+                                Total
+                              </th>
+                              <th className="py-2.5 px-4 bg-amber-950 font-black text-amber-200 min-w-[95px]">
+                                Total (m²)
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200">
+                            {summaryTablesData.starRows.length === 0 ? (
+                              <tr>
+                                <td
+                                  colSpan={summaryTablesData.starWidths.length + 3}
+                                  className="py-10 text-center text-slate-500 font-medium bg-slate-50/50"
+                                >
+                                  <div className="flex flex-col items-center justify-center space-y-2">
+                                    <p className="text-xs font-semibold text-slate-600">No Star Material rolls added yet.</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setActiveTab('materials');
+                                        openAddModal();
+                                      }}
+                                      className="inline-flex items-center text-xs font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                                    >
+                                      + Add Material
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ) : (
+                              summaryTablesData.starRows.map((row) => (
+                                <tr key={row.materialName} className="hover:bg-amber-50/40 transition-colors">
+                                  <td className="py-2.5 px-4 font-bold text-slate-900 sticky left-0 bg-white border-r border-slate-200 shadow-xs z-10">
+                                    <div className="leading-tight">
+                                      <span className="text-xs font-bold text-slate-900">{row.materialName}</span>
+                                      <span className="block text-[10px] text-slate-400 font-normal">
+                                        {row.category}
+                                      </span>
+                                    </div>
+                                  </td>
+
+                                  {summaryTablesData.starWidths.map((width) => {
+                                    const existingItem = row.cells[width];
+                                    const item = existingItem || {
+                                      id: `star-${row.materialName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${width}`,
+                                      materialName: row.materialName,
+                                      category: row.category,
+                                      variantSize: width,
+                                      rollLengthMtr: 50,
+                                      unit: 'Rolls',
+                                      barcode: `${row.materialName}-${width}`,
+                                      openingStock: 0,
+                                      minStock: 2,
+                                      active: true,
+                                      createdAt: '2026-09-01',
+                                      totalIn: 0,
+                                      totalOut: 0,
+                                      currentStock: 0,
+                                      areaPerRoll: Number((parseFloat(width) * 50).toFixed(2)),
+                                      totalAreaMtr2: 0,
+                                      status: 'OUT_OF_STOCK' as const
+                                    };
+                                    if (!existingItem) {
+                                      return (
+                                        <td
+                                          key={width}
+                                          onClick={() => setModalItem(item)}
+                                          className="py-2.5 px-3 text-center text-slate-400 border-r border-slate-100 font-mono bg-slate-50/40 select-none cursor-pointer hover:bg-slate-100"
+                                          title={`Click to view stock details for ${row.materialName} (${width}M) - Current: 0 Rolls`}
+                                        >
+                                          -
+                                        </td>
+                                      );
+                                    }
+
+                                    const qty = item.currentStock;
+                                    const isOutOfStock = qty <= 0;
+                                    const isLowStock = qty > 0 && qty <= item.minStock;
+
+                                    return (
+                                      <td
+                                        key={width}
+                                        onClick={() => setModalItem(item)}
+                                        className={`py-2.5 px-3 text-center border-r border-slate-100 font-mono font-bold cursor-pointer transition-all hover:scale-105 select-none ${
+                                          isOutOfStock
+                                            ? 'bg-red-50 text-red-600 hover:bg-red-100'
+                                            : isLowStock
+                                            ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                            : 'bg-emerald-50/70 text-emerald-800 hover:bg-emerald-100'
+                                        }`}
+                                        title={`Click to update ${item.materialName} (${item.variantSize}M) - Current: ${qty} Rolls`}
+                                      >
+                                        <span className="text-xs">{qty}</span>
+                                      </td>
+                                    );
+                                  })}
+
+                                  <td className="py-2.5 px-4 text-center font-mono font-black text-slate-900 bg-slate-50 border-r border-slate-200">
+                                    {row.totalRolls}
+                                  </td>
+                                  <td className="py-2.5 px-4 text-center font-mono font-black text-amber-700 bg-amber-50/40">
+                                    {row.totalAreaMtr2.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                          <tfoot className="border-t-2 border-slate-300 bg-slate-100 font-bold">
+                            <tr>
+                              <td className="py-2.5 px-4 font-black text-slate-900 sticky left-0 bg-slate-100 border-r border-slate-300 z-10 uppercase tracking-wider text-[11px]">
+                                Total Rolls
+                              </td>
+                              {summaryTablesData.starWidths.map((width) => (
+                                <td
+                                  key={width}
+                                  className="py-2.5 px-3 text-center font-mono font-black text-slate-900 border-r border-slate-200"
+                                >
+                                  {summaryTablesData.starColTotals[width] || 0}
+                                </td>
+                              ))}
+                              <td className="py-2.5 px-4 text-center font-mono font-black text-slate-950 bg-slate-200 border-r border-slate-300">
+                                {summaryTablesData.starGrandTotalRolls}
+                              </td>
+                              <td className="py-2.5 px-4 text-center font-mono font-black text-amber-900 bg-amber-100">
+                                {summaryTablesData.starGrandTotalArea.toLocaleString()}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* TABLE 3: VINYL / LAMINATION MATERIALS */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center space-x-2">
                         <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
                         <h3 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                          2. Vinyl / Lamination Roll Stock
+                          3. Vinyl / Lamination Roll Stock
                         </h3>
                       </div>
                       <span className="text-[11px] text-slate-500 font-mono">
@@ -3598,13 +3884,8 @@ export default function App() {
                         </label>
                         <span className="text-[10px] text-slate-400 font-mono">Metres</span>
                       </div>
-                      <div className="relative">
-                        <input
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          list="stock-in-size-suggestions"
-                          placeholder="e.g. 1.32 or 1.93"
+                      {isStarMaterialCategory(stockInAutoCategory) ? (
+                        <select
                           value={stockInVariantSize}
                           onChange={(e) => {
                             const val = e.target.value;
@@ -3619,38 +3900,69 @@ export default function App() {
                             setStockInError('');
                           }}
                           className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
-                        />
-                        <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
-                          M
-                        </span>
-                      </div>
-                      <datalist id="stock-in-size-suggestions">
-                        {stockInSuggestedSizes.map((size) => (
-                          <option key={size} value={size} />
-                        ))}
-                      </datalist>
-                      {stockInSuggestedSizes.length > 0 && (
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          {stockInSuggestedSizes.slice(0, 6).map((s) => (
-                            <button
-                              type="button"
-                              key={s}
-                              onClick={() => {
-                                setStockInVariantSize(s);
+                        >
+                          <option value="">-- Select Star Material Width --</option>
+                          {STAR_MATERIAL_ALLOWED_SIZES.map((sz) => (
+                            <option key={sz} value={sz}>{sz} M</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              min="0.01"
+                              step="0.01"
+                              list="stock-in-size-suggestions"
+                              placeholder="e.g. 1.32 or 1.93"
+                              value={stockInVariantSize}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setStockInVariantSize(val);
+                                const norm = normalizeNumericSize(val);
                                 const foundItem = items.find(
-                                  (i) => i.active && i.materialName === stockInMaterial && normalizeNumericSize(i.variantSize) === s
+                                  (i) => i.active && i.materialName === stockInMaterial && normalizeNumericSize(i.variantSize) === norm
                                 );
                                 if (foundItem && foundItem.rollLengthMtr) {
                                   setStockInRollLength(foundItem.rollLengthMtr.toString());
                                 }
                                 setStockInError('');
                               }}
-                              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white hover:bg-emerald-100 hover:text-emerald-800 text-slate-600 border border-slate-200 transition-colors"
-                            >
-                              {s}M
-                            </button>
-                          ))}
-                        </div>
+                              className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono text-sm font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-hidden"
+                            />
+                            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
+                              M
+                            </span>
+                          </div>
+                          <datalist id="stock-in-size-suggestions">
+                            {stockInSuggestedSizes.map((size) => (
+                              <option key={size} value={size} />
+                            ))}
+                          </datalist>
+                          {stockInSuggestedSizes.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {stockInSuggestedSizes.slice(0, 6).map((s) => (
+                                <button
+                                  type="button"
+                                  key={s}
+                                  onClick={() => {
+                                    setStockInVariantSize(s);
+                                    const foundItem = items.find(
+                                      (i) => i.active && i.materialName === stockInMaterial && normalizeNumericSize(i.variantSize) === s
+                                    );
+                                    if (foundItem && foundItem.rollLengthMtr) {
+                                      setStockInRollLength(foundItem.rollLengthMtr.toString());
+                                    }
+                                    setStockInError('');
+                                  }}
+                                  className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white hover:bg-emerald-100 hover:text-emerald-800 text-slate-600 border border-slate-200 transition-colors"
+                                >
+                                  {s}M
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
 
@@ -4329,6 +4641,25 @@ export default function App() {
             )}
           </div>
         )}
+
+        {/* ========================================================= */}
+        {/* TAB 8: BACKUP & RESTORE                                  */}
+        {/* ========================================================= */}
+        {activeTab === 'backup' && (
+          <BackupRestoreView
+            clientMaterials={items}
+            userEmail={staffSession?.user?.email}
+            showNotification={showNotification}
+            onRestoreSuccess={() => {
+              if (isSupabaseLive) {
+                fetchMaterialsFromSupabase().then((m) => m && setItems(m));
+                fetchRollsFromSupabase().then((r) => r && setInventoryRolls(r));
+                fetchTransactionsFromSupabase().then((t) => t && setTransactions(t));
+                fetchBatchesFromSupabase().then((b) => b && setBatches(b));
+              }
+            }}
+          />
+        )}
       </main>
 
       {/* Item Modal (Add / Edit Material) */}
@@ -4376,6 +4707,7 @@ export default function App() {
                   <option value="Flex PVC">Flex PVC</option>
                   <option value="Backlit">Backlit</option>
                   <option value="Frontlit Flex">Frontlit Flex</option>
+                  <option value="Star Material">Star Material</option>
                   <option value="Self Adhesive Vinyl">Self Adhesive Vinyl</option>
                   <option value="Lamination Film">Lamination Film</option>
                 </select>
@@ -4390,8 +4722,9 @@ export default function App() {
                     className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-semibold text-xs"
                   >
                     <option value="FLEX_ROLL">1. Flex / Backlit</option>
-                    <option value="VINYL_ROLL">2. Vinyl / Lamination</option>
-                    <option value="RIGID_PVC">3. PVC / Rigid Sheet</option>
+                    <option value="STAR_MATERIAL">2. Star Material</option>
+                    <option value="VINYL_ROLL">3. Vinyl / Lamination</option>
+                    <option value="RIGID_PVC">4. PVC / Rigid Sheet</option>
                   </select>
                 </div>
 
@@ -4413,21 +4746,37 @@ export default function App() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-700 font-semibold mb-1">Size / Width (M) *</label>
-                  <div className="relative">
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0.01"
-                      required
-                      placeholder="e.g. 1.02, 1.40, 1.63"
+                  {isStarMaterialCategory(itemFormCategory) ? (
+                    <select
                       value={itemFormSize}
                       onChange={(e) => setItemFormSize(e.target.value)}
-                      className="w-full p-2 pr-7 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono font-bold text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
-                    />
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
-                      M
-                    </span>
-                  </div>
+                      className="w-full p-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono font-bold text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                    >
+                      <option value="">-- Select Star Material Width --</option>
+                      {!STAR_MATERIAL_ALLOWED_SIZES.includes(itemFormSize as any) && itemFormSize ? (
+                        <option value={itemFormSize}>{itemFormSize} M (Invalid for Star Material)</option>
+                      ) : null}
+                      {STAR_MATERIAL_ALLOWED_SIZES.map((sz) => (
+                        <option key={sz} value={sz}>{sz} M</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="relative">
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        required
+                        placeholder="e.g. 1.02, 1.40, 1.63"
+                        value={itemFormSize}
+                        onChange={(e) => setItemFormSize(e.target.value)}
+                        className="w-full p-2 pr-7 bg-slate-50 border border-slate-300 rounded-lg text-slate-900 font-mono font-bold text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-hidden"
+                      />
+                      <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400 font-mono pointer-events-none">
+                        M
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -4516,6 +4865,18 @@ export default function App() {
       )}
 
 
+
+      {/* Daily Inventory Backup Prompt Modal */}
+      <DailyBackupModal
+        isOpen={isDailyBackupModalOpen}
+        clientMaterials={items}
+        userEmail={staffSession?.user?.email}
+        onClose={() => setIsDailyBackupModalOpen(false)}
+        onBackupSuccess={() => {
+          setIsDailyBackupModalOpen(false);
+          showNotification("Today's inventory backup created successfully.", 'success');
+        }}
+      />
 
       {/* App Footer */}
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500 print:hidden">

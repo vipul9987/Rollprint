@@ -5,7 +5,11 @@ import {
   MatrixDashboardMetrics,
   InventorySummaryGroup,
   MatrixBatch,
-  MatrixBatchItem
+  MatrixBatchItem,
+  STAR_MATERIAL_CATEGORY,
+  STAR_MATERIAL_INTERNAL,
+  STAR_MATERIAL_ALLOWED_SIZES,
+  STAR_MATERIAL_SIZE_ERROR
 } from '../types/inventory';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
@@ -17,9 +21,56 @@ const STORAGE_KEY_BATCHES = 'rollprint_client_batches_v1';
  * Standard Width Columns for Client Summary Tables
  */
 export const FLEX_SUMMARY_WIDTHS = ['1.02', '1.32', '1.63', '1.93', '2.54', '3.20'];
+export const STAR_SUMMARY_WIDTHS = ['1.02', '1.30', '1.60', '1.90', '2.54', '3.20'];
 export const VINYL_SUMMARY_WIDTHS = ['0.94', '0.98', '1.02', '1.06', '1.27', '1.52', '1.37'];
 export const PVC_SHEET_SIZES = ['8×4', '6×3', '5×10'];
 export const PVC_THICKNESSES = ['2mm', '3mm', '4mm', '5mm'];
+
+/**
+ * Checks if a category represents Star Material
+ */
+export function isStarMaterialCategory(category?: string): boolean {
+  if (!category) return false;
+  const c = category.trim();
+  return (
+    c === STAR_MATERIAL_CATEGORY ||
+    c === STAR_MATERIAL_INTERNAL ||
+    c.toUpperCase() === 'STAR_MATERIAL' ||
+    c.toLowerCase() === 'star material'
+  );
+}
+
+/**
+ * Validates that a size matches one of the allowed Star Material sizes:
+ * 1.02, 1.30, 1.60, 1.90, 2.54, 3.20
+ */
+export function isValidStarMaterialSize(val: string | number): boolean {
+  const norm = normalizeNumericSize(val);
+  const allowed = ['1.02', '1.30', '1.60', '1.90', '2.54', '3.20'];
+  if (allowed.includes(norm)) return true;
+  const num = parseFloat(norm);
+  if (isNaN(num)) return false;
+  const allowedFloats = [1.02, 1.30, 1.60, 1.90, 2.54, 3.20];
+  return allowedFloats.some((a) => Math.abs(a - num) < 0.005);
+}
+
+/**
+ * Validates Star Material category and size. Returns { valid: false, error } if invalid.
+ */
+export function validateStarMaterial(
+  category?: string,
+  size?: string | number
+): { valid: boolean; error?: string } {
+  if (isStarMaterialCategory(category)) {
+    if (!isValidStarMaterialSize(size || '')) {
+      return {
+        valid: false,
+        error: STAR_MATERIAL_SIZE_ERROR
+      };
+    }
+  }
+  return { valid: true };
+}
 
 /**
  * Normalizes numeric dimension representations (e.g. "1.63M" -> "1.63", "1.630" -> "1.63")
@@ -69,6 +120,9 @@ export const CLIENT_VINYL_MATERIALS_ORDER = [
  * Normalizes summary group / dashboard group string
  */
 export function normalizeSummaryGroup(group?: string, category?: string): InventorySummaryGroup {
+  if (group === 'STAR_MATERIAL' || group === 'Star Material') return 'STAR_MATERIAL';
+  if (isStarMaterialCategory(category)) return 'STAR_MATERIAL';
+
   if (group === 'FLEX_ROLL' || group === 'FLEX_BACKLIT') return 'FLEX_ROLL';
   if (group === 'VINYL_ROLL' || group === 'VINYL_LAMINATION') return 'VINYL_ROLL';
   if (group === 'RIGID_PVC' || group === 'PVC_RIGID') return 'RIGID_PVC';
@@ -76,8 +130,10 @@ export function normalizeSummaryGroup(group?: string, category?: string): Invent
   const cat = (category || '').toLowerCase();
   if (cat.includes('rigid') || cat.includes('sheet') || cat.includes('foam')) return 'RIGID_PVC';
   if (cat.includes('vinyl') || cat.includes('lamination') || cat.includes('one way')) return 'VINYL_ROLL';
+  if (cat.includes('star material') || cat === 'star_material') return 'STAR_MATERIAL';
   return 'FLEX_ROLL';
 }
+
 
 /**
  * Determines summary group based on explicit field or category/unit
@@ -803,14 +859,49 @@ export async function fetchMaterialsFromSupabase(): Promise<MatrixInventoryItem[
   if (!isSupabaseLive || !supabase) return null;
 
   try {
-    // 1. Try reading from material_catalog table if table exists in remote Postgres
+    // 1. Read from authenticated staff user metadata (universal remote persistence containing client's ~100 materials)
+    let user: any = null;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData?.session?.user) {
+        user = sessionData.session.user;
+      }
+    } catch {}
+
+    if (!user) {
+      try {
+        const { data: userData, error: userErr } = await supabase.auth.getUser();
+        if (!userErr && userData?.user) {
+          user = userData.user;
+        }
+      } catch {}
+    }
+
+    if (user) {
+      const rawCatalog = user.user_metadata?.material_catalog;
+      if (Array.isArray(rawCatalog) && rawCatalog.length > 0) {
+        const cleanCatalog = rawCatalog.filter((item: any) => !SAMPLE_ITEM_IDS.has(item.id));
+        return cleanCatalog.map((item: any) => ({
+          ...item,
+          summaryGroup: normalizeSummaryGroup(item.summaryGroup || item.dashboardGroup, item.category),
+          dashboardGroup: normalizeSummaryGroup(item.dashboardGroup || item.summaryGroup, item.category),
+          displayOrder: typeof item.displayOrder === 'number'
+            ? item.displayOrder
+            : 100,
+          active: item.active !== undefined ? item.active : true,
+          openingStock: 0
+        }));
+      }
+    }
+
+    // 2. Fallback to reading from material_catalog table if table exists in remote Postgres
     try {
       const { data: tableData, error: tableErr } = await supabase
         .from('material_catalog')
         .select('*')
         .order('display_order', { ascending: true });
 
-      if (!tableErr && Array.isArray(tableData)) {
+      if (!tableErr && Array.isArray(tableData) && tableData.length > 0) {
         const cleanRows = tableData.filter((row: any) => !SAMPLE_ITEM_IDS.has(row.id));
         return cleanRows.map((row: any) => ({
           id: row.id,
@@ -831,31 +922,7 @@ export async function fetchMaterialsFromSupabase(): Promise<MatrixInventoryItem[
         }));
       }
     } catch {
-      // Table may not exist yet, fallback to remote user metadata
-    }
-
-    // 2. Read from authenticated staff user metadata (universal remote persistence across all browsers)
-    const { data: userData, error: userErr } = await supabase.auth.getUser();
-    if (!userErr && userData?.user) {
-      const rawCatalog = userData.user.user_metadata?.material_catalog;
-      if (Array.isArray(rawCatalog)) {
-        const cleanCatalog = rawCatalog.filter((item: any) => !SAMPLE_ITEM_IDS.has(item.id));
-        // If remote metadata contained legacy sample items, automatically purge it on remote Supabase
-        if (cleanCatalog.length !== rawCatalog.length) {
-          supabase.auth.updateUser({ data: { material_catalog: cleanCatalog } }).catch(() => {});
-        }
-        return cleanCatalog.map((item: any) => ({
-          ...item,
-          summaryGroup: normalizeSummaryGroup(item.summaryGroup || item.dashboardGroup, item.category),
-          dashboardGroup: normalizeSummaryGroup(item.dashboardGroup || item.summaryGroup, item.category),
-          displayOrder: typeof item.displayOrder === 'number'
-            ? item.displayOrder
-            : 100,
-          active: item.active !== undefined ? item.active : true,
-          openingStock: 0
-        }));
-      }
-      return [];
+      // Table may not exist yet
     }
 
     return [];
@@ -867,6 +934,17 @@ export async function fetchMaterialsFromSupabase(): Promise<MatrixInventoryItem[
 
 export async function saveMaterialsToSupabase(items: MatrixInventoryItem[]): Promise<boolean> {
   const isSupabaseLive = isSupabaseConfigured();
+
+  // Validate Star Material records
+  for (const it of items) {
+    if (isStarMaterialCategory(it.category)) {
+      if (!isValidStarMaterialSize(it.variantSize)) {
+        console.error('saveMaterialsToSupabase validation failed:', STAR_MATERIAL_SIZE_ERROR);
+        throw new Error(STAR_MATERIAL_SIZE_ERROR);
+      }
+    }
+  }
+
   if (!isSupabaseLive || !supabase) return false;
 
   try {
@@ -1000,14 +1078,14 @@ export function calculateMatrixWithStock(
       ? activeRolls.filter(
           (r: any) =>
             r.materialName?.trim().toLowerCase() === item.materialName.trim().toLowerCase() &&
-            normalizeNumericSize(r.size) === normItemSize
+            normalizeNumericSize(r.size || r.width) === normItemSize
         )
       : [];
 
     let currentStock: number;
-    // When rolls are explicitly provided (including an empty array []) or in Supabase production mode:
+    // When rolls are explicitly provided (including an empty array []):
     // Physical rolls are the SOLE source of truth!
-    if (activeRolls !== undefined || isSupabaseLive) {
+    if (activeRolls !== undefined) {
       if (item.unit === 'Sheets' && matchingRolls.length === 0) {
         // Non-roll sheet material
         currentStock = Math.max(0, (isSupabaseLive ? 0 : item.openingStock) + totalIn - totalOut);
@@ -1166,7 +1244,53 @@ export function computeDashboardMatrixTables(
     };
   });
 
-  // 2. Vinyl / Lamination
+  // 2. Star Material Roll Stock: Visible widths are 1.02, 1.30, 1.60, 1.90, 2.54, 3.20
+  const starItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'STAR_MATERIAL');
+  const starMaterials = Array.from(new Set(starItems.map((i) => i.materialName))).sort((a, b) => {
+    const orderA = getMaterialRowDisplayOrder(a, allCatalog, 'STAR_MATERIAL');
+    const orderB = getMaterialRowDisplayOrder(b, allCatalog, 'STAR_MATERIAL');
+    if (orderA !== orderB) return orderA - orderB;
+    return a.localeCompare(b);
+  });
+
+  const starWidths = STAR_SUMMARY_WIDTHS; // ['1.02', '1.30', '1.60', '1.90', '2.54', '3.20']
+
+  const starRows = starMaterials.map((matName) => {
+    const matItems = starItems.filter((i) => i.materialName === matName);
+    const cells: { [width: string]: MatrixItemWithStock | undefined } = {};
+    matItems.forEach((i) => {
+      cells[normalizeNumericSize(i.variantSize)] = i;
+      cells[i.variantSize.trim()] = i;
+    });
+    starWidths.forEach((w) => {
+      if (!cells[w]) {
+        const targetNum = parseFloat(w);
+        const matched = matItems.find((i) => {
+          const itemNum = parseFloat(i.variantSize);
+          return (
+            (!isNaN(targetNum) && !isNaN(itemNum) && Math.abs(itemNum - targetNum) < 0.005) ||
+            normalizeNumericSize(i.variantSize) === normalizeNumericSize(w) ||
+            i.variantSize.trim() === w.trim()
+          );
+        });
+        if (matched) {
+          cells[w] = matched;
+        }
+      }
+    });
+    const rowTotalRolls = starWidths.reduce((sum, w) => sum + (cells[w]?.currentStock || 0), 0);
+    const rowTotalArea = Number(starWidths.reduce((sum, w) => sum + (cells[w]?.totalAreaMtr2 || 0), 0).toFixed(2));
+    return {
+      materialName: matName,
+      category: matItems[0]?.category || 'Star Material',
+      displayOrder: getMaterialRowDisplayOrder(matName, allCatalog, 'STAR_MATERIAL'),
+      cells,
+      totalRolls: rowTotalRolls,
+      totalAreaMtr2: rowTotalArea
+    };
+  });
+
+  // 3. Vinyl / Lamination
   const vinylItems = activeItems.filter((i) => getItemSummaryGroup(i) === 'VINYL_ROLL');
   const vinylMaterials = Array.from(new Set(vinylItems.map((i) => i.materialName))).sort((a, b) => {
     const orderA = getMaterialRowDisplayOrder(a, allCatalog, 'VINYL_ROLL');
@@ -1214,6 +1338,9 @@ export function computeDashboardMatrixTables(
     flexMaterials,
     flexWidths,
     flexRows,
+    starMaterials,
+    starWidths,
+    starRows,
     vinylMaterials,
     vinylWidths,
     vinylRows
