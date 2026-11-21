@@ -18,6 +18,9 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const callbacksRef = useRef({ onScanSuccess, onClose });
+  callbacksRef.current = { onScanSuccess, onClose };
+  const scanHandledRef = useRef(false);
   const elementId = 'html5-qr-reader';
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -25,6 +28,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
     if (!isOpen) return;
 
     setErrorMessage('');
+    scanHandledRef.current = false;
     let isCancelled = false;
 
     // Small delay to allow modal DOM rendering
@@ -51,14 +55,16 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
               aspectRatio: 1.0
             },
             (decodedText) => {
+              if (scanHandledRef.current || isCancelled) return;
+              scanHandledRef.current = true;
               // Successfully decoded!
               try {
                 if (html5QrCode.isScanning) {
                   html5QrCode.stop().catch(() => {});
                 }
               } catch (e) {}
-              onScanSuccess(decodedText);
-              onClose();
+              callbacksRef.current.onScanSuccess(decodedText);
+              callbacksRef.current.onClose();
             },
             () => {
               // Ignored during active frame hunting
@@ -72,9 +78,9 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
           .catch((err) => {
             if (!isCancelled) {
               console.warn('Camera stream error:', err);
-              setErrorMessage(
-                'Camera could not be started directly. Ensure camera permissions are granted, or upload a photo of the code below.'
-              );
+              setErrorMessage(window.isSecureContext
+                ? 'Camera could not start. Allow camera access in your browser settings, or upload a photo below.'
+                : 'Camera access requires HTTPS. Open the secure site in your phone browser, or upload a photo below.');
             }
           });
       } catch (e: any) {
@@ -95,7 +101,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
         } catch (e) {}
       }
     };
-  }, [isOpen, onScanSuccess, onClose]);
+  }, [isOpen]);
 
   // Handle fallback file / photo capture
   const handleFileScan = async (e: React.ChangeEvent<HTMLInputElement>) => {

@@ -68,6 +68,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   // OUT STOCK LIST (TEMPORARY CART)
   // =========================================================================
   const [cartRolls, setCartRolls] = useState<InventoryRoll[]>([]);
+  const cartRollsRef = useRef<InventoryRoll[]>([]);
+  cartRollsRef.current = cartRolls;
 
   // Scan feedback alert message
   const [scanAlert, setScanAlert] = useState<ScanAlert | null>(null);
@@ -98,6 +100,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const zxingControlsRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cameraRunRef = useRef(0);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [hasTorchSupport, setHasTorchSupport] = useState<boolean>(false);
@@ -154,6 +157,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
 
   // Stop camera stream cleanly
   const stopCamera = useCallback(() => {
+    cameraRunRef.current += 1;
     if (zxingControlsRef.current) {
       try {
         zxingControlsRef.current.stop();
@@ -187,7 +191,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       lastScanTimestampRef.current = now;
 
       // 1. DUPLICATE SCAN PROTECTION (Current Cart)
-      if (cartRolls.some((r) => r.rollBarcode.toUpperCase() === clean.toUpperCase())) {
+      if (cartRollsRef.current.some((r) => r.rollBarcode.toUpperCase() === clean.toUpperCase())) {
         triggerScanAudio(false);
         const msg = 'Roll already added to this Stock OUT list.';
         setScanAlert({
@@ -234,7 +238,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
 
       // 4. VALID IN_STOCK PHYSICAL ROLL -> ADD TO OUT STOCK LIST
       triggerScanAudio(true);
-      setCartRolls((prev) => [roll, ...prev]);
+      cartRollsRef.current = [roll, ...cartRollsRef.current];
+      setCartRolls(cartRollsRef.current);
       setScanAlert({
         type: 'success',
         title: `Added: ${roll.materialName} (${roll.size}M × ${roll.rollLength}M)`,
@@ -247,15 +252,20 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       setManualInput('');
       setTimeout(() => manualInputRef.current?.focus(), 50);
     },
-    [cartRolls, triggerScanAudio]
+    [triggerScanAudio]
   );
 
   // Start Camera only when modal is open
   const startCamera = useCallback(async () => {
     stopCamera();
+    const cameraRun = cameraRunRef.current;
     setCameraError('');
 
     try {
+      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+        setCameraError('Camera access requires HTTPS. Open the secure site in your phone browser, or use Upload Photo.');
+        return;
+      }
       const constraints: MediaStreamConstraints = {
         audio: false,
         video: {
@@ -266,6 +276,10 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (cameraRun !== cameraRunRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
       streamRef.current = stream;
 
       const videoTrack = stream.getVideoTracks()[0];
@@ -297,13 +311,17 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
             }
           }
         });
+        if (cameraRun !== cameraRunRef.current) {
+          controls.stop();
+          return;
+        }
         zxingControlsRef.current = controls;
       }
     } catch (err: any) {
       console.warn('Camera initialization error:', err);
-      setCameraError(
-        'Camera unavailable. Allow camera permission or enter/scan the Roll Barcode manually.'
-      );
+      setCameraError(err?.name === 'NotAllowedError'
+        ? 'Camera permission was denied. Allow camera access in your browser settings and try again, or upload a photo.'
+        : 'Camera unavailable. Try switching cameras, upload a photo, or enter the Roll Barcode manually.');
     }
   }, [facingMode, handleBarcodeDecoded, stopCamera]);
 
