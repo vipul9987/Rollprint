@@ -94,6 +94,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   const [isCameraModalOpen, setIsCameraModalOpen] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string>('');
   const [modalFeedback, setModalFeedback] = useState<string>('');
+  const [isDecodingPhoto, setIsDecodingPhoto] = useState(false);
 
   // Camera Hardware / Stream Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -386,17 +387,20 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setIsDecodingPhoto(true);
+    setModalFeedback('Reading barcode from photo…');
     try {
       const hints = new Map<DecodeHintType, any>();
-      hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]);
+      hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128, BarcodeFormat.CODE_39, BarcodeFormat.ITF]);
       hints.set(DecodeHintType.TRY_HARDER, true);
       const reader = new BrowserMultiFormatReader(hints);
       const imgUrl = URL.createObjectURL(file);
       try {
         const result = await reader.decodeFromImageUrl(imgUrl);
         if (result && result.getText()) {
-          handleBarcodeDecoded(result.getText());
+          await handleBarcodeDecoded(result.getText());
         } else {
+          setModalFeedback('Barcode not detected. Try a closer, sharper photo.');
           setScanAlert({
             type: 'error',
             title: 'Barcode not detected in image.',
@@ -407,11 +411,15 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         URL.revokeObjectURL(imgUrl);
       }
     } catch {
+      setModalFeedback('Could not read barcode. Try a closer, sharper photo or enter its number.');
       setScanAlert({
         type: 'error',
         title: 'Barcode decode failed from photo.',
         detail: 'Try entering the printed roll barcode number manually.'
       });
+    } finally {
+      setIsDecodingPhoto(false);
+      e.target.value = '';
     }
   };
 
@@ -997,7 +1005,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                 </div>
 
                 {/* Instant Scan Feedback Banner inside Modal */}
-                {modalFeedback && (
+                {modalFeedback && !cameraError && (
                   <div className="absolute bottom-3 left-3 right-3 py-1.5 px-3 rounded-lg bg-black/80 backdrop-blur-md text-white font-mono font-bold text-xs text-center border border-white/20 animate-in fade-in">
                     {modalFeedback}
                   </div>
@@ -1008,14 +1016,17 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                   <div className="absolute inset-0 bg-slate-950/95 text-white p-5 flex flex-col items-center justify-center text-center space-y-3">
                     <AlertCircle className="w-8 h-8 text-amber-400" />
                     <p className="text-xs text-slate-200 max-w-xs">{cameraError}</p>
+                    {modalFeedback && <p role="status" className="text-xs font-semibold text-amber-300 max-w-xs">{modalFeedback}</p>}
                     <button
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
+                      disabled={isDecodingPhoto}
                       className="py-2 px-3 bg-white text-slate-900 rounded-lg text-xs font-bold hover:bg-slate-100 flex items-center space-x-1.5 cursor-pointer"
                     >
                       <Upload className="w-3.5 h-3.5" />
                       <span>Upload Photo Instead</span>
                     </button>
+                    <button type="button" onClick={startCamera} className="text-xs font-semibold text-white underline cursor-pointer">Try Camera Again</button>
                   </div>
                 )}
               </div>
@@ -1029,7 +1040,6 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
-                capture="environment"
                 className="hidden"
                 onChange={handlePhotoUpload}
               />
@@ -1040,6 +1050,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
+                disabled={isDecodingPhoto}
                 className="text-slate-600 hover:text-slate-900 font-medium flex items-center space-x-1 cursor-pointer"
               >
                 <Upload className="w-3.5 h-3.5" />

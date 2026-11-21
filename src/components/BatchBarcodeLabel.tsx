@@ -43,6 +43,9 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
       rollBarcode: uniqueRollBarcode
     };
   });
+  const labelPages = Array.from({ length: Math.ceil(copiesArray.length / 40) }, (_, page) =>
+    copiesArray.slice(page * 40, (page + 1) * 40)
+  );
 
   // Render CODE128 barcode onto each SVG ref
   // CRITICAL RULE: Every physical roll has its OWN unique barcode!
@@ -197,47 +200,32 @@ export const BatchBarcodeLabel: React.FC<BatchBarcodeLabelProps> = ({
         <div className="flex items-center space-x-2 text-[11px] text-slate-300 bg-slate-800/80 px-3 py-2 rounded-xl border border-slate-700/60">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>
-            <strong>Unique Physical Roll Barcodes (46 &times; 11 mm Standard):</strong> Every physical roll in this batch receives its <strong>OWN UNIQUE BARCODE</strong>. One barcode never represents multiple rolls.
+            <strong>A4 40-label sheet (18 &times; 73 mm):</strong> Every physical roll in this batch receives its <strong>OWN UNIQUE BARCODE</strong>. One barcode never represents multiple rolls.
           </span>
         </div>
       </div>
 
-      {/* Printable Labels Grid: Clean 46mm × 11mm roll stickers */}
-      <div className="batch-sticker-grid flex flex-wrap items-center justify-center gap-3 p-4 bg-slate-100 rounded-2xl border border-slate-200 overflow-x-auto print:bg-white print:border-none print:p-0">
-        {copiesArray.map((item, idx) => (
+      {/* Ten columns by four rows on each A4 sheet. */}
+      {labelPages.map((page, pageIndex) => (
+      <div key={pageIndex} className="batch-sticker-grid bg-slate-100 border border-slate-200 overflow-x-auto print:bg-white print:border-none">
+        {page.map((item, pageItemIndex) => {
+          const idx = pageIndex * 40 + pageItemIndex;
+          return (
           <div
             key={item.copyNum}
-            className="batch-barcode-sticker bg-white border border-slate-300 rounded-xs flex flex-col items-center justify-center shadow-xs select-none"
-            style={{
-              width: '46mm',
-              height: '11mm',
-              minWidth: '46mm',
-              maxWidth: '46mm',
-              minHeight: '11mm',
-              maxHeight: '11mm',
-              padding: '0.5mm 1mm',
-              boxSizing: 'border-box',
-              overflow: 'hidden',
-              backgroundColor: '#ffffff'
-            }}
+            className="batch-barcode-sticker bg-white border border-slate-300 flex items-center justify-center select-none"
           >
             {/* ONLY the genuine CODE128 barcode with unique Roll Barcode centered below */}
             <svg
               ref={(el) => {
                 barcodeCanvasRefs.current[idx] = el;
               }}
-              style={{
-                display: 'block',
-                maxWidth: '44mm',
-                maxHeight: '10mm',
-                width: 'auto',
-                height: 'auto',
-                backgroundColor: '#ffffff'
-              }}
             />
           </div>
-        ))}
+          );
+        })}
       </div>
+      ))}
     </div>
   );
 };

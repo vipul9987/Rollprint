@@ -43,42 +43,71 @@
   .print-only {
     display: block !important;
   }
-  /* Pure Batch CODE128 Roll Stickers Print Layout: 46mm × 11mm Standard Thermal Label */
+  /* A4 sheet with 40 portrait stickers: 10 columns × 4 rows, 18 × 73 mm. */
   @page {
-    size: 46mm 11mm;
-    margin: 0mm;
+    size: A4 portrait;
+    margin: 0;
   }
   .batch-sticker-grid {
-    display: block !important;
+    display: grid !important;
+    grid-template-columns: repeat(10, 18mm) !important;
+    grid-template-rows: repeat(4, 73mm) !important;
+    width: 180mm !important;
+    height: 292mm !important;
     padding: 0 !important;
-    margin: 0 !important;
+    margin: 2.5mm auto !important;
     background: transparent !important;
+    overflow: visible !important;
+    break-after: page !important;
+  }
+  .batch-sticker-grid:last-child {
+    break-after: auto !important;
   }
   .batch-barcode-sticker {
-    width: 46mm !important;
-    height: 11mm !important;
-    max-width: 46mm !important;
-    max-height: 11mm !important;
-    margin: 0 auto !important;
-    padding: 0.5mm 1mm !important;
+    width: 18mm !important;
+    height: 73mm !important;
+    margin: 0 !important;
+    padding: 0 !important;
     box-sizing: border-box !important;
     border: none !important;
     background: #ffffff !important;
     box-shadow: none !important;
     break-inside: avoid !important;
     page-break-inside: avoid !important;
-    page-break-after: always !important;
-    break-after: page !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
     overflow: hidden !important;
   }
   .batch-barcode-sticker svg {
-    max-width: 44mm !important;
-    max-height: 10mm !important;
-    width: auto !important;
-    height: 10mm !important;
+    width: 68mm !important;
+    height: auto !important;
+    max-width: none !important;
+    max-height: 15mm !important;
+    flex: none !important;
+    transform: rotate(90deg) !important;
     display: block !important;
   }
+}
+
+.batch-sticker-grid {
+  display: grid;
+  grid-template-columns: repeat(10, 18mm);
+  grid-template-rows: repeat(4, 73mm);
+  width: 180mm;
+  margin: 0 auto;
+}
+
+.batch-barcode-sticker {
+  width: 18mm;
+  height: 73mm;
+  overflow: hidden;
+}
+
+.batch-barcode-sticker svg {
+  width: 68mm;
+  max-width: none;
+  max-height: 15mm;
+  flex: none;
+  transform: rotate(90deg);
 }
