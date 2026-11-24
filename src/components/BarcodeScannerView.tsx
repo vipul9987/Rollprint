@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   Flashlight,
   FlashlightOff,
+  ZoomIn,
+  ZoomOut,
   RefreshCw,
   Upload,
   ArrowUpFromLine,
@@ -105,6 +107,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [hasTorchSupport, setHasTorchSupport] = useState<boolean>(false);
+  const zoomLimitsRef = useRef<{ min: number; max: number; step: number } | null>(null);
+  const [zoomLevel, setZoomLevel] = useState<number | null>(null);
 
   // Anti-chatter throttle for continuous camera scanner
   const lastScannedCodeRef = useRef<string>('');
@@ -170,6 +174,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
     }
     setIsTorchOn(false);
     setHasTorchSupport(false);
+    zoomLimitsRef.current = null;
+    setZoomLevel(null);
   }, []);
 
   // =========================================================================
@@ -298,6 +304,21 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         const capabilities: any = videoTrack.getCapabilities ? videoTrack.getCapabilities() : {};
         if (capabilities.torch) {
           setHasTorchSupport(true);
+        }
+        const focusReady = Array.isArray(capabilities.focusMode) && capabilities.focusMode.includes('continuous')
+          ? videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' } as any] }).catch(() => {})
+          : Promise.resolve();
+        if (capabilities.zoom && Number.isFinite(capabilities.zoom.min) && Number.isFinite(capabilities.zoom.max)) {
+          const limits = {
+            min: capabilities.zoom.min as number,
+            max: capabilities.zoom.max as number,
+            step: Math.max(capabilities.zoom.step || 0.25, 0.1) as number
+          };
+          zoomLimitsRef.current = limits;
+          const initialZoom = Math.min(limits.max, Math.max(limits.min, 1.5));
+          void focusReady.then(() => videoTrack.applyConstraints({ advanced: [{ zoom: initialZoom } as any] }))
+            .then(() => setZoomLevel(initialZoom))
+            .catch(() => setZoomLevel(limits.min));
         }
       }
 
@@ -440,6 +461,20 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
       setIsTorchOn(nextState);
     } catch (err) {
       console.warn('Torch toggle error:', err);
+    }
+  };
+
+  const adjustZoom = async (direction: -1 | 1) => {
+    const limits = zoomLimitsRef.current;
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!limits || !track) return;
+    const current = zoomLevel ?? limits.min;
+    const next = Math.max(limits.min, Math.min(limits.max, current + direction * Math.max(limits.step, 0.25)));
+    try {
+      await track.applyConstraints({ advanced: [{ zoom: next } as any] });
+      setZoomLevel(next);
+    } catch (error) {
+      console.warn('Camera zoom failed:', error);
     }
   };
 
@@ -1082,6 +1117,16 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
 
                 {/* Camera stream controls overlay */}
                 <div className="absolute top-3 right-3 flex items-center space-x-2">
+                  {zoomLevel !== null && (
+                    <>
+                      <button type="button" onClick={() => void adjustZoom(-1)} className="p-2 rounded-xl bg-black/60 text-white border border-white/20 cursor-pointer" title="Zoom out" aria-label="Zoom out">
+                        <ZoomOut className="w-4 h-4" />
+                      </button>
+                      <button type="button" onClick={() => void adjustZoom(1)} className="p-2 rounded-xl bg-black/60 text-white border border-white/20 cursor-pointer" title="Zoom in" aria-label="Zoom in">
+                        <ZoomIn className="w-4 h-4" />
+                      </button>
+                    </>
+                  )}
                   {hasTorchSupport && (
                     <button
                       type="button"
@@ -1136,6 +1181,19 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               <p className="text-center text-xs text-slate-500">
                 Fill the camera view with one barcode. Hold steady and avoid glare.
               </p>
+
+              <form onSubmit={handleManualSubmit} className="flex gap-2">
+                <input
+                  type="text"
+                  value={manualInput}
+                  onChange={(event) => setManualInput(event.target.value)}
+                  placeholder="Or enter the printed barcode"
+                  aria-label="Enter printed roll barcode"
+                  autoComplete="off"
+                  className="min-w-0 flex-1 px-3 py-2 rounded-lg border border-slate-300 text-sm font-mono text-slate-900"
+                />
+                <button type="submit" className="px-3 py-2 rounded-lg bg-slate-900 text-white text-xs font-bold cursor-pointer">Add Roll</button>
+              </form>
 
               {/* Upload image alternative fallback */}
               <input
