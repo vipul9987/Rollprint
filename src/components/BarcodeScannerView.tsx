@@ -333,9 +333,9 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
             schedule(scanWithZxing, 100);
             return;
           }
-          const cropWidth = Math.round(sourceWidth * 0.85);
-          const cropHeight = Math.round(sourceHeight * 0.75);
-          const scale = Math.min(1, 960 / cropWidth);
+          const cropWidth = Math.round(sourceWidth * 0.95);
+          const cropHeight = Math.round(sourceHeight * 0.9);
+          const scale = Math.min(1, 1280 / cropWidth);
           const targetWidth = Math.round(cropWidth * scale);
           const targetHeight = Math.round(cropHeight * scale);
           if (canvas.width !== targetWidth) canvas.width = targetWidth;
@@ -1134,7 +1134,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
               </div>
 
               <p className="text-center text-xs text-slate-500">
-                Point camera at the physical roll's unique barcode sticker.
+                Fill the camera view with one barcode. Hold steady and avoid glare.
               </p>
 
               {/* Upload image alternative fallback */}

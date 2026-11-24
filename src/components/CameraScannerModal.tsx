@@ -39,8 +39,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
       try {
         const html5QrCode = new Html5Qrcode(elementId, {
           formatsToSupport: [
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.CODE_39
+            Html5QrcodeSupportedFormats.CODE_128
           ],
           verbose: false
         });
@@ -51,8 +50,10 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
             { facingMode: 'environment' },
             {
               fps: 15,
-              qrbox: { width: 280, height: 140 },
-              aspectRatio: 1.0
+              qrbox: (viewfinderWidth, viewfinderHeight) => ({
+                width: Math.max(50, Math.floor(viewfinderWidth * 0.92)),
+                height: Math.max(50, Math.floor(viewfinderHeight * 0.85))
+              })
             },
             (decodedText) => {
               if (scanHandledRef.current || isCancelled) return;
@@ -114,8 +115,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
         scannerRef.current ||
         new Html5Qrcode(elementId, {
           formatsToSupport: [
-            Html5QrcodeSupportedFormats.CODE_128,
-            Html5QrcodeSupportedFormats.CODE_39
+            Html5QrcodeSupportedFormats.CODE_128
           ],
           verbose: false
         });
@@ -168,7 +168,7 @@ export const CameraScannerModal: React.FC<CameraScannerModalProps> = ({
           </div>
 
           <p className="text-center text-xs text-slate-500">
-            Point camera at the physical roll's unique barcode sticker.
+            Fill the camera view with one barcode. Hold steady and avoid glare.
           </p>
 
           {/* Error Message & Photo upload fallback */}
