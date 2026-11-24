@@ -99,7 +99,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   // Camera Hardware / Stream Refs
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const zxingControlsRef = useRef<any>(null);
+  const scanTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   const streamRef = useRef<MediaStream | null>(null);
   const cameraRunRef = useRef(0);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
@@ -109,6 +109,7 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   // Anti-chatter throttle for continuous camera scanner
   const lastScannedCodeRef = useRef<string>('');
   const lastScanTimestampRef = useRef<number>(0);
+  const pendingBarcodesRef = useRef<Set<string>>(new Set());
 
   // =========================================================================
   // AUDIO & HAPTIC FEEDBACK (Fast, retail-grade feedback)
@@ -159,12 +160,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
   // Stop camera stream cleanly
   const stopCamera = useCallback(() => {
     cameraRunRef.current += 1;
-    if (zxingControlsRef.current) {
-      try {
-        zxingControlsRef.current.stop();
-      } catch {}
-      zxingControlsRef.current = null;
-    }
+    scanTimersRef.current.forEach(clearTimeout);
+    scanTimersRef.current.clear();
     if (streamRef.current) {
       try {
         streamRef.current.getTracks().forEach((t) => t.stop());
@@ -205,8 +202,21 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         return;
       }
 
+      if (pendingBarcodesRef.current.has(clean)) return;
+      pendingBarcodesRef.current.add(clean);
+      setModalFeedback(`Reading ${clean}…`);
+
       // 2. QUERY EXACT PHYSICAL ROLL FROM DATABASE
-      const roll = await queryRollByExactBarcode(clean);
+      let roll: InventoryRoll | null;
+      try {
+        roll = await queryRollByExactBarcode(clean);
+      } catch (error) {
+        console.warn('Roll lookup failed:', error);
+        setModalFeedback(`Could not check ${clean}. Try again.`);
+        return;
+      } finally {
+        pendingBarcodesRef.current.delete(clean);
+      }
 
       if (!roll) {
         triggerScanAudio(false);
@@ -271,8 +281,8 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         audio: false,
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1920, min: 640 },
-          height: { ideal: 1080, min: 480 }
+          width: { ideal: 1280, min: 640 },
+          height: { ideal: 720, min: 480 }
         }
       };
 
@@ -296,27 +306,119 @@ export const BarcodeScannerView: React.FC<BarcodeScannerViewProps> = ({
         await videoRef.current.play();
 
         const hints = new Map<DecodeHintType, any>();
-        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
-          BarcodeFormat.CODE_128,
-          BarcodeFormat.CODE_39,
-          BarcodeFormat.ITF
-        ]);
-        hints.set(DecodeHintType.TRY_HARDER, true);
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.CODE_128]);
+        const video = videoRef.current;
+        const reader = new BrowserMultiFormatReader(hints);
+        const canvas = document.createElement('canvas');
+        const rotatedCanvas = document.createElement('canvas');
+        const schedule = (callback: () => void, delay: number) => {
+          const timer = setTimeout(() => {
+            scanTimersRef.current.delete(timer);
+            if (cameraRun === cameraRunRef.current) callback();
+          }, delay);
+          scanTimersRef.current.add(timer);
+        };
 
-        const reader = new BrowserMultiFormatReader(hints, { delayBetweenScanAttempts: 150 });
-        const controls = await reader.decodeFromVideoElement(videoRef.current, (result) => {
-          if (result) {
-            const text = result.getText();
-            if (text && text.trim()) {
-              handleBarcodeDecoded(text);
+        // Decode the central view only. Printed sheet labels can be held either
+        // way, so test both orientations without ZXing's expensive full-frame
+        // TRY_HARDER pass on every video frame.
+        const scanWithZxing = () => {
+          if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            schedule(scanWithZxing, 100);
+            return;
+          }
+          const sourceWidth = video.videoWidth;
+          const sourceHeight = video.videoHeight;
+          if (!sourceWidth || !sourceHeight) {
+            schedule(scanWithZxing, 100);
+            return;
+          }
+          const cropWidth = Math.round(sourceWidth * 0.85);
+          const cropHeight = Math.round(sourceHeight * 0.75);
+          const scale = Math.min(1, 960 / cropWidth);
+          const targetWidth = Math.round(cropWidth * scale);
+          const targetHeight = Math.round(cropHeight * scale);
+          if (canvas.width !== targetWidth) canvas.width = targetWidth;
+          if (canvas.height !== targetHeight) canvas.height = targetHeight;
+          const context = canvas.getContext('2d', { willReadFrequently: true });
+          if (!context) return;
+          context.drawImage(
+            video,
+            (sourceWidth - cropWidth) / 2,
+            (sourceHeight - cropHeight) / 2,
+            cropWidth,
+            cropHeight,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+          );
+          try {
+            const result = reader.decodeFromCanvas(canvas);
+            if (result?.getText()) void handleBarcodeDecoded(result.getText());
+          } catch {
+            if (rotatedCanvas.width !== canvas.height) rotatedCanvas.width = canvas.height;
+            if (rotatedCanvas.height !== canvas.width) rotatedCanvas.height = canvas.width;
+            const rotatedContext = rotatedCanvas.getContext('2d', { willReadFrequently: true });
+            if (rotatedContext) {
+              rotatedContext.setTransform(1, 0, 0, 1, 0, 0);
+              rotatedContext.translate(rotatedCanvas.width, 0);
+              rotatedContext.rotate(Math.PI / 2);
+              rotatedContext.drawImage(canvas, 0, 0);
+              try {
+                const result = reader.decodeFromCanvas(rotatedCanvas);
+                if (result?.getText()) void handleBarcodeDecoded(result.getText());
+              } catch {
+                // No readable barcode in this frame.
+              }
             }
           }
-        });
-        if (cameraRun !== cameraRunRef.current) {
-          controls.stop();
-          return;
+          schedule(scanWithZxing, 120);
+        };
+
+        const Detector = (window as any).BarcodeDetector;
+        let nativeDetector: any = null;
+        if (Detector?.getSupportedFormats) {
+          try {
+            const formats: string[] = await Detector.getSupportedFormats();
+            if (formats.includes('code_128')) nativeDetector = new Detector({ formats: ['code_128'] });
+          } catch {
+            // Use the canvas decoder below.
+          }
         }
-        zxingControlsRef.current = controls;
+        if (cameraRun !== cameraRunRef.current) return;
+
+        if (nativeDetector) {
+          let useZxing = false;
+          let nativeFound = false;
+          const scanNative = async () => {
+            if (useZxing || cameraRun !== cameraRunRef.current) return;
+            try {
+              const results: Array<{ rawValue: string }> = await nativeDetector.detect(video);
+              if (cameraRun !== cameraRunRef.current || useZxing) return;
+              for (const result of results) {
+                if (result.rawValue) {
+                  nativeFound = true;
+                  void handleBarcodeDecoded(result.rawValue);
+                }
+              }
+            } catch {
+              useZxing = true;
+              scanWithZxing();
+              return;
+            }
+            schedule(() => void scanNative(), 120);
+          };
+          void scanNative();
+          schedule(() => {
+            if (!useZxing && !nativeFound) {
+              useZxing = true;
+              scanWithZxing();
+            }
+          }, 500);
+        } else {
+          scanWithZxing();
+        }
       }
     } catch (err: any) {
       console.warn('Camera initialization error:', err);
